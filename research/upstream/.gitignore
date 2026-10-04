@@ -1,0 +1,17 @@
+# Upstream repositories are cloned for study only; never committed.
+# Reproduce with the commands in REPOSITORIES.md.
+fsh/
+zsh-autocomplete/
+zasync/
+zsh-autosuggestions/
+zsh-syntax-highlighting/
+ble.sh/
+zshrs/
+mcfly/
+atuin/
+fzf/
+carapace-bin/
+fish-shell/
+reedline/
+rustyline/
+zsh-src/
