@@ -1,0 +1,18 @@
+[package]
+name = "zsh-module"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "shellpulse_highlight"
+path = "src/lib.rs"
+crate-type = ["cdylib"]
+
+[dependencies]
+zsh-abi.workspace = true
+engine.workspace = true
+
+[lints.rust]
+missing_debug_implementations = "warn"

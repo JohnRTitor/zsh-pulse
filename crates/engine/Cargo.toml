@@ -1,0 +1,12 @@
+[package]
+name = "engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+zsh-abi.workspace = true
+
+[lints.rust]
+missing_debug_implementations = "warn"
