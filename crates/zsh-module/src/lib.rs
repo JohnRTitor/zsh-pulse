@@ -357,7 +357,28 @@ pub unsafe extern "C" fn setup_(_m: Module) -> std::ffi::c_int {
 /// Module boot: nothing to do yet, but zsh warns if the symbol is missing.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn boot_(_m: Module) -> std::ffi::c_int {
-    0
+    guard(0, || {
+        // Stage B7: can we run a worker thread inside a real zsh process?
+        //
+        // Started lazily here rather than at load time so a shell that never
+        // invokes the engine pays nothing, and started only when the module
+        // actually loads successfully.
+        if let Some(w) = engine::worker::shared() {
+            // Round-trip once immediately, so a broken worker is discovered at
+            // load time rather than on a user's first completion request.
+            if let Ok(reply) = w.submit(
+                0,
+                b"shell-pulse-probe".to_vec(),
+                std::time::Duration::from_millis(200),
+            ) {
+                debug(&format!("worker ready: rev={} checksum={}", reply.revision, reply.checksum));
+            }
+        } else {
+            // A supported outcome: the engine runs single-threaded.
+            debug("worker unavailable; continuing single-threaded");
+        }
+        0
+    })
 }
 
 /// Module cleanup.

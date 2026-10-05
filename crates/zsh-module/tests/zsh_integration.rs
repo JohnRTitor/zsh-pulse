@@ -6,13 +6,41 @@
 //!
 //! Run with: `cargo test -p zsh-module --test zsh_integration`
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Locate the built `cdylib`, or fail with an actionable message.
+/// Newest mtime of any `.rs` under `dir`, used to detect a stale cdylib.
+fn newest_source_mtime(dir: &std::path::Path) -> Option<std::time::SystemTime> {
+    let mut newest: Option<std::time::SystemTime> = None;
+    for entry in std::fs::read_dir(dir).ok()? {
+        let Ok(entry) = entry else { continue };
+        let path = entry.path();
+        let mtime = if path.is_dir() {
+            newest_source_mtime(&path)
+        } else if path.extension().is_some_and(|e| e == "rs") {
+            std::fs::metadata(&path).ok()?.modified().ok()
+        } else {
+            None
+        };
+        if let Some(t) = mtime {
+            newest = Some(match newest {
+                Some(n) if n > t => n,
+                _ => t,
+            });
+        }
+    }
+    newest
+}
+
+/// Locate the built `cdylib`, rebuilding it first if it is stale.
 ///
 /// `CARGO_BUILT_LIB_DIR` is nightly-only, so the artifact is found relative to
 /// the test executable (`target/<profile>/deps/<test>`).
+///
+/// **Why the explicit rebuild:** `cargo test` builds this crate's rlib for the
+/// test harness but does not refresh the `cdylib`. Without this check the
+/// integration tests silently ran a `libshellpulse_highlight.so` built hours
+/// earlier — passing against code that was no longer there.
 fn module_so() -> PathBuf {
     let exe = std::env::current_exe().expect("test executable path");
     let profile_dir = exe
@@ -20,6 +48,22 @@ fn module_so() -> PathBuf {
         .and_then(std::path::Path::parent)
         .expect("target/<profile>");
     let so = profile_dir.join("libshellpulse_highlight.so");
+
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let newest = newest_source_mtime(manifest).expect("scan crate sources");
+    let stale = match std::fs::metadata(&so).and_then(|m| m.modified()) {
+        Ok(built) => built < newest,
+        Err(_) => true,
+    };
+    if stale {
+        let status = Command::new(env!("CARGO"))
+            .args(["build", "-p", "zsh-module", "--lib"])
+            .current_dir(manifest.parent().expect("workspace root"))
+            .status()
+            .expect("run cargo build");
+        assert!(status.success(), "rebuilding the cdylib failed: {status}");
+    }
+
     assert!(
         so.exists(),
         "cdylib not found at {} — run `cargo build -p zsh-module` first",
@@ -168,6 +212,61 @@ fn loading_twice_is_harmless() {
 }
 
 #[test]
+fn worker_thread_runs_inside_real_zsh_and_answers() {
+    // Stage B7. Spawns the worker inside a live zsh and round-trips a job
+    // through it. If threads were unsafe here this is where it shows.
+    let (ok, out) = run_zsh(
+        "print -r -- \"threads=$(ls /proc/$$/task | wc -l)\"\n\
+         BUFFER='git commit'\n\
+         CURSOR=3\n\
+         shell-pulse-highlight\n\
+         print -r -- WORKER_PATH_OK",
+        &[("SHELL_PULSE_DEBUG", "1")],
+    );
+    assert!(ok, "zsh exited badly with a worker thread running: {out}");
+    assert!(
+        out.contains("worker ready"),
+        "the worker never reported ready; {out}"
+    );
+    assert!(out.contains("WORKER_PATH_OK"), "shell did not finish: {out}");
+
+    // zsh is single-threaded; if we added ours there must be more than one.
+    let threads = out
+        .lines()
+        .find_map(|l| l.strip_prefix("threads="))
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .expect("thread count");
+    assert!(
+        threads >= 2,
+        "expected zsh + at least one worker thread, saw {threads}"
+    );
+}
+
+#[test]
+fn zsh_survives_signals_delivered_while_a_worker_is_alive() {
+    // The residual risk named in engine::worker: zsh installs process-wide
+    // signal handlers, and a signal can land on our thread, where zsh's handler
+    // would run on a stack zsh knows nothing about.
+    //
+    // SIGWINCH and SIGCONT are harmless to zsh, so any crash here is ours.
+    let (ok, out) = run_zsh(
+        "for i in {1..300}; do\n\
+             kill -WINCH $$\n\
+             kill -CONT  $$\n\
+         done\n\
+         print -r -- SIGNALS_SURVIVED\n\
+         shell-pulse-highlight\n\
+         print -r -- STILL_WORKS",
+        &[("SHELL_PULSE_DEBUG", "1")],
+    );
+    // `ok` is false for a signal death as well as a non-zero exit, so this
+    // covers the crash case too.
+    assert!(ok, "zsh died while signals hit a live worker thread: {out}");
+    assert!(out.contains("SIGNALS_SURVIVED"), "loop aborted: {out}");
+    assert!(out.contains("STILL_WORKS"), "builtin broke after signals: {out}");
+}
+
+#[test]
 fn a_missing_module_fails_cleanly_and_the_shell_survives() {
     // The fallback path the adapter depends on: no module, no damage.
     let empty = std::env::temp_dir().join("shell-pulse-empty-module-path");
@@ -232,8 +331,10 @@ fn reads_live_buffer_and_cursor_from_inside_zsh() {
     );
     assert!(ok, "zsh exited badly: {out}");
     assert!(
-        out.contains("git commit --amend --no-edit"),
+        out.contains("read BUFFER=\"git commit --amend --no-edit\""),
         "module did not see the live BUFFER; stderr: {out}"
     );
-    assert!(out.contains("CURSOR=\"24\""), "CURSOR not read correctly: {out}");
+    // CURSOR is parsed to an i64, so it reports as `Some(n)` rather than a
+    // quoted string.
+    assert!(out.contains("CURSOR=Some(24)"), "CURSOR not read correctly: {out}");
 }

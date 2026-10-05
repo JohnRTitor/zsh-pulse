@@ -5,5 +5,6 @@
 //! logic testable without a shell.
 
 pub mod state;
+pub mod worker;
 
 pub use state::{EngineState, EngineStatus, LineSnapshot};
