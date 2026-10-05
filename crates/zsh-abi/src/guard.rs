@@ -61,8 +61,20 @@ where
 mod tests {
     use super::*;
 
+    /// Serialises the tests in this module.
+    ///
+    /// `DEGRADED` is a process-wide flag, so parallel tests would otherwise
+    /// clobber each other's state — a panic test setting it while another
+    /// asserts it is clear.
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn serialise() -> std::sync::MutexGuard<'static, ()> {
+        LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     #[test]
     fn panic_is_caught_and_fallback_returned() {
+        let _g = serialise();
         reset_degraded();
         let r = guard(-1, || panic!("boom"));
         assert_eq!(r, -1);
@@ -71,6 +83,7 @@ mod tests {
 
     #[test]
     fn success_passes_value_through_untouched() {
+        let _g = serialise();
         reset_degraded();
         assert_eq!(guard(-1, || 42), 42);
         assert!(!is_degraded());
@@ -78,6 +91,7 @@ mod tests {
 
     #[test]
     fn repeated_panics_stay_contained() {
+        let _g = serialise();
         reset_degraded();
         for _ in 0..1000 {
             let _ = guard(0u32, || panic!("repeat"));

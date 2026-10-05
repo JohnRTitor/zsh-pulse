@@ -24,9 +24,20 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
   never unwind into zsh *(verified by 1000-panic test)*
 - [x] **B5** `$module_path` packaging (`shellpulse/highlight.so`) +
   `zmodload shellpulse/highlight`
-- [x] **B6** Measured in a real interactive zsh: **1.2 µs/call** (200k calls,
-  hyperfine). See B6 note below — 10× the C proof-of-concept, because the
-  current read path heap-allocates two `String`s per call.
+- [x] **B6** Per-call cost measured with a reproducible harness
+  (`bench/bench_module_call.zsh` + `bench/install.sh`).
+
+  | | per native call |
+  |---|---|
+  | First implementation | **641 ns** |
+  | After removing per-call allocations | **276 ns** |
+  | Budget | ≤1 µs |
+
+  Measured A/B on the same harness, 200 000 calls, 28-byte buffer.
+  **Under budget with 3.6× headroom.** The 1.2 µs figure quoted earlier came
+  from an ad-hoc command that is no longer reproducible; the harness now
+  fails loudly if the buffer fails to expand rather than silently measuring an
+  empty one.
 - [ ] **B7** Thread probe: std thread does work, returns via fd, main thread
   reads *(retires: threads-inside-zsh risk)* — **not started**
 
@@ -37,7 +48,7 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
 | Loads under `zsh -f` | ✅ pass |
 | Loads under the real config (1,942 comps / 451 widgets measured in a non-tty run) | ✅ pass — load, builtin, and `BUFFER`/`CURSOR` all verified |
 | No crash with symbols deliberately removed | ✅ pass (`a_missing_module_fails_cleanly…`) |
-| ≤1 µs/call | ⚠️ **1.2 µs** — over budget; cause identified (per-call allocation) |
+| ≤1 µs/call | ✅ **276 ns** (was 641 ns; harness in `bench/`) |
 | Failing ABI test fails the test, not the shell | ✅ 10 subprocess-based tests |
 
 ### Findings that changed the design
@@ -55,8 +66,21 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
    The write path is therefore **gated behind `SHELL_PULSE_ECHO`** and off by
    default. **This blocks Stage C's `region_highlight` push and must be
    understood before C3.**
-5. **B6 gap:** reading `BUFFER`/`CURSOR` currently allocates two `String`s per
-   call. Stage C must read in place into a reusable buffer.
+5. ~~B6 gap~~ — **resolved.** Reading `BUFFER`/`CURSOR` no longer allocates:
+   `read_param_bytes` fills a reused buffer via `getsparam_u`, and `CURSOR` is
+   parsed straight to an `i64` by `parse_i64` (unit-tested, overflow-checked).
+   Env-var flags are resolved once via `OnceLock` instead of per keystroke.
+
+### Test-harness bugs found (worth remembering)
+
+- Parallel `cargo test` runs raced copying the module into one destination,
+  producing a truncated `.so` that segfaulted zsh — which looked exactly like
+  an ABI bug. Fixed with a `OnceLock`.
+- The `DEGRADED` global is shared, so three guard tests clobbered each other
+  under parallel execution. Fixed with a test mutex.
+- The first benchmark harness left `${(qqq)LINE}` for the inner shell to expand,
+  silently measuring an **empty** buffer; then `${(qqq)}`'s double quotes broke
+  the command entirely. The harness now fails loudly on either.
 
 ---
 

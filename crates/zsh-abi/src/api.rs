@@ -59,7 +59,28 @@ unsafe fn fn_ptr<F: Copy>(name: &str) -> Option<F> {
     Some(unsafe { std::mem::transmute_copy::<*mut core::ffi::c_void, F>(&p) })
 }
 
-/// The zsh functions this module uses, resolved once at load.
+/// Parse a decimal integer, rejecting anything that is not one.
+///
+/// Split out from [`Api::read_param_i64`] so the parsing is unit-testable
+/// without a live zsh. Deliberately strict: `CURSOR` is always a plain integer,
+/// and anything else means the parameter is not what we think it is.
+fn parse_i64(bytes: &[u8]) -> Option<i64> {
+    if bytes.is_empty() {
+        return None;
+    }
+    let (negative, digits) = match bytes[0] {
+        b'-' => (true, &bytes[1..]),
+        _ => (false, bytes),
+    };
+    if digits.is_empty() || !digits.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    let mut acc: i64 = 0;
+    for &b in digits {
+        acc = acc.checked_mul(10)?.checked_add(i64::from(b - b'0'))?;
+    }
+    Some(if negative { -acc } else { acc })
+}
 #[derive(Debug, Clone, Copy)]
 pub struct Api {
     /// `addbuiltins`
@@ -106,6 +127,10 @@ impl Api {
     ///
     /// Returns `None` if the parameter is unset or null.
     ///
+    /// **This allocates.** On the keystroke path prefer
+    /// [`Api::read_param_bytes`], which reuses a caller-owned buffer and does
+    /// not allocate at all once warm.
+    ///
     /// # Safety
     ///
     /// Must only be called from inside zsh with a NUL-terminated name.
@@ -117,6 +142,71 @@ impl Api {
         }
         // SAFETY: zsh NUL-terminates parameter values.
         Some(unsafe { std::ffi::CStr::from_ptr(p) }.to_string_lossy().into_owned())
+    }
+
+    /// Copy a scalar parameter's **unmetafied** bytes into a caller-owned buffer.
+    ///
+    /// This is the hot-path reader. It performs no allocation once `out` has
+    /// spare capacity, because it only truncates and overwrites.
+    ///
+    /// `getsparam_u` returns the unmetafied value in a **static buffer owned by
+    /// zsh**, so the bytes must be copied before the next call — which this
+    /// does immediately. Callers must therefore not hold the result across
+    /// another parameter read.
+    ///
+    /// Returns the number of bytes written.
+    ///
+    /// # Safety
+    ///
+    /// Must only be called from inside zsh with a NUL-terminated name.
+    pub unsafe fn read_param_bytes(
+        &self,
+        name: &std::ffi::CStr,
+        out: &mut Vec<u8>,
+    ) -> Option<usize> {
+        // SAFETY: caller guarantees zsh context and a valid name.
+        let p = unsafe { (self.getsparam_u)(name.as_ptr() as *mut c_char) };
+        out.clear();
+        if p.is_null() {
+            return None;
+        }
+        // SAFETY: zsh NUL-terminates the static unmetafied buffer.
+        let len = unsafe { std::ffi::CStr::from_ptr(p) }.to_bytes().len();
+        // SAFETY: `p` points at `len` readable bytes, just measured.
+        out.extend_from_slice(unsafe { std::slice::from_raw_parts(p.cast::<u8>(), len) });
+        Some(len)
+    }
+
+    /// Read a scalar parameter as an integer without building a `String`.
+    ///
+    /// Used for `CURSOR`, where the previous implementation allocated a `String`
+    /// per keystroke purely to throw it away.
+    ///
+    /// `scratch` is reused to hold the raw bytes for diagnostics; pass a
+    /// zero-capacity vector and ignore it if that is not needed.
+    ///
+    /// # Safety
+    ///
+    /// Must only be called from inside zsh with a NUL-terminated name.
+    pub unsafe fn read_param_i64(
+        &self,
+        name: &std::ffi::CStr,
+        scratch: &mut Vec<u8>,
+    ) -> Option<i64> {
+        // SAFETY: caller guarantees zsh context and a valid name.
+        let p = unsafe { (self.getsparam_u)(name.as_ptr() as *mut c_char) };
+        if p.is_null() {
+            scratch.clear();
+            return None;
+        }
+        // SAFETY: zsh NUL-terminates the static unmetafied buffer.
+        let bytes = unsafe { std::ffi::CStr::from_ptr(p) }.to_bytes();
+        let parsed = parse_i64(bytes);
+        scratch.clear();
+        if parsed.is_some() {
+            scratch.extend_from_slice(bytes);
+        }
+        parsed
     }
 
     /// Set a scalar parameter from a C string.
@@ -202,5 +292,36 @@ mod tests {
     fn api_is_debug_and_copy() {
         fn assert_traits<T: std::fmt::Debug + Copy>() {}
         assert_traits::<Api>();
+    }
+
+    #[test]
+    fn parse_i64_reads_plain_integers() {
+        assert_eq!(parse_i64(b"0"), Some(0));
+        assert_eq!(parse_i64(b"24"), Some(24));
+        assert_eq!(parse_i64(b"7"), Some(7));
+        assert_eq!(parse_i64(b"-1"), Some(-1));
+        assert_eq!(parse_i64(b"-12345"), Some(-12345));
+        // Leading zeros, which zsh can produce.
+        assert_eq!(parse_i64(b"007"), Some(7));
+    }
+
+    #[test]
+    fn parse_i64_rejects_anything_that_is_not_an_integer() {
+        assert_eq!(parse_i64(b""), None);
+        assert_eq!(parse_i64(b"-"), None);
+        assert_eq!(parse_i64(b"12a"), None);
+        assert_eq!(parse_i64(b"a12"), None);
+        assert_eq!(parse_i64(b" 12"), None);
+        assert_eq!(parse_i64(b"12 "), None);
+        assert_eq!(parse_i64(b"+12"), None, "a leading + is not produced by zsh");
+        assert_eq!(parse_i64(b"1.0"), None);
+    }
+
+    #[test]
+    fn parse_i64_refuses_to_overflow() {
+        // Must not wrap silently: a wrapped CURSOR would be a correctness bug
+        // far worse than a slow one.
+        assert_eq!(parse_i64(b"99999999999999999999"), None);
+        assert_eq!(parse_i64(&b"9".repeat(18)), Some(999_999_999_999_999_999));
     }
 }

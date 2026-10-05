@@ -43,20 +43,61 @@ static ZSH: OnceLock<Option<Api>> = OnceLock::new();
 fn zsh() -> Option<&'static Api> {
     ZSH.get_or_init(|| {
         let caps = probe::probe();
-        debug(&format!("probe: {caps}"));
+        if *debug_enabled() {
+            debug(&format!("probe: {caps}"));
+        }
         // Safety: `setup_` is only ever called by zsh, so the global symbol
         // scope is the zsh executable's.
         let api = unsafe { Api::resolve(&caps) };
-        debug(&format!("resolved: {}", api.is_some()));
-        for (n, ok) in [("addbuiltins", unsafe { zsh_abi::raw::dl::lookup_global("addbuiltins") }.map(|p| p as usize)), ("getsparam", unsafe { zsh_abi::raw::dl::lookup_global("getsparam") }.map(|p| p as usize)), ("getsparam_u", unsafe { zsh_abi::raw::dl::lookup_global("getsparam_u") }.map(|p| p as usize)), ("setaparam", unsafe { zsh_abi::raw::dl::lookup_global("setaparam") }.map(|p| p as usize))] { debug(&format!("  {n} @ {ok:?}")); }
+        if *debug_enabled() {
+            debug(&format!("resolved: {}", api.is_some()));
+        }
         api
     })
     .as_ref()
 }
 
+/// Debug logging on/off, resolved **once**.
+///
+/// Reading the environment is itself an allocation (`OsString`), so doing it
+/// per keystroke cost real time. `debug()` takes `&str` precisely so that
+/// callers can gate the `format!` behind this flag.
+static DEBUG: OnceLock<bool> = OnceLock::new();
+
+fn debug_enabled() -> &'static bool {
+    DEBUG.get_or_init(|| std::env::var_os("SHELL_PULSE_DEBUG").is_some())
+}
+
+/// Whether the (currently unsafe) parameter write-back is enabled.
+static ECHO: OnceLock<bool> = OnceLock::new();
+
+fn echo_enabled() -> &'static bool {
+    ECHO.get_or_init(|| std::env::var_os("SHELL_PULSE_ECHO").is_some())
+}
+
 // ---------------------------------------------------------------------------
 // The builtin itself
 // ---------------------------------------------------------------------------
+
+/// Reusable scratch buffers for the keystroke path.
+///
+/// Allocated once, then reused forever. This is what removed the per-keystroke
+/// allocations that made the first implementation 10x slower than the C
+/// proof-of-concept (1.2 us vs 112 ns per call).
+struct Scratch {
+    /// Unmetafied `BUFFER` bytes.
+    buffer: Vec<u8>,
+    /// Raw bytes of `CURSOR`, kept only for diagnostics.
+    cursor_bytes: Vec<u8>,
+}
+
+impl Scratch {
+    const fn new() -> Self {
+        Self { buffer: Vec::new(), cursor_bytes: Vec::new() }
+    }
+}
+
+static SCRATCH: std::sync::Mutex<Scratch> = std::sync::Mutex::new(Scratch::new());
 
 /// `shell-pulse-highlight` — invoked once per redraw by the zsh adapter.
 ///
@@ -74,42 +115,53 @@ unsafe extern "C" fn highlight_builtin(
             return 0;
         };
 
-        // Read live ZLE state from inside the shell process.
+        // Read live ZLE state into reused buffers: no allocation once warm.
+        let mut guard = match SCRATCH.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
         // Safety: `api` exists only because we are inside zsh.
-        let buffer = unsafe { api.get_param_string(cstr(b"BUFFER\0")) }.unwrap_or_default();
-        let cursor = unsafe { api.get_param_string(cstr(b"CURSOR\0")) }.unwrap_or_default();
-        debug(&format!(
-            "read BUFFER={:?} ({} bytes) CURSOR={:?}",
-            buffer,
-            buffer.len(),
-            cursor
-        ));
+        let cursor = unsafe {
+            let bytes = api.read_param_i64(cstr(b"CURSOR\0"), &mut guard.cursor_bytes);
+            // CURSOR must be read *before* BUFFER, because both share zsh's
+            // single static unmetafied buffer.
+            let buf_len = api.read_param_bytes(cstr(b"BUFFER\0"), &mut guard.buffer);
+            let _ = buf_len;
+            bytes
+        };
+        let buffer_len = guard.buffer.len();
+
+        if *debug_enabled() {
+            debug(&format!(
+                "read BUFFER={:?} ({buffer_len} bytes) CURSOR={cursor:?}",
+                String::from_utf8_lossy(&guard.buffer)
+            ));
+        }
 
         // Each keystroke advances the line revision; asynchronous results
         // tagged with an older revision are refused.
         let revision = engine().record_highlight();
 
-        // Round-trip proof: write what we read back into a zsh parameter so a
-        // test (or a user with SHELL_PULSE_DEBUG set) can confirm the boundary
-        // really carries live ZLE state. Stage C replaces this with the
-        // `region_highlight` push.
-        observe(revision, &buffer, &cursor);
+        observe(revision, cursor.unwrap_or_default());
 
-        // Round-trip proof. Writing a zsh parameter is currently UNSAFE on repeat:
-        // `set_param_string` allocates with zsh's allocator (required, since
-        // `assignaparam` frees the array it is given), but a second assignment
-        // to an already-set parameter corrupts the heap — observed as
-        // `free(): invalid size`. That must be understood before Stage C
+        // Write-back proof. Writing a zsh parameter is currently UNSAFE on
+        // repeat: `set_param_string` allocates with zsh's allocator (required,
+        // since `assignaparam` frees the array it is given), but a second
+        // assignment to an already-set parameter corrupts the heap — observed
+        // as `free(): invalid size`. That must be understood before Stage C
         // relies on the same mechanism for `region_highlight`.
         //
-        // Gated off by default so nothing unsafe runs in a normal shell. The
-        // read path above is solid and is what Stage B actually proves.
-        if std::env::var_os("SHELL_PULSE_ECHO").is_some() {
-            // Safety: `api` is resolved and we are inside zsh. `set_param_string`
-            // copies into zsh-owned memory, so the temporary may be dropped.
+        // Gated off by default so nothing unsafe runs in a normal shell.
+        if *echo_enabled() {
+            // Safety: `api` is resolved and we are inside zsh. The value is
+            // copied into zsh-owned memory before the temporary is dropped.
             unsafe {
-                let value = std::ffi::CString::new(format!("{revision}:{cursor}:{buffer}"))
-                    .unwrap_or_default();
+                let value = std::ffi::CString::new(format!(
+                    "{revision}:{}:{}",
+                    cursor.unwrap_or_default(),
+                    String::from_utf8_lossy(&guard.buffer)
+                ))
+                .unwrap_or_default();
                 api.set_param_string(cstr(b"SHELL_PULSE_STATE\0"), &value);
             }
         }
@@ -140,8 +192,7 @@ fn debug(msg: &str) {
 #[derive(Debug, Default)]
 struct Observed {
     revision: u64,
-    buffer: String,
-    cursor: String,
+    cursor: i64,
 }
 
 static OBSERVED: OnceLock<std::sync::Mutex<Observed>> = OnceLock::new();
@@ -150,13 +201,12 @@ fn observed() -> &'static std::sync::Mutex<Observed> {
     OBSERVED.get_or_init(|| std::sync::Mutex::new(Observed::default()))
 }
 
-fn observe(revision: u64, buffer: &str, cursor: &str) {
+/// Record the call. Deliberately allocation-free: holding a `String` of the
+/// buffer here put a heap allocation back on the keystroke path.
+fn observe(revision: u64, cursor: i64) {
     if let Ok(mut o) = observed().lock() {
         o.revision = revision;
-        o.buffer.clear();
-        o.buffer.push_str(buffer);
-        o.cursor.clear();
-        o.cursor.push_str(cursor);
+        o.cursor = cursor;
     }
 }
 
