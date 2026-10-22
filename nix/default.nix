@@ -1,0 +1,70 @@
+# The `shell-pulse` Nix package.
+#
+# It builds the native zsh module and installs the zsh adapter beside it:
+#
+#   $out/lib/shellpulse/highlight.so   the module (`zmodload shellpulse/highlight`)
+#   $out/share/shell-pulse/zsh/…        the adapter (`init.zsh`, `widgets.zsh`)
+#
+# The layout is not a choice: zsh's `modname_ok()`
+# (`zsh-src/Src/module.c:2177-2186`) rejects an absolute path and a `.so`
+# suffix in a `zmodload` name, so the module has to be
+# `shellpulse/highlight.so` inside a directory on `$module_path`.
+{ lib
+, rustPlatform
+}:
+rustPlatform.buildRustPackage {
+  pname = "shell-pulse";
+  version = "0.1.0";
+
+  # Only the sources: the checkout also holds `target/`, the research
+  # material and the benchmarks, none of which belong in the build.
+  src = lib.fileset.toSource {
+    root = ../.;
+    fileset = lib.fileset.unions [
+      ../Cargo.toml
+      ../Cargo.lock
+      ../crates
+      ../zsh
+    ];
+  };
+
+  cargoLock.lockFile = ../Cargo.lock;
+
+  # The module is a `cdylib` that resolves zsh's symbols at load time with
+  # `dlsym`, so it needs no zsh headers and no zsh to link against.
+
+  # `cargo test` is not run here: the integration tests drive a real zsh and
+  # need the module installed under a `module_path` first, which is what
+  # `bench/install.sh` does for a checkout.
+  doCheck = false;
+
+  postInstall = ''
+    # zsh wants `shellpulse/highlight.so`; cargo produced
+    # `libshellpulse_highlight.so`.
+    mkdir -p "$out/lib/shellpulse"
+    mv "$out/lib/libshellpulse_highlight.so" "$out/lib/shellpulse/highlight.so"
+
+    # The adapter. `init.zsh` loads the module and sources `widgets.zsh`,
+    # which installs the `zle-line-pre-redraw` hook.
+    install -Dm644 zsh/init.zsh "$out/share/shell-pulse/zsh/init.zsh"
+    install -Dm644 zsh/widgets.zsh "$out/share/shell-pulse/zsh/widgets.zsh"
+
+    # A one-liner for a `.zshrc`: it points the adapter at the module that
+    # was just built, because the adapter's own default path is relative to
+    # the checkout it came from.
+    sed "s|@out@|$out|g" zsh/nix-init.zsh > "$out/share/shell-pulse/init.zsh"
+  '';
+
+  meta = {
+    description = "Incremental syntax highlighting for zsh, in Rust";
+    longDescription = ''
+      shell-pulse loads a small native module into zsh and highlights the
+      command line as it is typed, through zsh's `region_highlight`
+      parameter. The lexer is pure Rust and re-lexes only the part of the
+      line that changed.
+    '';
+    license = lib.licenses.mit;
+    platforms = lib.platforms.unix;
+    mainProgram = "shell-pulse";
+  };
+}
