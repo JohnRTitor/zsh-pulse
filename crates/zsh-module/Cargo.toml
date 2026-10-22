@@ -13,6 +13,8 @@ crate-type = ["cdylib"]
 [dependencies]
 zsh-abi.workspace = true
 engine.workspace = true
+lexer.workspace = true
+highlight.workspace = true
 
 [lints.rust]
 missing_debug_implementations = "warn"
