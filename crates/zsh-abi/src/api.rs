@@ -137,6 +137,24 @@ impl Api {
         }
     }
 
+    /// Whether a parameter with this name exists.
+    ///
+    /// `getsparam` returns `NULL` for a parameter that does not exist and a
+    /// non-null pointer for one that does — including an array parameter,
+    /// whose first element is returned (`zsh-src/Src/params.c:2344-2378`).
+    ///
+    /// **This is not cheap for an array**: zsh materialises the whole array
+    /// to answer it. Call it at most once per line, not once per keystroke.
+    ///
+    /// # Safety
+    ///
+    /// Must only be called from inside zsh with a NUL-terminated name.
+    pub unsafe fn param_exists(&self, name: &std::ffi::CStr) -> bool {
+        // Safety: caller guarantees zsh context and a valid name.
+        let p = unsafe { (self.getsparam)(name.as_ptr() as *mut c_char) };
+        !p.is_null()
+    }
+
     /// Whether the shell is currently inside a ZLE widget.
     ///
     /// `WIDGET` is one of the parameters `makezleparams` creates for the
@@ -156,26 +174,6 @@ impl Api {
         let p = unsafe { (self.getsparam)(c"WIDGET".as_ptr() as *mut c_char) };
         !p.is_null()
     }
-
-    /// Whether a parameter with this name exists.
-    ///
-    /// `getsparam` returns `NULL` for a parameter that does not exist and a
-    /// non-null pointer for one that does — including an array parameter,
-    /// whose first element is returned (`zsh-src/Src/params.c:2344-2372`).
-    ///
-    /// This matters for the ZLE special parameters: they only exist while a
-    /// widget is running, and writing to `region_highlight` outside a widget
-    /// would create a *global* parameter of that name in the user's shell.
-    ///
-    /// # Safety
-    ///
-    /// Must only be called from inside zsh with a NUL-terminated name.
-    pub unsafe fn param_exists(&self, name: &std::ffi::CStr) -> bool {
-        // Safety: caller guarantees zsh context and a valid name.
-        let p = unsafe { (self.getsparam)(name.as_ptr() as *mut c_char) };
-        !p.is_null()
-    }
-
     /// Read a scalar parameter as a lossily-converted `String`.
     ///
     /// Returns `None` if the parameter is unset or null.

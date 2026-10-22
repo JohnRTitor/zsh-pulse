@@ -73,6 +73,14 @@ if [[ ! -f $ADAPTER ]]; then
   print -u2 "ERROR: the adapter is missing at $ADAPTER"
   exit 1
 fi
+# The arm flag comes first, so that the keystroke count is still the first
+# positional argument.
+typeset -g ARM=default
+if [[ $N == "--control" || $N == "--none" ]]; then
+  ARM=$N
+  shift
+  N=${1:-200}
+fi
 if ! [[ $N == <-> ]] || (( N < 1 )); then
   print -u2 "ERROR: the keystroke count must be a positive integer, got: $N"
   exit 1
@@ -88,12 +96,28 @@ if ! mkdir -p $ZDOT_TMP; then
 fi
 export ZDOTDIR=$ZDOT_TMP
 
+# Three arms, so that the cost of the plugin existing can be told from the
+# cost of the plugin working:
+#
+#   (default)  the adapter: the module is loaded and the hooks are installed
+#   --control  the module is loaded but no hook is installed, so the plugin
+#              exists and costs a `makezleparams` per redraw but does no work
+#   --none     nothing at all: zsh and the pty on their own
+#
+# The difference between the default arm and the control is the plugin's own
+# work; the difference between the control and `--none` is the cost of the
+# plugin merely being installed.
 {
   print -r -- "PS1='BENCHPROMPT> '"
   print -r -- "RPROMPT="
   print -r -- "PROMPT_EOL_MARK=''"
   print -r -- "export SHELL_PULSE_MODULE_PATH='$MP'"
-  print -r -- "source '$ADAPTER'"
+  if [[ $ARM == default ]]; then
+    print -r -- "source '$ADAPTER'"
+  elif [[ $ARM == control ]]; then
+    # The module, but no hook: the plugin exists and does nothing.
+    print -r -- "zmodload shellpulse/highlight"
+  fi
 } > $ZDOT_TMP/.zshrc
 
 typeset -g CAP=''
@@ -249,7 +273,7 @@ done
 # The highlighting has to have happened, or this harness measured a shell
 # without the plugin and the number means nothing.
 CYAN=$(count_occurrences $CAP $'\e[36m')
-if (( CYAN == 0 )); then
+if (( CYAN == 0 )) && [[ $ARM == default ]]; then
   print -u2 "ERROR: no highlighting was seen in the terminal output."
   print -u2 "       This harness would be measuring an unhighlighted shell."
   print -u2 "       captured: ${(V)CAP}"
@@ -265,4 +289,5 @@ printf 'slowest:          %.1f us\n' $(( slowest * 1000000 ))
 printf 'highlighted runs: %d\n' $CYAN
 printf 'pty wait:         %s\n' $( (( HAVE_ZSELECT )) && print -r -- 'zselect' || print -r -- 'polling' )
 printf 'TERM:             %s\n' ${TERM:-unset}
+printf 'arm:              %s\n' $ARM
 printf 'line typed:       %s\n' "$text"

@@ -125,6 +125,17 @@ struct Highlighter {
     /// Only built for lines that are not pure ASCII, where byte offsets and
     /// character offsets differ.
     offsets: Vec<u32>,
+    /// Whether `region_highlight` exists.
+    ///
+    /// The ZLE special parameter is created for the duration of a widget
+    /// (`zsh-src/Src/Zle/zle_params.c:141-188`) and does not exist outside
+    /// one. Writing to a name that does not exist would *create* a global
+    /// parameter of that name in the user's shell, so the module only ever
+    /// writes to a parameter that is already there.
+    ///
+    /// The check is not free — zsh materialises the whole array to answer it
+    /// — so the answer is cached and refreshed once per line, by `--reset`.
+    region_highlight_exists: Option<bool>,
     /// Whether zsh currently holds the entries.
     ///
     /// The ZLE special parameters are created fresh for every widget call
@@ -194,13 +205,22 @@ impl Highlighter {
         if !publish || !unsafe { api.in_zle() } {
             // `WIDGET` is created by `makezleparams`
             // (`zsh-src/Src/Zle/zle_params.c:141-188`) and exists only while
-            // a widget is running. It is a *scalar*, so testing it is O(1);
-            // testing `region_highlight` instead would materialise the whole
-            // region array on every keystroke.
+            // a widget is running. It is a *scalar*, so testing it is O(1).
             //
-            // Checking it also proves that the `region_highlight` the module
-            // writes to is the ZLE special parameter and not a global array
-            // of that name that the user or another plugin owns.
+            // It is not, on its own, proof that the `region_highlight` the
+            // module would write to is the ZLE special parameter: a user
+            // could have a global `WIDGET` of their own. So the parameter
+            // itself is checked as well — it has to *exist*, which a global
+            // array of the same name would also satisfy, so the shell side
+            // checks the type as well (see `zsh/widgets.zsh`).
+            self.pushed = false;
+            return;
+        }
+
+        // The parameter has to exist: writing to a name that does not exist
+        // would create a global parameter of that name in the user's shell.
+        // Safety: inside zsh.
+        if !unsafe { self.region_highlight_exists(api) } {
             self.pushed = false;
             return;
         }
@@ -258,6 +278,21 @@ impl Highlighter {
         self.pushed = true;
     }
 
+    /// Whether `region_highlight` exists, computed at most once per line.
+    ///
+    /// # Safety
+    ///
+    /// Must be called inside zsh.
+    unsafe fn region_highlight_exists(&mut self, api: &Api) -> bool {
+        if let Some(known) = self.region_highlight_exists {
+            return known;
+        }
+        // Safety: inside zsh, and the name is NUL-terminated.
+        let exists = unsafe { api.param_exists(cstr(b"region_highlight\0")) };
+        self.region_highlight_exists = Some(exists);
+        exists
+    }
+
     /// Forget what was published, without touching the display.
     ///
     /// zsh empties the display array at the end of every line
@@ -267,6 +302,9 @@ impl Highlighter {
         self.pushed = false;
         self.spans.clear();
         self.pushed_spans.clear();
+        // A new line has a new parameter scope, so the cached answer about
+        // `region_highlight` no longer applies.
+        self.region_highlight_exists = None;
     }
 
     /// Remove every highlight from the display.
@@ -523,8 +561,6 @@ unsafe extern "C" fn highlight_builtin(
         // tagged with an older revision are refused.
         let revision = engine().record_highlight();
 
-        observe(revision, cursor.unwrap_or_default());
-
         // Highlight the line and hand the result to zsh.
         {
             let mut highlighter = match HIGHLIGHTER.lock() {
@@ -629,28 +665,6 @@ fn debug(msg: &str) {
     }
     let mut err = std::io::stderr();
     let _ = writeln!(err, "[shell-pulse] {msg}");
-}
-
-/// Last line observed, used by the in-zsh self test.
-#[derive(Debug, Default)]
-struct Observed {
-    revision: u64,
-    cursor: i64,
-}
-
-static OBSERVED: OnceLock<std::sync::Mutex<Observed>> = OnceLock::new();
-
-fn observed() -> &'static std::sync::Mutex<Observed> {
-    OBSERVED.get_or_init(|| std::sync::Mutex::new(Observed::default()))
-}
-
-/// Record the call. Deliberately allocation-free: holding a `String` of the
-/// buffer here put a heap allocation back on the keystroke path.
-fn observe(revision: u64, cursor: i64) {
-    if let Ok(mut o) = observed().lock() {
-        o.revision = revision;
-        o.cursor = cursor;
-    }
 }
 
 

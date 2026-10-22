@@ -20,10 +20,12 @@
 # the module only reads the line, so it can never overwrite a
 # `region_highlight` array that belongs to the user or to another plugin.
 shell-pulse-highlight-redraw() {
+  # This runs from inside a widget, so `region_highlight` here is the ZLE
+  # special parameter and not a global array of the same name.
   shell-pulse-highlight --region-highlight
   # Any hook that was already installed is called after ours.
   if (( ${+_shell_pulse_previous_pre_redraw} )); then
-    $_shell_pulse_previous_pre_redraw
+    "$_shell_pulse_previous_pre_redraw"
   fi
 }
 
@@ -37,7 +39,7 @@ shell-pulse-highlight-redraw() {
 shell-pulse-highlight-line-init() {
   shell-pulse-highlight --reset
   if (( ${+_shell_pulse_previous_line_init} )); then
-    $_shell_pulse_previous_line_init
+    "$_shell_pulse_previous_line_init"
   fi
 }
 
@@ -54,16 +56,21 @@ shell-pulse-highlight-line-init() {
 # chained this way and is left alone.
 #
 # `zsh/zleparameter` provides the `widgets` array. Without it there is no
-# way to see what a widget does, so the chain cannot be built.
+# way to see what a widget does, so the chain cannot be built — and the
+# hook that was there is replaced rather than kept. That is said out loud,
+# because a silently dropped hook is worse than a noisy one.
 if zmodload zsh/zleparameter 2>/dev/null; then
   if (( ${+widgets[zle-line-pre-redraw]} )); then
     _shell_pulse_previous=${widgets[zle-line-pre-redraw]}
     case $_shell_pulse_previous in
-      user:shell-pulse-highlight-*)
+      user:shell-pulse-highlight-redraw|user:shell-pulse-highlight-line-init)
         # This file has already been sourced; do not chain ourselves.
         ;;
       user:*)
         typeset -g _shell_pulse_previous_pre_redraw=${_shell_pulse_previous#user:}
+        ;;
+      *)
+        typeset -g _shell_pulse_unchainable_pre_redraw=1
         ;;
     esac
     unset _shell_pulse_previous
@@ -72,14 +79,27 @@ if zmodload zsh/zleparameter 2>/dev/null; then
   if (( ${+widgets[zle-line-init]} )); then
     _shell_pulse_previous=${widgets[zle-line-init]}
     case $_shell_pulse_previous in
-      user:shell-pulse-highlight-*)
+      user:shell-pulse-highlight-redraw|user:shell-pulse-highlight-line-init)
         ;;
       user:*)
         typeset -g _shell_pulse_previous_line_init=${_shell_pulse_previous#user:}
         ;;
+      *)
+        typeset -g _shell_pulse_unchainable_line_init=1
+        ;;
     esac
     unset _shell_pulse_previous
   fi
+fi
+
+# A hook that could not be chained is reported rather than dropped in
+# silence: the user is losing another plugin's work.
+if ! zmodload zsh/zleparameter 2>/dev/null; then
+  print -u2 "shell-pulse: zsh/zleparameter is not available, so an existing" \
+    "zle-line-pre-redraw hook cannot be chained and will be replaced."
+elif [[ -n ${_shell_pulse_unchainable_pre_redraw:-} ]]; then
+  print -u2 "shell-pulse: the existing zle-line-pre-redraw hook is not a" \
+    "shell function and cannot be chained; it will be replaced."
 fi
 
 zle -N zle-line-pre-redraw shell-pulse-highlight-redraw

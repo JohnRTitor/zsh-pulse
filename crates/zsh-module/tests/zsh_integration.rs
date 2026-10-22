@@ -340,15 +340,16 @@ fn the_highlighter_fills_region_highlight() {
          BUFFER='echo hi'\n\
          CURSOR=3\n\
          shell-pulse-highlight --region-highlight\n\
-         print -r -- \"REGIONS=${(j:,:)region_highlight}\"",
+         print -r -- \"REGIONS=<${(j:,:)region_highlight}>\"",
         &[],
     );
     assert!(ok, "zsh exited badly: {out}");
-    // `echo` is the command, characters 0 to 4. The argument is left alone.
+    // The delimiters make the assertion about the *whole* array: a
+    // duplicated or an extra region would change it.
     // The assertion is on the *whole* array, so a duplicate or a missing
     // region would fail it.
     assert!(
-        out.contains("REGIONS=0 4 fg=cyan,bold memo=shell-pulse"),
+        out.contains("REGIONS=<0 4 fg=cyan,bold memo=shell-pulse>"),
         "unexpected regions: {out}"
     );
     assert!(
@@ -369,7 +370,7 @@ fn the_highlighter_reports_character_offsets_not_byte_offsets() {
          BUFFER=$'echo \\u00e9 | grep x'\n\
          CURSOR=3\n\
          shell-pulse-highlight --region-highlight\n\
-         print -r -- \"REGIONS=${(j:,:)region_highlight}\"",
+         print -r -- \"REGIONS=<${(j:,:)region_highlight}>\"",
         &[],
     );
     assert!(ok, "zsh exited badly: {out}");
@@ -378,7 +379,8 @@ fn the_highlighter_reports_character_offsets_not_byte_offsets() {
     // would report 8.
     assert!(
         out.contains(
-            "REGIONS=0 4 fg=cyan,bold memo=shell-pulse,7 8 fg=red memo=shell-pulse"
+            "REGIONS=<0 4 fg=cyan,bold memo=shell-pulse,7 8 fg=red memo=shell-pulse,\
+             9 13 fg=cyan,bold memo=shell-pulse>"
         ),
         "the offsets must be characters, not bytes: {out}"
     );
@@ -666,9 +668,10 @@ fn exactly_one_write_happens_per_change() {
         "typeset -ga region_highlight\n\
          region_highlight=()\n\
          WIDGET=test-widget\n\
-         for i in 1 2 3; do\n\
-             # The command word changes length, so the styling changes too.\n\
-             BUFFER=\"echo$(print -r -- {1..$i}.x)\"\n\
+         for w in git gitx gitxx; do\n\
+             # The *command word* changes length, so the published region\n\
+             # moves: this is a real change, not a change zsh cannot see.\n\
+             BUFFER=\"$w commit\"\n\
              CURSOR=3\n\
              shell-pulse-highlight --region-highlight\n\
          done\n\
@@ -676,7 +679,9 @@ fn exactly_one_write_happens_per_change() {
         &[("SHELL_PULSE_DEBUG", "1")],
     );
     assert!(ok, "zsh exited badly: {out}");
-    let published = out.matches("published ").count();
+    // Count *real* publications, not announcements: a publish of zero
+    // regions also prints "published 0 regions", and that is not a publish.
+    let published = out.matches("published 1 regions").count();
     assert_eq!(
         published, 3,
         "three changes must produce three writes, not {published}: {out}"
@@ -700,7 +705,7 @@ fn an_unchanged_line_is_not_written_again() {
     );
     assert!(ok, "zsh exited badly: {out}");
     assert_eq!(
-        out.matches("published ").count(),
+        out.matches("published 1 regions").count(),
         1,
         "the second, identical redraw must not write again: {out}"
     );
@@ -727,8 +732,66 @@ fn a_new_line_makes_the_module_publish_again() {
     );
     assert!(ok, "zsh exited badly: {out}");
     assert_eq!(
-        out.matches("published ").count(),
+        out.matches("published 1 regions").count(),
         2,
         "a new line must be published again: {out}"
     );
+}
+
+#[test]
+fn the_adapter_installs_both_hooks_and_does_not_chain_itself() {
+    // The `zle-line-init` hook is what tells the module that a new line is
+    // starting; without it a recalled command would be drawn unhighlighted.
+    // Sourcing the adapter twice must not make the hook call itself.
+    let adapter = adapter_path();
+    let out = Command::new("zsh")
+        .arg("-f")
+        .arg("-c")
+        .arg(format!(
+            "source {adapter}\n\
+             source {adapter}\n\
+             print -r -- \"PRE_REDRAW=${{widgets[zle-line-pre-redraw]}}\"\n\
+             print -r -- \"LINE_INIT=${{widgets[zle-line-init]}}\"\n\
+             print -r -- \"CHAINED_PRE=${{_shell_pulse_previous_pre_redraw:-none}}\"\n\
+             print -r -- \"CHAINED_INIT=${{_shell_pulse_previous_line_init:-none}}\"",
+            adapter = adapter.display(),
+        ))
+        .output()
+        .expect("run zsh");
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(out.status.success(), "sourcing the adapter failed: {text}");
+    assert!(
+        text.contains("PRE_REDRAW=user:shell-pulse-highlight-redraw"),
+        "the redraw hook must be installed: {text}"
+    );
+    assert!(
+        text.contains("LINE_INIT=user:shell-pulse-highlight-line-init"),
+        "the line-init hook must be installed: {text}"
+    );
+    assert!(
+        text.contains("CHAINED_PRE=none") && text.contains("CHAINED_INIT=none"),
+        "the adapter must not chain itself: {text}"
+    );
+}
+
+#[test]
+fn every_adapter_file_parses() {
+    // A syntax error in `widgets.zsh` makes the `source` inside `init.zsh`
+    // fail, and zsh carries on — so the adapter would look half-installed.
+    let dir = adapter_path().parent().expect("the zsh directory").to_path_buf();
+    let mut checked = 0;
+    for entry in std::fs::read_dir(&dir).expect("read the zsh directory") {
+        let path = entry.expect("a directory entry").path();
+        if path.extension().is_some_and(|e| e == "zsh") {
+            let out = Command::new("zsh").arg("-n").arg(&path).output().expect("run zsh -n");
+            assert!(
+                out.status.success(),
+                "{} does not parse: {}",
+                path.display(),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            checked += 1;
+        }
+    }
+    assert!(checked >= 2, "expected the adapter to be more than one file");
 }

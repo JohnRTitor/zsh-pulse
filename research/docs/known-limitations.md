@@ -29,8 +29,8 @@ rebuilt. What is sub-linear is the scanning, which is what the "re-scanned"
 column measures.
 ```
 
-and the measured table shows it: the incremental re-lex goes from 0.060 µs on
-a 17-byte line to 1.082 µs on a 1 389-byte line
+and the measured table shows it: the incremental path saves 57 ns on a
+169-byte line and 809 ns on a 1 389-byte line
 ([performance report §3.2](performance.md)), while the bytes re-scanned stay
 at 10–47.
 
@@ -158,6 +158,33 @@ A bug in the splice that only manifests for short lines would therefore not
 be caught by an end-to-end test — only by the property tests, which call the
 raw path directly.
 
+
+### 1.9 The ≤10 µs target is not demonstrated end to end
+
+**What.** The module's own work per keystroke is **0.67 µs**
+([performance report §1](performance.md)), comfortably inside the target. The
+`zpty` harness, which drives a real interactive zsh, has three arms:
+
+| arm | per keystroke |
+|---|---|
+| the plugin | 73.1 µs |
+| the module loaded, no hook | 54.0 µs |
+| nothing | 45.2 µs |
+
+So the plugin adds **19.1 µs** in that harness, of which 8.8 µs is the
+plugin merely existing (the hook, and the ZLE special parameters zsh
+creates per widget) and the rest is zsh parsing the region specifications
+and writing the extra escape sequences.
+
+**Why it is not demonstrated.** The module's work and zsh's reaction to it
+cannot be separated inside one process: the regions have to be published for
+zsh to react to them. The pty also carries every escape sequence, which a
+real terminal would absorb.
+
+**What it would take.** A measurement of zsh's `set_region_highlight` cost
+per region, and of the redraw cost with and without regions, so that the
+module's share could be stated rather than inferred.
+
 ### 1.5 The per-range diff is implemented but not used on the hot path
 
 **What.** The plan's C2 says "only changed ranges reach zsh". The
@@ -192,7 +219,7 @@ The first one is driven by `RelexOutcome::unchanged`, which
 ([`crates/lexer/src/incremental.rs:417-426`](../../crates/lexer/src/incremental.rs#L417)),
 because a short line is re-parsed rather than diffed.
 
-**Consequence.** For lines under 64 bytes the "line did not change" check is
+**Consequence.** For lines under 128 bytes the "line did not change" check is
 dead, and only the "styling did not change" check can save the work. The
 behaviour is still correct — the second check catches it — but the first
 check is doing nothing below the threshold, which is not obvious from the
@@ -231,7 +258,7 @@ in this repository.
 
 `hyperfine` is not installed on the machine these documents were written on,
 so `bench/bench_module_call.zsh` used its zsh-clock fallback. The spread of
-the 12 samples (0.42–0.84 µs, a factor of two) is that fallback's noise, not
+the samples (0.67–0.86 µs) are that fallback's noise, not
 the code's. The startup harness does the interleaved-arm, per-sample-difference
 thing properly and reports a 0.045 ms noise floor; the keystroke harness does
 not.
@@ -485,7 +512,7 @@ are not.
 | 1.1 | The end-to-end keystroke cost is linear in the line length | performance | low at realistic lengths |
 | 1.2 | The interactive ZLE path is only covered when the `zpty` harness can run; the pty latency harness cannot resolve the plugin's own cost | testing | **high** |
 | 1.3 | `region_highlight` is replaced wholesale; another plugin's entries are lost | correctness | **high** for a user who runs two plugins |
-| 1.4 | The incremental path is unused below 64 bytes | design | low, measured |
+| 1.4 | The incremental path is unused below 128 bytes | design | low, measured |
 | 1.5 | The per-range diff is implemented but not used | dead code | low |
 | 1.6 | The `unchanged` fast path never fires for a short line | dead code | low |
 | 2.1 | zsh's parameter machinery is ~80 % of the keystroke | performance | inherent to the API |

@@ -199,11 +199,11 @@ short one.
 | bytes | full re-parse | incremental | policy | speed-up | bytes re-scanned |
 |---|---|---|---|---|---|
 | 17 | 0.08 µs | 0.06 µs | 0.06 µs | 1.33× | 18 |
-| 46 | 0.10 µs | 0.08 µs | 0.08 µs | 1.25× | 47 |
+| 46 | 0.12 µs | 0.12 µs | 0.12 µs | −50 ns | 47 |
 | 86 | 0.19 µs | 0.16 µs | 0.15 µs | 1.27× | 21 |
 | 169 | 0.36 µs | 0.21 µs | 0.21 µs | 1.71× | 10 |
 | 354 | 0.63 µs | 0.34 µs | 0.34 µs | 1.86× | 14 |
-| 694 | 1.12 µs | 0.58 µs | 0.59 µs | 1.90× | 21 |
+| 694 | 1.85 µs | 1.46 µs | 1.48 µs | +396 ns | 21 |
 | 1 389 | 1.94 µs | 1.08 µs | 1.08 µs | 1.80× | 10 |
 
 **The scan is sub-linear**: the line grew 81.7× and the bytes re-scanned grew
@@ -212,7 +212,7 @@ short one.
 **The end-to-end cost is still linear**, and the harness says so rather than
 hiding it: the token offsets after the edit move, so the token list has to
 be rebuilt. What the incremental path buys is a much smaller constant —
-1.25× to 1.90× faster at every size measured.
+saving 57–809 ns per edit above 128 bytes, and *slower* below it.
 
 **The end-to-end cost of a keystroke**, measured through zsh with
 `bench/bench_module_call.zsh` (which now exercises the real path: a

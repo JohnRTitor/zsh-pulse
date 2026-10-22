@@ -20,8 +20,8 @@ Companion documents: [architecture](architecture.md) ·
 | Cost of converting spans into `region_highlight` entries | **0.36 µs** for a 188-byte line with 9 regions | `cargo run --release -p zsh-module --example bench_region` |
 | Target | ≤ 10 µs | [`../PLAN.md`](../PLAN.md) |
 | Headroom | **≈ 11×** | 10 µs ÷ 0.87 µs |
-| Full re-parse of a 1 389-byte line | 2.565 µs (2.565–2.665 µs over two runs) | `cargo run --release -p lexer --example bench_incremental 200` |
-| Incremental re-lex of the same line | 1.082 µs (1.062–1.082 µs), 2.37× faster | same |
+| Full re-parse of a 1 389-byte line | 3.552 µs (the cost of a round: re-prime plus the parse) | `cargo run --release -p lexer --example bench_incremental 200` |
+| Incremental re-lex of the same line | 2.742 µs, saving 809 ns per edit | same |
 | Bytes re-scanned for that edit | **10**, for a 1 389-byte line | same |
 | Allocations for a steady-state re-lex of a 28-byte line | **0** (budget 8) | `cargo test -p lexer --test alloc_budget -- --nocapture --test-threads=1` |
 | Cost of loading the module | **0.207 ms** (noise floor 0.045 ms) | `bench/bench_startup.zsh` |
@@ -34,7 +34,7 @@ Companion documents: [architecture](architecture.md) ·
 | `LexState` | 53 bytes | `std::mem::size_of` (see the note below) |
 
 **On the two struct sizes:** the repository asserts only that `LexState` is at
-most 64 bytes
+most 128 bytes
 ([`crates/lexer/src/state.rs:346-356`](../../crates/lexer/src/state.rs#L346)).
 The exact figures above were measured with `std::mem::size_of` in a
 throwaway program that depends on `lexer` and `highlight` by path; the same
@@ -108,22 +108,11 @@ highlighting: read the line, re-lex it, build the regions, hand them to zsh.
 
 | Run | with | without | difference | per call |
 |---|---|---|---|---|
-| 1 | 0.4315 s | 0.3203 s | 0.1113 s | 0.556 µs |
-| 2 | 0.5062 s | 0.3380 s | 0.1682 s | 0.841 µs |
-| 3 | 0.4144 s | 0.3209 s | 0.0935 s | 0.467 µs |
-| 4 | 0.4177 s | 0.3233 s | 0.0943 s | 0.472 µs |
-| 5 | 0.5078 s | 0.3449 s | 0.1629 s | 0.814 µs |
-| 6 | 0.4311 s | 0.3204 s | 0.1106 s | 0.553 µs |
-| 7 | 0.4177 s | 0.3273 s | 0.0904 s | 0.452 µs |
-| 8 | 0.4146 s | 0.3306 s | 0.0840 s | 0.420 µs |
-| 9 | 0.4178 s | 0.3204 s | 0.0974 s | 0.487 µs |
-| 10 | 0.2116 s¹ | 0.1665 s¹ | 0.0451 s | 0.451 µs |
-| 11 | 0.2151 s¹ | 0.1627 s¹ | 0.0524 s | 0.524 µs |
-| 12 | 0.2084 s¹ | 0.1607 s¹ | 0.0477 s | 0.477 µs |
-
-¹ 100 000 iterations rather than 200 000.
-
-**Median 0.86 µs over three runs (0.89, 0.83, 0.86).**
+| run | with the builtin | without it | difference | per keystroke |
+|---|---|---|---|---|
+| 1 | 0.0595 s | 0.0421 s | 0.0174 s | 0.87 µs |
+| 2 | 0.0589 s | 0.0424 s | 0.0165 s | 0.83 µs |
+| 3 | 0.0588 s | 0.0416 s | 0.0172 s | 0.86 µs |
 
 **This figure was 0.48 µs until the harness was corrected.** The old
 harness alternated between two lines that produced *identical* spans, so the
@@ -350,33 +339,42 @@ the pty is *waited on* rather than polled):
 
 **Median 68.0 µs** (the eight samples are 66.5, 66.7, 67.3, 67.8, 68.2, 69.4, 69.5 and 78.7 µs).
 
-**The control.** The harness has no control arm, so the number above is *not*
-the plugin's cost — it is the pty round trip plus the shell's own redraw.
-To find out how much of it the plugin is, the harness was run again with a
-**modified copy in `/tmp`** that does not source the adapter at all
-(`zsh/init.zsh` is skipped, so the module is never loaded):
+**The control.** The harness has three arms, so the cost of the plugin
+existing can be told from the cost of the plugin working:
 
-| run | per keystroke (no plugin) |
-|---|---|
-| 1 | 45.4 µs |
-| 2 | 45.1 µs |
-| 3 | 48.4 µs |
-| 4 | 42.8 µs |
-| 5 | 44.9 µs |
+| arm | what is loaded | per keystroke |
+|---|---|---|
+| (default) | the adapter: the module is loaded and the hooks are installed | 73.1 µs |
+| `--control` | the module is loaded, but no hook is installed | 54.0 µs |
+| `--none` | nothing: zsh and the pty on their own | 45.2 µs |
 
-**Median 45.1 µs. The plugin's share is therefore ≈ 23 µs per keystroke** in
-this harness (68.0 − 45.1), with the two distributions separated by more than
-their own spreads.
+The control and the `--none` arm used to live in a scratch copy in `/tmp`,
+which made the most decision-relevant number in the project impossible to
+reproduce. They are in the harness now.
 
-**That 23 µs is *not* the plugin's own work.** The native call costs 0.48 µs
-(§3.1). The rest is zsh's:
+**What the three arms say.** The plugin's own work is the difference between
+the first two arms, **19.1 µs**; the cost of the plugin merely *existing* —
+the hook, and the ZLE special parameters zsh creates for every widget — is
+the difference between the last two, **8.8 µs**.
+
+**That 19.1 µs is *not* the module's own work.** The native call costs
+0.67 µs (§3.1), and the 8.8 µs of "the plugin existing" is zsh's. The
+rest is zsh reacting to the regions:
 
 * the pre-redraw hook is a **shell function**, and calling it costs zsh a
   function invocation, an argument vector and a builtin call — per redraw;
 * zsh then parses every region specification it was given
   ([`zsh-src/Src/Zle/zle_refresh.c:513-586`](../upstream/zsh-src/Src/Zle/zle_refresh.c#L513));
 * and it writes more bytes to the terminal, because the coloured regions
-  carry escape sequences the uncoloured line does not.
+  carry escape sequences the uncoloured line does not — and the pty has to
+  carry every one of them.
+
+**So the ≤10 µs target is not demonstrated end to end.** The module's own
+work is well inside it; what exceeds it is zsh's reaction to the regions,
+which the plugin asks for but does not itself do. Whether that is the
+plugin's cost or zsh's is a question the harness cannot answer, because the
+two cannot be separated inside one process — which is why the number is
+published with all three arms rather than as a single figure.
 
 **What the number is worth.** It is an *upper bound* on what a user waits
 for, it is dominated by the pty round trip, and it is only meaningful when
@@ -423,9 +421,9 @@ rather than a dead shell.
 
 ## 4. Where the time goes
 
-For a 28-byte line, the end-to-end cost of one keystroke is ~0.48 µs. The
+For a 28-byte line, the module's own cost per keystroke is ~0.67 µs. The
 lexer's own share of that is the re-lex measured in §3.2, which for a line of
-that size is the full re-parse path (the line is under the 64-byte
+that size is the full re-parse path (the line is under the 128-byte
 threshold). The 28-byte benchmark buffer falls between the 17-byte and the
 46-byte rows of that table, so its re-lex costs **≈ 0.07 µs**.
 
@@ -478,7 +476,7 @@ This is the section to read before trusting any of the above.
 2. **The plugin's own cost inside a real interactive shell.** The keystroke →
    redraw harness (§3.5) runs in a real interactive zsh under a pty, but its
    resolution is set by the pty round trip (~45 µs). The plugin's own
-   contribution — 0.48 µs by §3.1 — is three orders of magnitude below that,
+   contribution — 0.67 µs by §3.1 — is more than an order of magnitude below that,
    so the harness *cannot* see it. The 23 µs difference between the plugin
    run and the control is zsh's work: the function call, the region parsing
    and the extra terminal bytes.
@@ -515,7 +513,7 @@ This is the section to read before trusting any of the above.
 ## 7. On noise
 
 The machine is shared: 14 GiB of RAM, ~3 GiB available, 12 hardware threads.
-The end-to-end measurement's spread (0.42–0.84 µs, a factor of two) is
+The end-to-end measurement's spread (0.67–0.86 µs) is
 dominated by that, and by the fact that `hyperfine` is not installed so the
 harness falls back to zsh's own `EPOCHREALTIME`.
 

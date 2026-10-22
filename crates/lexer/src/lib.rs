@@ -293,6 +293,73 @@ mod tests {
     }
 
     #[test]
+    fn a_tab_stripping_heredoc_ends_at_the_indented_delimiter() {
+        // `<<-` strips leading tabs from the body, so the delimiter may be
+        // indented. Getting this wrong would end the body on the wrong line
+        // and highlight the rest of the file as heredoc.
+        let line = "cat <<-EOF\n\tbody\n\tEOF\n";
+        let result = lex(line.as_bytes()).expect("scannable");
+        let body = result
+            .tokens
+            .iter()
+            .find(|t| t.kind == TokenKind::Heredoc)
+            .expect("a heredoc body");
+        let text = &line[body.start as usize..body.end as usize];
+        // The body token starts at the newline that ended the command.
+        assert_eq!(text, "\n\tbody\n\tEOF\n", "the body must end at the delimiter");
+    }
+
+    #[test]
+    fn a_plain_heredoc_is_not_ended_by_an_indented_delimiter() {
+        // Without `<<-` the delimiter must match exactly, so an indented one
+        // does not end the body.
+        let line = "cat <<EOF\n\tbody\n\tEOF\n";
+        let result = lex(line.as_bytes()).expect("scannable");
+        let body = result
+            .tokens
+            .iter()
+            .find(|t| t.kind == TokenKind::Heredoc)
+            .expect("a heredoc body");
+        let text = &line[body.start as usize..body.end as usize];
+        assert!(
+            text.contains("\tEOF"),
+            "an indented delimiter must not end a plain heredoc: {text:?}"
+        );
+    }
+
+    #[test]
+    fn a_quoted_heredoc_delimiter_is_matched_literally() {
+        // `<<'EOF'` ends at a line that is exactly `EOF`, whatever the
+        // delimiter would otherwise expand to.
+        let line = "cat <<'EOF'\nbody\nEOF\n";
+        let result = lex(line.as_bytes()).expect("scannable");
+        let body = result
+            .tokens
+            .iter()
+            .find(|t| t.kind == TokenKind::Heredoc)
+            .expect("a heredoc body");
+        let text = &line[body.start as usize..body.end as usize];
+        assert_eq!(text, "\nbody\nEOF\n");
+    }
+
+    #[test]
+    fn the_redirection_operators_are_recognised() {
+        // Each of these is a redirection, not part of a word.
+        for op in ["&>", "&>>", ">|", "<>", "2>&1", ">&2", "<&0"] {
+            let line = format!("cmd {op} file");
+            let result = lex(line.as_bytes()).expect("scannable");
+            assert!(
+                result
+                    .tokens
+                    .iter()
+                    .any(|t| t.kind == TokenKind::Redirect),
+                "{op:?} must be a redirection: {:?}",
+                result.tokens
+            );
+        }
+    }
+
+    #[test]
     fn tokens_are_ordered_and_do_not_overlap() {
         for line in [
             "echo hi",

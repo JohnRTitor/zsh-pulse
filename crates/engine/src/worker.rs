@@ -387,6 +387,10 @@ mod tests {
 
     #[test]
     fn work_actually_runs_on_a_separate_named_thread() {
+        if !can_count_threads() {
+            eprintln!("skipping: this platform has no /proc to count threads");
+            return;
+        }
         let _g = serialise_threads();
         let before = worker_thread_count();
         let w = Worker::spawn().expect("spawn");
@@ -436,6 +440,10 @@ mod tests {
 
     #[test]
     fn dropping_a_worker_does_not_leak_its_thread() {
+        if !can_count_threads() {
+            eprintln!("skipping: this platform has no /proc to count threads");
+            return;
+        }
         let _g = serialise_threads();
         let before = worker_thread_count();
         {
@@ -456,6 +464,10 @@ mod tests {
 
     #[test]
     fn shutdown_shared_stops_the_shared_worker_thread() {
+        if !can_count_threads() {
+            eprintln!("skipping: this platform has no /proc to count threads");
+            return;
+        }
         let _g = serialise_threads();
         let before = settled_worker_thread_count();
         let worker = shared().expect("shared worker");
@@ -510,6 +522,10 @@ mod tests {
 
     #[test]
     fn a_worker_can_be_started_again_after_shutdown_shared() {
+        if !can_count_threads() {
+            eprintln!("skipping: this platform has no /proc to count threads");
+            return;
+        }
         let _g = serialise_threads();
         let before = settled_worker_thread_count();
         let first = shared().expect("first shared worker");
@@ -632,6 +648,15 @@ mod tests {
             last = now;
         }
         last
+    }
+
+    /// Whether this platform can count threads at all.
+    ///
+    /// The count comes from `/proc`, which only exists on Linux. Off Linux
+    /// the thread-counting tests cannot say anything, so they skip rather
+    /// than fail.
+    fn can_count_threads() -> bool {
+        std::path::Path::new("/proc/self/task").is_dir()
     }
 
     /// Number of live threads named { WORKER_THREAD_NAME}.

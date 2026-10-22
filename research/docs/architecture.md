@@ -170,7 +170,7 @@ Every one of them is a decision to *not* call into zsh, and each has a test:
 1. **The line did not change** (`outcome.unchanged` and we have already
    published) → return without touching `region_highlight`
    ([`crates/zsh-module/src/lib.rs:174-178`](../../crates/zsh-module/src/lib.rs#L174)).
-   This one only fires for lines of 64 bytes or more — see
+   This one only fires for lines of 128 bytes or more — see
    [known limitations §1.6](known-limitations.md).
 2. **The styling did not change** (the new span set equals the published one)
    → return ([`crates/zsh-module/src/lib.rs:181-186`](../../crates/zsh-module/src/lib.rs#L181)).
@@ -370,7 +370,7 @@ full in the [boundary document](rust-zsh-boundary.md).
 * **Rejected:** no limit (zsh-syntax-highlighting) — a pathological line then
   eats a keystroke.
 * **Measured:** the budget is 100× the *target* per-keystroke cost (10 µs)
-  and about 2 000× the *measured* one (0.48 µs); see the
+  and about 1 500× the *measured* one (0.67 µs); see the
   [performance report](performance.md).
 
 ### 5.10 No Tokio, no async runtime
@@ -380,14 +380,14 @@ full in the [boundary document](rust-zsh-boundary.md).
 * **Rejected:** Tokio. Unproven against this workload; a runtime would add
   per-shell memory for no demonstrated benefit.
 
-### 5.11 The full re-parse wins below 64 bytes
+### 5.11 The full re-parse wins below 128 bytes
 
 * **Chosen:** `LexCache::relex` re-parses a line shorter than
   `INCREMENTAL_MIN_LEN` (64) outright
   ([`crates/lexer/src/incremental.rs:53`](../../crates/lexer/src/incremental.rs#L53),
   [`crates/lexer/src/incremental.rs:166-171`](../../crates/lexer/src/incremental.rs#L166)).
 * **Rejected:** always taking the incremental path.
-* **Why:** measured. Below 64 bytes the diff and the merge cost more than the
+* **Why:** measured. Below 128 bytes the diff and the merge cost more than the
   scan they save. The plan says to report that and fall back, and the code
   does. The raw machinery stays reachable as `relex_incremental` so that it
   remains covered by the property tests.
