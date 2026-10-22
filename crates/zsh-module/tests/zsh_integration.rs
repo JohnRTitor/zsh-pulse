@@ -860,12 +860,18 @@ fn the_shells_own_tables_decide_what_the_shell_knows() {
         &[],
     );
     assert!(ok, "zsh exited badly: {out}");
-    for word in ["sp-alias", "sp-galias", "sp-function", "sp-suffix", "if"] {
-        let expected = format!("WORD={word} REGIONS=<0 {} fg=green memo=shell-pulse>", word.len());
+    let cases = [
+        ("sp-alias", "fg=green"),
+        ("sp-galias", "bg=blue"),
+        ("sp-function", "fg=green"),
+        ("sp-suffix", "fg=green"),
+        ("if", "fg=yellow"),
+    ];
+    for (word, attr) in cases {
+        let expected = format!("WORD={word} REGIONS=<0 {} {attr} memo=shell-pulse>", word.len());
         assert!(
             out.contains(&expected),
-            "the shell knows `{word}` through its own tables, so it must be \
-             green: {out}"
+            "the shell knows `{word}` through its own tables, so it must have attribute {attr}: {out}"
         );
     }
 }

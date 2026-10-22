@@ -304,65 +304,64 @@ shell-pulse-highlight-inside() {
 # the text the module has to match against the line.
 shell-pulse-highlight-answer() {
   local word=$1
-  if shell-pulse-highlight-known "${(Q)word}"; then
-    SHELL_PULSE_COMMAND_ARGS+=( "--command-known=$word" )
-  else
-    SHELL_PULSE_COMMAND_ARGS+=( "--command-unknown=$word" )
-  fi
+  local -i kind
+  shell-pulse-highlight-known "${(Q)word}"
+  kind=$?
+  case $kind in
+    2) SHELL_PULSE_COMMAND_ARGS+=( "--command-reserved=$word" ) ;;
+    3) SHELL_PULSE_COMMAND_ARGS+=( "--command-global-alias=$word" ) ;;
+    1) SHELL_PULSE_COMMAND_ARGS+=( "--command-known=$word" ) ;;
+    *) SHELL_PULSE_COMMAND_ARGS+=( "--command-unknown=$word" ) ;;
+  esac
 }
 
-# Does the shell know this word as a command?
+# Does the shell know this word as a command, and what kind is it?
+#
+# Return codes:
+#   2 - reserved word
+#   3 - global alias
+#   1 - command on $PATH, builtin, function, alias, or suffix alias
+#   0 - not known
 #
 # The answer comes from the shell's own tables, so it is exactly what the
-# shell would do: an alias, a global alias, a function, a builtin, a
-# command on `$PATH`, a suffix alias or a reserved word.
-#
-# The `(e)` subscript flag says that the *value* of the subscript is the
-# key to look up. That is what is wanted here: the word is a name, not a
-# pattern.
+# shell would do.
 shell-pulse-highlight-known() {
   # No `emulate` here: the function only looks names up in hash tables,
   # which no option changes, and it runs on every keystroke.
   local word=$1
 
-  # An empty word is not a command: `''` is a word, but it is not a name
-  # the shell could know. The guard also keeps the subscript lookups below
-  # from being asked about an empty key.
+  # An empty word is not a command.
   if [[ -z $word ]]; then
-    return 1
+    return 0
   fi
 
   # The answer that was worked out before, if it is still fresh.
   if (( ${+SHELL_PULSE_COMMAND_CACHE[(e)$word]} )); then
     local entry=${SHELL_PULSE_COMMAND_CACHE[(e)$word]}
-    if (( SECONDS - entry / 2 < SHELL_PULSE_COMMAND_CACHE_TTL )); then
-      # The low half of the entry is the answer: one means the shell knows
-      # the word, zero means it does not.
-      (( entry % 2 ))
-      return
+    if (( SECONDS - entry / 4 < SHELL_PULSE_COMMAND_CACHE_TTL )); then
+      return $(( entry % 4 ))
     fi
   fi
 
-  # The answer comes from the shell's own tables, so it is exactly what the
-  # shell would do: an alias, a global alias, a function, a builtin, a
-  # command on `$PATH`, a suffix alias or a reserved word.
-  integer known=0
-  if (( ${+aliases[(e)$word]} )) ||
-     (( ${+galiases[(e)$word]} )) ||
-     (( ${+functions[(e)$word]} )) ||
-     (( ${+builtins[(e)$word]} )) ||
-     (( ${+commands[(e)$word]} )) ||
-     (( ${+saliases[(e)${word##*.}]} )) ||
-     (( $reswords[(Ie)$word] )); then
-    known=1
+  integer kind=0
+  if (( $reswords[(Ie)$word] )); then
+    kind=2
+  elif (( ${+galiases[(e)$word]} )); then
+    kind=3
+  elif (( ${+aliases[(e)$word]} )) ||
+       (( ${+functions[(e)$word]} )) ||
+       (( ${+builtins[(e)$word]} )) ||
+       (( ${+commands[(e)$word]} )) ||
+       (( ${+saliases[(e)${word##*.}]} )); then
+    kind=1
   fi
 
   if (( ${#SHELL_PULSE_COMMAND_CACHE} >= SHELL_PULSE_COMMAND_CACHE_MAX )); then
     SHELL_PULSE_COMMAND_CACHE=()
   fi
-  SHELL_PULSE_COMMAND_CACHE[(e)$word]=$(( SECONDS * 2 + known ))
+  SHELL_PULSE_COMMAND_CACHE[(e)$word]=$(( SECONDS * 4 + kind ))
 
-  (( known ))
+  return $kind
 }
 
 # The redraw hook.

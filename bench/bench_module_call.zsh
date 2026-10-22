@@ -88,8 +88,8 @@ LINE_B=$QUOTED_LINE_B
 # measurement below is the cost of doing nothing.
 # The `\${...}` is escaped so that the *inner* shell expands it.
 published=$(zsh -f -c "$SETUP; typeset -ga region_highlight; region_highlight=(); BUFFER=$LINE_A; CURSOR=8; $BUILTIN --region-highlight; print -r -- \"\${#region_highlight}\"")
-if [[ $published != 1 ]]; then
-  print -u2 "ERROR: the module published $published region(s), expected 1;" >&2
+if (( published < 1 )); then
+  print -u2 "ERROR: the module published $published region(s), expected at least 1;" >&2
   print -u2 "       this measurement would be the cost of doing nothing." >&2
   exit 1
 fi

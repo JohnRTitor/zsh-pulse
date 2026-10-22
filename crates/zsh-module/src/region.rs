@@ -91,12 +91,17 @@ pub fn merge_entries(existing: &[String], ours: &[std::ffi::CString]) -> Vec<std
 pub fn attribute(style: StyleId) -> Option<&'static str> {
     match style {
         // The shell knows this command: it is an alias, a function, a
-        // builtin, a command on `$PATH` or a reserved word. The reference
+        // builtin, a command on `$PATH` or a suffix alias. The reference
         // colours all of those green.
         StyleId::Command => Some("fg=green"),
         // The shell does not know this command. The reference calls this
         // `unknown-token` and makes it bold, so that it stands out.
         StyleId::UnknownCommand => Some("fg=red,bold"),
+        // A reserved word (`if`, `then`, `for`, `while`, `[[`, etc.).
+        // The reference implementation colours these yellow.
+        StyleId::ReservedWord => Some("fg=yellow"),
+        // A global alias. The reference implementation uses a blue background.
+        StyleId::GlobalAlias => Some("bg=blue"),
         // The reference has one style for a single hyphen and one for a
         // double hyphen; both are cyan.
         StyleId::Option => Some("fg=cyan"),
@@ -105,15 +110,15 @@ pub fn attribute(style: StyleId) -> Option<&'static str> {
         StyleId::Path => Some("fg=magenta"),
         StyleId::PathToDir => Some("fg=magenta,underline"),
         StyleId::Assignment => Some("fg=yellow"),
-        StyleId::SingleQuoted => Some("fg=green"),
-        StyleId::DoubleQuoted => Some("fg=green"),
+        StyleId::SingleQuoted => Some("fg=yellow"),
+        StyleId::DoubleQuoted => Some("fg=yellow"),
         StyleId::Escape => Some("fg=magenta"),
         StyleId::Comment => Some("fg=blue"),
         StyleId::Operator => Some("fg=red"),
         StyleId::Redirect => Some("fg=red"),
         StyleId::Substitution => Some("fg=magenta"),
-        StyleId::ParamExpansion => Some("fg=magenta"),
-        StyleId::Glob => Some("fg=yellow"),
+        StyleId::ParamExpansion => Some("fg=cyan"),
+        StyleId::Glob => Some("fg=blue,bold"),
         StyleId::Heredoc => Some("fg=green"),
         StyleId::Argument => None,
     }
@@ -336,6 +341,8 @@ mod tests {
         for style in [
             StyleId::Command,
             StyleId::UnknownCommand,
+            StyleId::ReservedWord,
+            StyleId::GlobalAlias,
             StyleId::Option,
             StyleId::Path,
             StyleId::PathToDir,
@@ -354,10 +361,13 @@ mod tests {
             let Some(attr) = attribute(style) else { continue };
             let mut parts = attr.split(',');
             let colour = parts.next().expect("at least one part");
-            let fg = colour.strip_prefix("fg=").unwrap_or(colour);
+            let colour_name = colour
+                .strip_prefix("fg=")
+                .or_else(|| colour.strip_prefix("bg="))
+                .unwrap_or(colour);
             assert!(
-                COLOURS.contains(&fg),
-                "{style:?} has the colour {fg:?}, which zsh does not know"
+                COLOURS.contains(&colour_name),
+                "{style:?} has the colour {colour_name:?}, which zsh does not know"
             );
             for extra in parts {
                 assert!(
@@ -378,7 +388,7 @@ mod tests {
         let rows = entries.rows();
         assert_eq!(rows.len(), 1);
         // `'héllo'` starts at character 5 and is six characters long.
-        assert_eq!(rows[0].to_bytes(), b"5 11 fg=green memo=shell-pulse");
+        assert_eq!(rows[0].to_bytes(), b"5 11 fg=yellow memo=shell-pulse");
     }
 
     #[test]

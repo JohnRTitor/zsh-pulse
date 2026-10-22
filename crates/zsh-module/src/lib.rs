@@ -406,6 +406,10 @@ enum CommandKnowledge {
     Known,
     /// The shell does not know the word.
     Unknown,
+    /// A reserved word: `if`, `then`, `for`, `while`, etc.
+    Reserved,
+    /// A global alias.
+    GlobalAlias,
 }
 
 /// One answer from the shell: what it said about one command word.
@@ -555,6 +559,10 @@ impl CommandAnswers {
                 self.push(word, CommandKnowledge::Known);
             } else if let Some(word) = bytes.strip_prefix(COMMAND_UNKNOWN_ARGUMENT) {
                 self.push(word, CommandKnowledge::Unknown);
+            } else if let Some(word) = bytes.strip_prefix(COMMAND_RESERVED_ARGUMENT) {
+                self.push(word, CommandKnowledge::Reserved);
+            } else if let Some(word) = bytes.strip_prefix(COMMAND_GLOBAL_ALIAS_ARGUMENT) {
+                self.push(word, CommandKnowledge::GlobalAlias);
             }
         }
     }
@@ -568,6 +576,12 @@ const COMMAND_KNOWN_ARGUMENT: &[u8] = b"--command-known=";
 
 /// The argument that says the shell does not know the command word.
 const COMMAND_UNKNOWN_ARGUMENT: &[u8] = b"--command-unknown=";
+
+/// The argument that says the command word is a reserved word.
+const COMMAND_RESERVED_ARGUMENT: &[u8] = b"--command-reserved=";
+
+/// The argument that says the command word is a global alias.
+const COMMAND_GLOBAL_ALIAS_ARGUMENT: &[u8] = b"--command-global-alias=";
 
 /// What to do with a word.
 ///
@@ -754,6 +768,10 @@ pub fn published_spans(text: &[u8], answers: &[&[u8]]) -> Vec<HighlightSpan> {
             command_answers.push(word, CommandKnowledge::Known);
         } else if let Some(word) = answer.strip_prefix(COMMAND_UNKNOWN_ARGUMENT) {
             command_answers.push(word, CommandKnowledge::Unknown);
+        } else if let Some(word) = answer.strip_prefix(COMMAND_RESERVED_ARGUMENT) {
+            command_answers.push(word, CommandKnowledge::Reserved);
+        } else if let Some(word) = answer.strip_prefix(COMMAND_GLOBAL_ALIAS_ARGUMENT) {
+            command_answers.push(word, CommandKnowledge::GlobalAlias);
         }
     }
     let mut spans = Vec::new();
@@ -812,6 +830,8 @@ fn push_word(
 fn command_token_style(token: &Token, buffer: &[u8], answers: &CommandAnswers) -> Option<StyleId> {
     match answers.knowledge_of(token_bytes(token, buffer)) {
         Some(CommandKnowledge::Known) => Some(StyleId::Command),
+        Some(CommandKnowledge::Reserved) => Some(StyleId::ReservedWord),
+        Some(CommandKnowledge::GlobalAlias) => Some(StyleId::GlobalAlias),
         Some(CommandKnowledge::Unknown) => Some(StyleId::UnknownCommand),
         None => None,
     }
@@ -874,6 +894,8 @@ where
     // than not colouring it at all.
     match answers.knowledge_of(word_text(word, buffer)) {
         Some(CommandKnowledge::Known) => WordStyle::Styled(StyleId::Command),
+        Some(CommandKnowledge::Reserved) => WordStyle::Styled(StyleId::ReservedWord),
+        Some(CommandKnowledge::GlobalAlias) => WordStyle::Styled(StyleId::GlobalAlias),
         Some(CommandKnowledge::Unknown) => match path_style(word) {
             Some(style) => WordStyle::Styled(style),
             None => WordStyle::Styled(StyleId::UnknownCommand),

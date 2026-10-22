@@ -51,6 +51,10 @@ pub enum StyleId {
     PathToDir,
     /// A command the shell does not know.
     UnknownCommand,
+    /// A reserved word: `if`, `then`, `for`, `while`, `[[`, etc.
+    ReservedWord,
+    /// A global alias.
+    GlobalAlias,
     /// A `NAME=value` assignment.
     Assignment,
     /// A single-quoted string.
