@@ -17,6 +17,7 @@ Companion documents: [architecture](architecture.md) ·
 | Quantity | Value | Produced by |
 |---|---|---|
 | End-to-end cost of one keystroke through zsh | **0.86 µs**, range 0.83–0.89 µs over 3 runs | `bench/bench_module_call.zsh 20000 28` |
+| Cost of converting spans into `region_highlight` entries | **0.36 µs** for a 188-byte line with 9 regions | `cargo run --release -p zsh-module --example bench_region` |
 | Target | ≤ 10 µs | [`../PLAN.md`](../PLAN.md) |
 | Headroom | **≈ 11×** | 10 µs ÷ 0.87 µs |
 | Full re-parse of a 1 389-byte line | 2.565 µs (2.565–2.665 µs over two runs) | `cargo run --release -p lexer --example bench_incremental 200` |

@@ -29,7 +29,7 @@ use lexer::LexCache;
 use zsh_abi::raw::{Builtin, CStr, Module};
 use zsh_abi::{Api, CappedRead, guard, probe};
 
-mod region;
+pub mod region;
 
 /// Process-wide engine state, created on first use.
 static ENGINE: OnceLock<EngineState> = OnceLock::new();

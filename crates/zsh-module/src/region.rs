@@ -149,7 +149,6 @@ impl Entries {
     }
 
     /// Whether the buffer is empty.
-    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.count == 0
     }

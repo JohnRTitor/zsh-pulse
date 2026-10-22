@@ -105,29 +105,24 @@ the `setaparam` double-write corruption (#4 below), not threading.
    builtin table. `CStr` now only accepts `c"…"` literals, and a test asserts
    the trailing NUL really exists.
 2. **`setaparam` takes ownership** of the value array (`assignaparam` calls
-   `freearray` on every path). Passing a Rust stack array segfaulted zsh; values
-   must be allocated by `zhalloc`/`dupstring`.
+   `freearray` on every path). Passing a Rust stack array segfaulted zsh.
+   ~~values must be allocated by `zhalloc`/`dupstring`~~ — **that was wrong,
+   and it is what finding 4 was**: the pool allocators are the ones zsh frees
+   incorrectly. Values must be allocated by `zalloc`/`ztrdup`.
 3. **`setaparam`'s return value is meaningless** — it returns a `Param` pointer
    truncated to `int`.
 4. **Writing a parameter twice corrupts the heap** (`free(): invalid size`).
-   The write path is therefore **gated behind `SHELL_PULSE_ECHO`** and off by
-   default. **This blocks Stage C's `region_highlight` push and must be
-   understood before C3.**
+   The write path was therefore **gated behind `SHELL_PULSE_ECHO`** and off
+   by default. **This blocked Stage C's `region_highlight` push — and it is
+   now understood and fixed**: the values were allocated from zsh's *pool*
+   allocator, whose memory `popheap()` recycles around every command, so the
+   parameter pointed at recycled memory. The array must come from `zalloc`
+   and the elements from `ztrdup`; see "The Stage C blocker, resolved"
+   below. The write path is no longer gated.
 5. ~~B6 gap~~ — **resolved.** Reading `BUFFER`/`CURSOR` no longer allocates:
    `read_param_bytes` fills a reused buffer via `getsparam_u`, and `CURSOR` is
    parsed straight to an `i64` by `parse_i64` (unit-tested, overflow-checked).
    Env-var flags are resolved once via `OnceLock` instead of per keystroke.
-
-### Test-harness bugs found (worth remembering)
-
-- Parallel `cargo test` runs raced copying the module into one destination,
-  producing a truncated `.so` that segfaulted zsh — which looked exactly like
-  an ABI bug. Fixed with a `OnceLock`.
-- The `DEGRADED` global is shared, so three guard tests clobbered each other
-  under parallel execution. Fixed with a test mutex.
-- The first benchmark harness left `${(qqq)LINE}` for the inner shell to expand,
-  silently measuring an **empty** buffer; then `${(qqq)}`'s double quotes broke
-  the command entirely. The harness now fails loudly on either.
 
 ---
 
@@ -162,30 +157,36 @@ same way.
 
 - [x] **C0** Pure-Rust crates: `lexer`, `highlight` (no zsh dependency, so
   they are unit- and benchmark-testable)
-  *(done — 60 tests; the lexer's rules are taken from zsh's own `lx1`/`lx2`
-  tables, not from intuition)*
+  *(done — 64 tests between them; the lexer's rules are taken from zsh's own
+  `lx1`/`lx2` tables, not from intuition)*
 - [x] **C1** Incremental lexer with serialisable checkpoints; splice on
   state convergence (port of ble.sh `core-syntax.sh:5540-5550`)
   *(done — see the acceptance result below)*
 - [x] **C2** `HighlightSpan` + run-merged storage + two-pointer diff;
   `size_of` and allocation-count budget on the hot path
-  *(done — `HighlightSpan` is 12 bytes, the state is 45, the spans are
-  run-merged, the diff is a two-pointer merge checked against a naive
-  reference implementation, and the re-lex allocates **once** in the steady
-  state)*
+  *(done — `HighlightSpan` is 12 bytes and `StyleId` 1, both with a
+  `size_of` ceiling asserted by a test; the lexer state is 45 bytes, also
+  with a ceiling; the spans are run-merged; the diff is a two-pointer merge
+  checked against a naive reference implementation; and a steady-state
+  re-lex allocates **at most once** — measured by a counting global
+  allocator, with the budget asserted by `crates/lexer/tests/alloc_budget.rs`)*
 - [x] **C3** `region_highlight` boundary — one `setaparam`, reuse scratch
-  buffer, skip entirely when unchanged
+  buffer, skip entirely when unchanged; own microbenchmark
   *(done — one `setaparam` per change, nothing at all when the styling is
   unchanged, and the entries are built in one reused buffer so a keystroke
-  does not allocate per region)*
+  does not allocate per region. The conversion has its own microbenchmark,
+  `cargo run --release -p zsh-module --example bench_region`: **0.36 µs**
+  for a 188-byte line with 9 regions)*
 - [x] **C4** `zle-line-pre-redraw` integration: one hook, paste guard,
   wall-clock budget, bail to unstyled on unparseable input
   *(done — one hook, a 1 ms wall-clock budget, a 4 KiB line limit, a 256
   region limit, and a clean bail to unstyled)*
-- [x] **C5** Zsh adapter (`zsh/init.zsh`) + loadable fallback path
-  *(done — the adapter loads the module and installs the hook, chains an
-  existing hook rather than replacing it, and does nothing at all if the
-  module cannot be loaded)*
+- [x] **C5** Zsh adapter (`zsh/init.zsh`, `zsh/widgets.zsh`) + loadable
+  fallback path
+  *(done — `init.zsh` loads the module and `widgets.zsh` installs the hooks;
+  the hooks chain an existing one rather than replacing it, and the adapter
+  does nothing at all if the module cannot be loaded. `zsh/completion.zsh`
+  is still to come: it belongs to D2, which has not been started.)*
 
 ### Acceptance for C1 — the numbers
 

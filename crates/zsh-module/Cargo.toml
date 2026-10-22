@@ -8,7 +8,9 @@ rust-version.workspace = true
 [lib]
 name = "shellpulse_highlight"
 path = "src/lib.rs"
-crate-type = ["cdylib"]
+# The `rlib` is what lets the conversion cost be measured on its own:
+# a `cdylib` alone cannot be linked into a benchmark.
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 zsh-abi.workspace = true

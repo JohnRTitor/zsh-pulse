@@ -351,6 +351,22 @@ mod tests {
     }
 
     #[test]
+    fn the_span_is_small_enough_to_be_cheap() {
+        // The plan asks for a `size_of` ceiling on the hot path: the spans
+        // are rebuilt on every keystroke, so their size is part of the cost.
+        assert!(
+            core::mem::size_of::<HighlightSpan>() <= 16,
+            "HighlightSpan grew to {} bytes",
+            core::mem::size_of::<HighlightSpan>()
+        );
+        assert!(
+            core::mem::size_of::<StyleId>() <= 4,
+            "StyleId grew to {} bytes",
+            core::mem::size_of::<StyleId>()
+        );
+    }
+
+    #[test]
     fn the_span_set_is_never_larger_than_the_token_count() {
         let l = lex(b"echo \"hi\" 'there' $x").expect("scannable");
         let s = SpanSet::from_tokens(&l.tokens);
