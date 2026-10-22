@@ -175,11 +175,13 @@ same way.
   *(done — one `setaparam` per change, nothing at all when the styling is
   unchanged, and the entries are built in one reused buffer so a keystroke
   does not allocate per region. The conversion has its own microbenchmark,
-  `cargo run --release -p zsh-module --example bench_region`: **0.36 µs**
-  for a 188-byte line with 9 regions)*
+  `cargo run --release -p zsh-module --example bench_region`: **0.39 µs**
+  for a 188-byte line with 11 regions — the benchmark asks the module for
+  the spans it publishes, so the number of regions it reports is the number
+  a real line gets)*
 - [x] **C4** `zle-line-pre-redraw` integration: one hook, paste guard,
   wall-clock budget, bail to unstyled on unparseable input
-  *(done — one hook, a 1 ms wall-clock budget, a 4 KiB line limit, a 256
+  *(done — one hook, a 1 ms wall-clock budget, a 4 KiB line limit, a 32
   region limit, and a clean bail to unstyled)*
 - [x] **C5** Zsh adapter (`zsh/init.zsh`, `zsh/widgets.zsh`) + loadable
   fallback path
@@ -187,6 +189,126 @@ same way.
   the hooks chain an existing one rather than replacing it, and the adapter
   does nothing at all if the module cannot be loaded. `zsh/completion.zsh`
   is still to come: it belongs to D2, which has not been started.)*
+- [x] **C6** Whole-line colouring: options, paths and unknown commands
+  *(done — the line is now coloured the way the reference implementation
+  colours it, `research/upstream/fsh/fast-highlight:58-93`, instead of
+  colouring the command word and nothing else)*
+  - [x] `TokenKind::Option`: a word in argument position that starts with
+    `-`, is longer than one character and is not exactly `--`; `-` is the
+    word "standard input" and `--` is the end-of-options marker, and the
+    target of a redirection is a file name rather than an option
+  - [x] the command-word protocol: the adapter asks the shell, on every
+    keystroke, which command words the shell knows, and passes the answer
+    in the arguments (`--command-known=<word>`, `--command-unknown=<word>`)
+    — one answer for **every** command word of the line, not only the
+    first. The word is part of the answer, byte for byte with its quoting
+    preserved, and an answer is applied only to a command word whose bytes
+    are identical: a disagreement between the shell's word splitting and
+    the Rust lexer can never paint the wrong word. A command word with no
+    answer is never painted red or green — it is looked up on the
+    filesystem like every other literal word, and otherwise left exactly as
+    the user typed it
+  - [x] the path lookup: **every literal word** is a candidate for naming a
+    file — a bare file name is a file name just as much as `./Cargo.toml` is
+    — and is resolved against `$PWD`/`$HOME` and looked up with `stat`; a
+    file is magenta and a directory is magenta and underlined. The number of
+    lookups on one line is bounded at 16 (`MAX_PATH_LOOKUPS`), counted in the
+    order the words appear, so the words nearest the command are the ones
+    that get looked up. The answers are cached, because the same path is
+    looked up on every keystroke: the cache holds 64 entries and every
+    answer expires after two seconds
+  - [x] the reference implementation's colours: `fg=green` for a command the
+    shell knows, `fg=red,bold` for one it does not, `fg=cyan` for an
+    option, `fg=magenta` for a path, `fg=magenta,underline` for a
+    directory
+  - [x] **the order of the two answers: the shell first, the filesystem
+    second.** A command word the shell knows is green and the filesystem is
+    not consulted. A command word the shell does not know is looked up
+    before it is called unknown, because `~/bin/tool` is a path and not a
+    typo. The reference implementation asks the same two questions in the
+    same order (`research/upstream/fsh/fast-highlight:1265-1295`)
+  - [x] **a word that starts with a tilde is a command word.** The scanner
+    emits the leading `~` as a glob — that is what it is in `~/*.txt` — and
+    the rest of the word keeps the kind the word has, so `~/bin/tool` is a
+    glob followed by a command. The shell's answer applies to it, and the
+    path lookup resolves the `~` against `$HOME`
+  - [x] **the command inside a command substitution is answered.**
+    `$(cmd)` and `` `cmd` `` hold a command of their own, and the module
+    finds it: the adapter looks inside a substitution that makes up the
+    whole word, splits the text between the `$(` and the `)` with the
+    shell's own lexer, and answers for the command words in it. The nesting
+    is bounded at four levels
+  - [x] **an assignment may end in `+=`.** `FOO+=bar cmd` runs `cmd`. The
+    Rust lexer knows that (`crates/lexer/src/scanner.rs`,
+    `looks_like_assignment`) and so does the adapter. If the two sides
+    disagreed about what an assignment is, the command word after it would
+    never be answered and would never be coloured
+  - [x] **the shell's answers are cached for two seconds, and the negative
+    answers are cached too.** A word the shell knew may stop being known —
+    the user may `unalias` it or remove the function — and an answer trusted
+    for ever would keep the word green after the shell had forgotten it.
+    The same is true in the other direction: a command installed while the
+    session runs has to be picked up
+  - [x] **the argument array is quoted** when the adapter calls the module:
+    a command word may hold a glob character (`*`, `?`, `[`), and with
+    `GLOB_SUBST` set in the user's configuration an unquoted expansion would
+    be matched against the filesystem. The quoting goes all the way down:
+    `shell-pulse-highlight-words "${words[@]}"` and
+    `shell-pulse-highlight-known "${(Q)word}"` are quoted as well, so the
+    guarantee that a command word is never taken for a glob pattern does not
+    depend on the options the caller happened to set two frames up.
+    `shell-pulse-highlight-known` also returns early for an empty word
+  - [x] **the adapter does not look at a line it will not highlight.** The
+    module does not highlight a line longer than 4 KiB (`MAX_LINE`), so the
+    adapter compares the length of `$BUFFER` with the same limit
+    (`SHELL_PULSE_MAX_LINE`) *before* it splits the line. The split and the
+    walk of every word would otherwise be paid on every keystroke, for a
+    line that is never highlighted — and a pasted megabyte would have made
+    the shell unresponsive
+  - [x] **the adapter emulates zsh once, not twice.** `emulate -L zsh`
+    resets every option in the shell, which is not free on the interactive
+    thread. The function that walks the words of the line used to emulate
+    zsh itself, on top of the `emulate -L zsh` of the function that called
+    it; it now sets only `extendedglob` and `noglob`, and does so locally
+    (`setopt localoptions …`)
+  - [x] **a substitution is only looked inside when there is one.**
+    `shell-pulse-highlight-inside` used to be called for every word of the
+    line; it is now called only for a word that contains `$(` or a
+    backtick. A zsh function call is not free, and this ran for every word
+  - [x] **the benchmark measures the real spans.**
+    `crates/zsh-module/examples/bench_region.rs` asks the module for the
+    spans it publishes, through the new public `published_spans`, instead of
+    building a stand-in from the lexer's tokens — so the number of regions
+    it reports is the number of regions a real line gets
+  - [x] **the module bounds the bytes it copies out of the answers.** The
+    number of answers was bounded (`MAX_ARGUMENTS`, 64) but the bytes they
+    carried were not: a pasted line of a megabyte would have been copied
+    into the module's own buffer — and kept there for the rest of the
+    session, because the buffer's capacity is deliberately reused. The words
+    are now bounded by `MAX_ANSWER_BYTES` (4 KiB, the same bound as the
+    line the module is willing to highlight). An answer that does not fit is
+    dropped, and the command word it was about is left alone: a *missing*
+    colour, never a wrong one
+  - [x] **the module stops looking paths up when the budget is spent.** The
+    one-millisecond budget was checked *after* the whole line was done, so
+    it could cancel the answer but not the work. It is now checked *before*
+    every path lookup: a `stat` on a hung network filesystem can take
+    milliseconds, and stopping early turns "the user waits and gets
+    nothing" into "the user waits only as long as the budget"
+  - [x] **the end-to-end test reconstructs the screen.** The pty test used
+    to search the captured bytes for a piece of text. That is unreliable:
+    zsh's line editor draws the line in pieces and moves the cursor between
+    them, so the text of the line can be broken up — and even reordered — in
+    the byte stream, and which of the two happens depends on how the input
+    reached the shell. The test now reconstructs the screen (the text, the
+    cursor motions, the erases and the attributes in force) and asserts on
+    that. It is a stronger test as well as a more reliable one: it can say
+    that the *characters* of the command word were drawn green, not merely
+    that the bytes for green appeared somewhere. The child also sets the
+    size of the pseudo-terminal (`stty rows 24 cols 80`): the pty the
+    harness opens has no size of its own — the harness runs with its output
+    on a pipe — and the test does not want the line editor's idea of the
+    screen to depend on that
 
 ### Acceptance for C1 — the numbers
 
@@ -311,6 +433,15 @@ design:
   buffers: capacity is given back only when it is large in absolute terms
   *and* much larger than the current line, so ordinary editing never
   reallocates.
+- **The whole-line colouring has not been measured yet.** The path lookup is
+  one `stat` per distinct literal word per keystroke — every literal word is
+  a candidate for naming a file — bounded at sixteen lookups on a line, and
+  served from a cache of 64 entries whose answers expire after two seconds.
+  The shell-side command lookup is a hash lookup in zsh's own tables that
+  does not fork, and it has a cache of its own with the same two-second
+  lifetime. The 0.67 µs figure for the module's own work per keystroke
+  predates all of it and has **not** been re-measured; see
+  `research/docs/performance.md` §4.1.
 
 ### Known limitations
 
@@ -323,10 +454,20 @@ design:
   drives a real interactive zsh through a pty — but only on a machine that
   has the `zsh/zpty` module and a usable terminal. Everywhere else the
   test skips with a printed reason.
-- The `region_highlight` array is replaced wholesale, so clearing it also
-  clears any entries another plugin added. Our own entries carry
-  `memo=shell-pulse` so that they can be told apart, but the merge is not
-  implemented.
+- The `region_highlight` array is **merged** with the entries another plugin
+  left behind rather than replaced wholesale: our own entries carry
+  `memo=shell-pulse` so that they can be told apart, and everyone else's
+  are kept. A *clear* still replaces the whole array, so another plugin's
+  entries are lost when the plugin bails out to unstyled.
+- The whole-line colouring cannot know everything: a quoted command word is
+  neither coloured as a command nor looked up, a command inside a compound
+  statement is not coloured as a command, `~user` is not resolved, a path is
+  followed through symlinks, a word that is not literal text is never looked
+  up, both caches expire after two seconds, at most sixteen words of a line
+  are looked up on the filesystem, a long line loses the regions past the
+  32-region cap, an unanswered command word is never painted red or green,
+  and a substitution that is not the whole word is not looked inside. The
+  full list is in `research/docs/known-limitations.md` §1.10.
 
 ---
 
@@ -353,11 +494,17 @@ design:
 - [x] **E2** `zpty` interactive latency harness (keystroke → render)
   *(done — `bench/bench_zpty.zsh` and `crates/zsh-module/tests/zsh_pty.rs`.
   The test drives a **real interactive zsh** through a pty and asserts on the
-  terminal's byte stream: the `fg=cyan,bold` attribute reaches the screen as
-  `ESC [ 1 m ESC [ 3 6 m`, and a line with nothing to highlight produces no
-  such bytes. A control run without the module proves the bytes come from
-  us. The harness measures **68.9 µs per keystroke** from keystroke to
-  redraw, which is the whole round trip through the pty, not just our work.)*
+  **screen the shell drew**: the harness reconstructs it from the bytes zsh
+  writes — the text, the cursor motions, the erases and the attributes in
+  force — so the attribute of the command word is checked on the characters
+  themselves and not merely in the byte stream (the line editor draws the
+  line in pieces, so the bytes alone are not the screen). The colour the
+  command word has had since C6 reaches the screen as its escape sequence
+  (`ESC [ 3 2 m` for `fg=green`), and a line with nothing to highlight
+  produces no styled region at all. A control run without the module proves
+  the colours come from us. The harness measures **68.9 µs per keystroke**
+  from keystroke to redraw, which is the whole round trip through the pty,
+  not just our work.)*
 - [x] **E3** Startup cost + `strace` syscall counts (must show zero spawns)
   *(done — `bench/bench_startup.zsh`. The module costs **0.12 ms** to load
   and the whole plugin **0.17 ms**; it adds **62 syscalls** at load time; and

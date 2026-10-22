@@ -43,40 +43,38 @@ redraw, not per widget and not per key.
 
 ### 1.3 How it is installed
 
-[`zsh/init.zsh`](../../zsh/init.zsh) is the whole adapter — 63 lines.
+The adapter is two files. [`zsh/init.zsh`](../../zsh/init.zsh) loads the
+module and does nothing else, and
+[`zsh/widgets.zsh`](../../zsh/widgets.zsh) holds the hooks.
+
+`init.zsh` gives up quietly if the module cannot be loaded:
 
 ```zsh
-shell-pulse-highlight-redraw() {
-  shell-pulse-highlight --region-highlight
-}
-
-zle -N zle-line-pre-redraw shell-pulse-highlight-redraw
-```
-
-`zle -N` **replaces** any widget of the same name, and zsh allows exactly one
-widget per name. Other plugins use this hook too, so the adapter *chains*
-rather than overwrites
-([`zsh/init.zsh:51-61`](../../zsh/init.zsh#L51)):
-
-```zsh
-if (( ${+widgets[zle-line-pre-redraw]} )); then
-  typeset -g _shell_pulse_previous_pre_redraw=${widgets[zle-line-pre-redraw]}
-  shell-pulse-highlight-redraw() {
-    shell-pulse-highlight --region-highlight
-    if (( ${+_shell_pulse_previous_pre_redraw} )); then
-      $_shell_pulse_previous_pre_redraw
-    fi
-  }
+if ! zmodload shellpulse/highlight 2>/dev/null; then
+  return 0
 fi
 ```
 
-The previous widget is remembered in a global (`typeset -g`) so that the
-redefinition of the function closes over it. The behaviour is asserted by
-`the_adapter_chains_an_existing_pre_redraw_hook` in
+`widgets.zsh` defines the two widgets — `shell-pulse-highlight-redraw` and
+`shell-pulse-highlight-line-init` — and registers them with zsh's own
+`add-zle-hook-widget`:
+
+```zsh
+add-zle-hook-widget zle-line-pre-redraw shell-pulse-highlight-redraw
+add-zle-hook-widget zle-line-init shell-pulse-highlight-line-init
+```
+
+`add-zle-hook-widget` **keeps** the widgets that are already registered for
+the hook and calls them as well. `zle -N` would *replace* them, and zsh
+allows exactly one widget per name — so two plugins using the same hook
+would silently disable each other. That is not hypothetical: zsh-autocomplete
+registers its own wrapper for `zle-line-pre-redraw` *after* the `.zshrc`
+has been read, which is exactly when it would have disabled this one. The
+behaviour is asserted by `the_adapter_chains_an_existing_pre_redraw_hook` in
 [`crates/zsh-module/tests/zsh_integration.rs`](../../crates/zsh-module/tests/zsh_integration.rs).
 
-**Known rough edge:** if the user loads the plugin *twice*, the second load
-chains the first load's wrapper, so the builtin is called twice per redraw.
+**Known rough edge:** if the user loads the plugin *twice*, the same function
+is registered with the hook twice, so the builtin is called twice per redraw.
 The second call finds that nothing changed and returns without touching zsh
 (see §4.1), so the cost is one extra native call, not a double highlight.
 
@@ -84,7 +82,7 @@ The second call finds that nothing changed and returns without touching zsh
 
 The builtin takes an optional `--region-highlight` argument. Without it, the
 module **reads** the line and changes nothing
-([`crates/zsh-module/src/lib.rs:188-194`](../../crates/zsh-module/src/lib.rs#L188)).
+([`crates/zsh-module/src/lib.rs:248-261`](../../crates/zsh-module/src/lib.rs#L248)).
 
 This is deliberate. `region_highlight` is a *parameter* in the user's shell as
 well as a ZLE special parameter. If the module wrote to it unconditionally, it
@@ -99,6 +97,154 @@ Two tests pin this down:
 - `the_highlighter_does_not_create_a_global_region_highlight` — calling the
   builtin with the flag, outside a widget, does not create a global parameter
   (`EXISTS=0`).
+
+### 1.5 The command-word arguments
+
+The module cannot see the shell's tables of aliases, functions, builtins,
+commands, suffix aliases and reserved words: they live in the shell, and a
+loaded module has no way to read them. So the **adapter** asks the shell, on
+every keystroke, and passes the answer to the module in the argument
+vector.
+
+Two arguments carry the answer:
+
+| Argument | Meaning |
+|---|---|
+| `--command-known=<word>` | the shell knows `<word>` as a command |
+| `--command-unknown=<word>` | the shell does not know `<word>` as a command |
+
+Both are repeatable, and **every** command word of the line is answered —
+not only the first one. `ls | grep x` gets an answer for `ls` and for
+`grep`. A command inside a command substitution is answered as well:
+`echo $(ls)` gets an answer for `echo` and for `ls`, and the answer is
+about the word *inside* the substitution, because that is the text the
+module compares its own command word with.
+
+#### The word is part of the answer
+
+The word is the raw text of the command word, byte for byte, **with its
+quoting preserved**: `'ls'` is the four bytes `'ls'`, not the two bytes
+`ls`. The module compares the word it found with the word the shell was
+asked about, byte for byte, and applies the answer only to a command word
+whose bytes are identical. An answer that does not match is **ignored**.
+
+That rule is what makes the protocol safe. The shell and the lexer do not
+always agree about where the command word is — the shell splits the line
+its own way and the lexer scans it its own way — and a disagreement would
+mean colouring the wrong word. Rather than risk that, the answer is dropped
+and the word is left exactly as the user typed it. A wrong colour is worse
+than no colour.
+
+#### A command word with no answer is never painted red
+
+If the shell was not asked about a command word — because the adapter found
+none, or because the answer was about a different word — the module does
+not colour it red. Red means "the shell does not know this command", and
+the shell was never asked. The word is still looked up on the filesystem
+like every other literal word, so it may come out magenta; otherwise it is
+drawn exactly as the user typed it.
+
+This is also what keeps a missing `zsh/parameter` harmless. When the
+shell's tables are not available the adapter reports nothing at all, so a
+command word cannot be turned red by the mere absence of a module.
+
+#### Finding the command words
+
+The adapter's job is to find **every** command word in the line, the way the
+shell itself finds them. It splits the line with the shell's own lexer —
+`${(z)BUFFER}` — and then walks the words, skipping:
+
+* **assignments**: `FOO=bar cmd` runs `cmd`, so `FOO=bar` is not a command
+  word. The same is true of `FOO+=bar cmd`, and the adapter has to know
+  that: the Rust lexer knows it too
+  ([`crates/lexer/src/scanner.rs`](../../crates/lexer/src/scanner.rs),
+  `looks_like_assignment`), and if the two sides disagreed about what an
+  assignment is, the command word after it would never be answered and
+  would never be coloured;
+* **redirection operators and their targets**: `cmd > out` writes to the
+  file `out`, so neither the operator nor the target is a command word;
+* **operators**: `|`, `;`, `&`, `(` and `)` end one command and begin
+  another, so the word after one is a command word.
+
+A word may also hold a command of its own: `$(cmd)` does. The adapter
+looks inside a substitution that makes up the **whole** word, splits the
+text between the `$(` and the `)` with the shell's own lexer, and answers
+for the command words in it. A substitution that does not make up the whole
+word — `x$(cmd)y` — is not looked inside. The nesting is bounded at four
+levels (`SHELL_PULSE_MAX_SUBSTITUTION_DEPTH`), so a pathological line
+cannot make the adapter recurse for ever.
+
+The name that is looked up is the word *without* its quoting, because that
+is the name the shell would run; the word that is sent back to the module is
+the raw text, because that is what the module has to match.
+
+The lookup itself is a **hash lookup in the shell's own tables** —
+`$aliases`, `$galiases`, `$functions`, `$builtins`, `$commands`, `$saliases`
+and `$reswords`, from `zsh/parameter`. It does **not** fork: a fork on
+every keystroke would be visible to the user, and the tables are already in
+the shell's memory. The reference implementation answers the same question
+from the same tables
+([`../upstream/fsh/fast-highlight:299-313`](../upstream/fsh/fast-highlight#L299))
+and only falls back to a fork for a word that is in none of them
+([`../upstream/fsh/fast-highlight:320-321`](../upstream/fsh/fast-highlight#L320)).
+
+#### The line the adapter will look at
+
+The adapter refuses to look at a line longer than **4 KiB**
+(`SHELL_PULSE_MAX_LINE`): the length of `$BUFFER` is compared with the
+limit *before* the line is split
+([`zsh/widgets.zsh:141-143`](../../zsh/widgets.zsh#L141)), and a line that
+is too long is left alone.
+
+The reason is that the module does not highlight such a line either
+(`MAX_LINE`,
+[`crates/zsh-module/src/lib.rs:102`](../../crates/zsh-module/src/lib.rs#L102)).
+Splitting it and walking every word of it would cost a full split and a
+walk of every word on *every* keystroke, for a line that is never
+highlighted — and a pasted megabyte would have made the shell unresponsive.
+
+The two limits are the same number, so for an ASCII line the two sides
+agree about which lines are worth looking at. They do not count the same
+thing, though: the adapter counts **characters** (`${#BUFFER}`) and the
+module counts **bytes**. A line of multi-byte characters can therefore be
+split by the adapter and refused by the module — which costs the adapter a
+split, and changes nothing about what is drawn.
+
+#### The answers are cached for two seconds
+
+The lookup is a hash lookup, but it is done on every keystroke, and the
+command word rarely changes while the user types the arguments — so the
+answers are remembered (`SHELL_PULSE_COMMAND_CACHE`). An answer is only
+trusted for **two seconds** (`SHELL_PULSE_COMMAND_CACHE_TTL`).
+
+Both the positive and the negative answers are cached, and both expire. A
+word the shell knew may stop being known — the user may `unalias` it or
+remove the function — and an answer trusted for ever would keep the word
+green after the shell had forgotten it. The same is true in the other
+direction: a command may be installed while the session runs, and a
+remembered "not known" would be wrong until the answer expired. The cache
+holds at most 256 answers; when it is full it is emptied.
+
+#### The arguments are quoted
+
+The adapter quotes every array it passes on:
+
+| call | array |
+|---|---|
+| `shell-pulse-highlight-words "${words[@]}"` | the words of the line |
+| `shell-pulse-highlight-known "${(Q)word}"` | the name to look up, with the quoting removed |
+| `shell-pulse-highlight "${args[@]}"` | the argument vector for the builtin |
+
+A command word may hold a character that is a glob pattern (`*`, `?`, `[`),
+and with `GLOB_SUBST` set in the user's configuration an unquoted expansion
+would be matched against the filesystem, and a word with no match would
+abort the call. Quoting the arrays means that the guarantee that a command
+word is never taken for a glob pattern does not depend on the options that
+happen to be set two frames up the call stack.
+
+`shell-pulse-highlight-known` also returns early for an **empty word**:
+`''` is a word, but it is not a name the shell could know, and the guard
+keeps the subscript lookups below from being asked about an empty key.
 
 ---
 
@@ -137,11 +283,15 @@ The colour names are zsh's own
 ### 2.2 What the plugin writes
 
 The attribute for each style is chosen in
-[`crates/zsh-module/src/region.rs:40-56`](../../crates/zsh-module/src/region.rs#L40):
+[`crates/zsh-module/src/region.rs:91-120`](../../crates/zsh-module/src/region.rs#L91):
 
 | Style | Attribute |
 |---|---|
-| command | `fg=cyan,bold` |
+| a command the shell knows | `fg=green` |
+| a command the shell does not know | `fg=red,bold` |
+| an option (`-l`, `--amend`) | `fg=cyan` |
+| a word naming an existing file | `fg=magenta` |
+| a word naming an existing directory | `fg=magenta,underline` |
 | assignment | `fg=yellow` |
 | single-quoted | `fg=green` |
 | double-quoted | `fg=green` |
@@ -155,8 +305,26 @@ The attribute for each style is chosen in
 | here-document body | `fg=green` |
 | **ordinary argument** | **none** — the argument is left exactly as the user typed it |
 
+These are the reference implementation's colours rather than this project's
+invention: `command` is `fg=green`, `unknown-token` is `fg=red,bold`,
+`path` is `fg=magenta`, `path-to-dir` is `fg=magenta,underline`, and both
+option styles are `fg=cyan`
+([`../upstream/fsh/fast-highlight:58-93`](../upstream/fsh/fast-highlight#L58)).
+zsh's own attribute parser accepts every one of them: `match_highlight`
+([`../upstream/zsh-src/Src/prompt.c:2031`](../upstream/zsh-src/Src/prompt.c#L2031))
+reads the colour after `fg=` and the attributes after the comma, from the
+`highlights[]` table
+([`../upstream/zsh-src/Src/prompt.c:1896`](../upstream/zsh-src/Src/prompt.c#L1896)).
+
 An ordinary argument is deliberately *not* highlighted: a command line where
-every word is coloured is harder to read, not easier.
+every word is coloured is harder to read, not easier. The two exceptions
+are the words that say something about the machine rather than about the
+command — an option, and a word that names a file that exists.
+
+A command word the shell does not know is red — unless it names a file that
+exists, in which case it is magenta, because the filesystem is consulted
+before the word is called unknown. The order the two answers are asked in
+is described in [architecture §3](architecture.md).
 
 Every published entry carries `memo=shell-pulse`
 ([`crates/zsh-module/src/region.rs:34`](../../crates/zsh-module/src/region.rs#L34)),
@@ -166,27 +334,27 @@ entries they are.
 A row therefore looks like:
 
 ```
-0 4 fg=cyan,bold memo=shell-pulse
+0 4 fg=green memo=shell-pulse
 ```
 
 ### 2.3 The rows are built in one reused buffer
 
-[`crates/zsh-module/src/region.rs:63-149`](../../crates/zsh-module/src/region.rs#L63)
+[`crates/zsh-module/src/region.rs:127-262`](../../crates/zsh-module/src/region.rs#L127)
 keeps the rows NUL-separated in a single `Vec<u8>` that is reused for every
 keystroke. A keystroke does not allocate one string per highlighted region,
 which on the interactive thread is exactly what must not happen.
 
 The decimal numbers are written by hand
-([`crates/zsh-module/src/region.rs:161-173`](../../crates/zsh-module/src/region.rs#L161))
+([`crates/zsh-module/src/region.rs:281-293`](../../crates/zsh-module/src/region.rs#L281))
 because `format!` would allocate.
 
 ### 2.4 The region limit
 
-At most **256** regions are published per push
-([`crates/zsh-module/src/region.rs:156`](../../crates/zsh-module/src/region.rs#L156)):
+At most **32** regions are published per push
+([`crates/zsh-module/src/region.rs:276`](../../crates/zsh-module/src/region.rs#L276)):
 
 ```rust
-pub const MAX_ENTRIES: usize = 256;
+pub const MAX_ENTRIES: usize = 32;
 ```
 
 The reason is in the comment, and it is the right reason: zsh parses every
@@ -194,9 +362,16 @@ region specification on every redraw
 ([`zsh-src/Src/Zle/zle_refresh.c:513-586`](../upstream/zsh-src/Src/Zle/zle_refresh.c#L513)),
 so the *number of regions* is the cost, not the length of the line.
 
-The truncation is **reported**, not silent: `Entries::build` returns a `bool`
+The number is **measured, not guessed**: the pty harness can type a line with
+N regions and measure the per-keystroke latency, and at 32 regions the added
+latency is about 10 µs — the budget this project set for a keystroke. The
+measurement is in the [performance report §3.5](performance.md). It used to
+be 256, which was a guess, and at that count the added latency was over
+200 µs.
+
+The truncation is **reported**, not silent: the entry builder returns a `bool`
 and the module logs it when `SHELL_PULSE_DEBUG` is set
-([`crates/zsh-module/src/lib.rs:205-208`](../../crates/zsh-module/src/lib.rs#L205)).
+([`crates/zsh-module/src/lib.rs:327-329`](../../crates/zsh-module/src/lib.rs#L327)).
 
 ---
 
@@ -210,11 +385,11 @@ This is the part that is easy to get wrong, and the code is careful about it.
 | `region_highlight` wants | **character** offsets — "the same units as `CURSOR`" |
 
 The conversion is in
-[`crates/highlight/src/lib.rs:274-303`](../../crates/highlight/src/lib.rs#L274)
+[`crates/highlight/src/lib.rs:294`](../../crates/highlight/src/lib.rs#L294)
 (`char_offsets_into`): one `u32` per byte offset, giving the number of
 complete characters in `text[..i]`. For a pure-ASCII line byte offsets *are*
 character offsets, and the map is not built at all
-([`crates/zsh-module/src/lib.rs:199-203`](../../crates/zsh-module/src/lib.rs#L199))
+([`crates/zsh-module/src/lib.rs:274-278`](../../crates/zsh-module/src/lib.rs#L274))
 — building it would cost more than the whole lexer.
 
 Two properties of the map are asserted by tests:
@@ -285,7 +460,7 @@ them.
 
 > A note on the module's own comment, which says the parameter "is always
 > empty when the builtin runs"
-> ([`crates/zsh-module/src/lib.rs:129-135`](../../crates/zsh-module/src/lib.rs#L129)).
+> ([`crates/zsh-module/src/lib.rs:147-153`](../../crates/zsh-module/src/lib.rs#L147)).
 > More precisely, the parameter does not hold a value of its own — reading it
 > derives the regions from the C array. The conclusion the module draws from
 > it (check that the parameter exists before writing to it) is the right one
@@ -295,11 +470,12 @@ That is the whole reason for the two short-circuits in
 `Highlighter::update`:
 
 ```rust
-// crates/zsh-module/src/lib.rs:174-186
+// crates/zsh-module/src/lib.rs:216-246
 if outcome.unchanged && self.pushed {
     return;                       // the line did not change
 }
-self.spans.update_from_tokens(self.cache.tokens());
+…
+unsafe { build_spans(spans, paths, scratch, api, buffer, tokens, answers) };
 if self.spans == self.pushed_spans && self.pushed {
     return;                       // the styling did not change
 }
@@ -338,13 +514,14 @@ touches `region_highlights` and cannot.
 | | |
 |---|---|
 | reads | `BUFFER` (unmetafied, via `getsparam_u`), `CURSOR` (parsed to an `i64`) |
+| reads (from the arguments) | the shell's answers about the command words: `--command-known=<word>`, `--command-unknown=<word>` (§1.5) |
 | writes | `region_highlight` — and only when `--region-highlight` was passed **and** the parameter exists |
 | never writes | `BUFFER`, `CURSOR`, `LBUFFER`, `RBUFFER`, `MARK`, `PREDISPLAY`, `POSTDISPLAY` |
 | never creates | a global `region_highlight` |
 
 `CURSOR` is read **before** `BUFFER`, because both come from zsh's single
 static unmetafied buffer
-([`crates/zsh-module/src/lib.rs:316-323`](../../crates/zsh-module/src/lib.rs#L316),
+([`crates/zsh-module/src/lib.rs:1510-1515`](../../crates/zsh-module/src/lib.rs#L1510),
 and zsh's own comment at
 [`zsh-src/Src/params.c:3049-3054`](../upstream/zsh-src/Src/params.c#L3049)):
 `getsparam_u` returns a pointer to a static buffer, so the bytes must be
@@ -354,14 +531,21 @@ copied before the next read.
 
 ## 5. The guards
 
-Three limits keep a pathological line from eating a keystroke. All three
-live in [`crates/zsh-module/src/lib.rs`](../../crates/zsh-module/src/lib.rs).
+Four limits keep a pathological line from eating a keystroke. Three live in
+[`crates/zsh-module/src/lib.rs`](../../crates/zsh-module/src/lib.rs) and one
+in the adapter.
 
 | Guard | Value | Where | What happens when it trips |
 |---|---|---|---|
-| line length | 4 KiB (`MAX_LINE`) | `:101` | the highlights are **cleared**, not left stale |
-| wall-clock budget | 1 ms (`BUDGET`) | `:92` | the highlights are **cleared**; the next keystroke is cheap because the cache is already updated |
-| region count | 256 (`region::MAX_ENTRIES`) | `region.rs:156` | the extra regions are dropped, and the truncation is reported |
+| line length | 4 KiB (`MAX_LINE`) | `:102` | the highlights are **cleared**, not left stale |
+| wall-clock budget | 1 ms (`BUDGET`) | `:93` | the highlights are **cleared**; the next keystroke is cheap because the cache is already updated |
+| region count | 32 (`region::MAX_ENTRIES`) | `region.rs:276` | the extra regions are dropped, and the truncation is reported |
+| the adapter's line cap | 4 KiB (`SHELL_PULSE_MAX_LINE`) | `zsh/widgets.zsh:90` | the line is **not split** and its words are not walked; the module would not have highlighted it either |
+
+The adapter's cap is the fourth one, and it is the one that keeps a pasted
+megabyte cheap: without it, every keystroke of such a line would cost a
+full split of it and a walk of every word in it, for a line the module
+never highlights.
 
 The budget is 100× the *target* per-keystroke cost (10 µs) and about 2 000×
 the *measured* one (0.86 µs, [performance report §1](performance.md)), so it
@@ -375,7 +559,7 @@ longer on the screen. The behaviour is asserted by
 `a_line_that_cannot_be_parsed_is_left_unhighlighted`.
 
 The *region count* guard is different: it drops the extra regions and keeps
-the first 256, because the line is still perfectly highlightable — it is only
+the first 32, because the line is still perfectly highlightable — it is only
 the number of regions that is capped.
 
 ### What is *not* guarded
@@ -411,7 +595,7 @@ adapter is designed to be invisible when it cannot work.
 ### 6.2 The module loads but this zsh lacks a required symbol
 
 `setup_` probes all six required symbols and returns −1 if any is missing
-([`crates/zsh-module/src/lib.rs:568-592`](../../crates/zsh-module/src/lib.rs#L568)),
+([`crates/zsh-module/src/lib.rs:2471-2496`](../../crates/zsh-module/src/lib.rs#L2471)),
 which makes zsh abort the load cleanly. The adapter then takes the same path
 as 6.1.
 
@@ -425,7 +609,7 @@ Every entry point runs inside `guard()`
 ([`crates/zsh-abi/src/guard.rs:47-58`](../../crates/zsh-abi/src/guard.rs#L47)),
 which catches the panic, sets a sticky "degraded" flag and returns a benign
 value. The builtin then returns 0 immediately on every subsequent call
-([`crates/zsh-module/src/lib.rs:298-300`](../../crates/zsh-module/src/lib.rs#L298)),
+([`crates/zsh-module/src/lib.rs:1472-1475`](../../crates/zsh-module/src/lib.rs#L1472)),
 so the shell stays usable and the user gets a diagnosable message rather than
 a lost session.
 
@@ -439,15 +623,22 @@ ineffective.
 
 | Line | Result |
 |---|---|
-| `git commit --amend` | `git` in cyan bold; the rest unstyled |
-| `echo "hello"` | `echo` in cyan bold; `"hello"` in green |
-| `FOO=bar cmd` | `FOO=bar` in yellow; `cmd` in cyan bold |
-| `ls *.rs` | `ls` in cyan bold; `*.rs` in yellow; the `*` and the word merged into one run |
-| `echo hi # a comment` | `echo` cyan bold; the comment in blue |
+| `git commit --amend` | `git` in green; `--amend` in cyan |
+| `echo "hello"` | `echo` in green; `"hello"` in green |
+| `FOO=bar cmd` | `FOO=bar` in yellow; `cmd` in green |
+| `FOO+=bar cmd` | `FOO+=bar` in yellow; `cmd` in green |
+| `ls *.rs` | `ls` in green; `*.rs` in yellow; the `*` and the word merged into one run |
+| `cat ./Cargo.toml` | `cat` in green; `./Cargo.toml` in magenta |
+| `cat Cargo.toml` | `cat` in green; `Cargo.toml` in magenta — a bare file name names a file too |
+| `nosuchcommand` | red and bold, because the shell does not know that word |
+| `echo $(ls)` | `echo` in green; `ls` in green — the command inside the substitution is answered as well |
+| `echo hi # a comment` | `echo` green; the comment in blue |
 | a line the lexer cannot represent | no colours at all, and no stale colours from the previous line |
 
 The last row is the design rule: **a wrong highlight is worse than no
-highlight**, so the failure mode is visible and uncoloured.
+highlight**, so the failure mode is visible and uncoloured. The same rule is
+why a command word the shell was not asked about is left alone rather than
+guessed at.
 
 ---
 
@@ -459,6 +650,22 @@ highlight**, so the failure mode is visible and uncoloured.
 | the builtin is registered under the exact name | `builtin_is_registered_under_its_exact_name` |
 | no garbage names appear in the builtin table | `no_garbage_names_appear_in_the_builtin_table` |
 | the regions are correct | `the_highlighter_fills_region_highlight` |
+| a command the shell knows is green | `a_command_the_shell_knows_is_green` |
+| a command the shell does not know is red | `a_command_the_shell_does_not_know_is_red` |
+| an answer about another word is not applied | `an_answer_about_another_word_is_not_applied` |
+| an option is cyan | `an_option_is_cyan` |
+| an existing file is magenta | `an_existing_file_is_magenta` |
+| an existing directory is magenta and underlined | `an_existing_directory_is_magenta_and_underlined` |
+| a bare file name is magenta too | `a_bare_file_name_is_magenta` |
+| a bare directory name is magenta and underlined | `a_bare_directory_name_is_magenta_and_underlined` |
+| a word that names nothing is left alone | `an_argument_that_names_nothing_is_not_highlighted` |
+| a word that does not exist is not a path | `a_word_that_does_not_exist_is_not_a_path` |
+| a tilde is the home directory | `a_tilde_is_the_home_directory` |
+| the command inside a substitution is coloured | `the_command_inside_a_substitution_is_coloured` |
+| a leading assignment does not hide the command | `a_leading_assignment_does_not_hide_the_command` |
+| an append assignment does not hide the command | `an_append_assignment_does_not_hide_the_command` |
+| every command word of a pipeline is coloured | `every_command_word_of_a_pipeline_is_coloured` |
+| a command word without an answer is left alone | `a_command_word_without_an_answer_is_left_alone` |
 | the offsets are characters, not bytes | `the_highlighter_reports_character_offsets_not_byte_offsets` |
 | no global `region_highlight` is created | `the_highlighter_does_not_create_a_global_region_highlight` |
 | nothing is published without the flag | `the_regions_are_not_published_unless_the_caller_asks` |
@@ -469,12 +676,24 @@ highlight**, so the failure mode is visible and uncoloured.
 | **the colours actually reach the terminal** | `the_typed_command_is_highlighted_on_the_terminal` in [`crates/zsh-module/tests/zsh_pty.rs`](../../crates/zsh-module/tests/zsh_pty.rs) |
 | **the keystroke-to-redraw latency of the real editor loop** | [`bench/bench_zpty.zsh`](../../bench/bench_zpty.zsh) — see [performance §3.5](performance.md) |
 
-The last one is the only one that proves the *display* works rather than the
-*computation*. It drives a real interactive zsh under a pseudo-terminal and
-asserts on the bytes zsh writes to the terminal — `ESC[1m ESC[36m` for
-`fg=cyan,bold`, and `ESC[0m` to close the region.
+The pty test is the only one that proves the *display* works rather than
+the *computation*. It drives a real interactive zsh under a pseudo-terminal
+and asserts on the **screen the shell drew**: the harness reconstructs the
+screen from the bytes zsh writes — the text, the cursor motions, the erases
+and the attributes in force — and checks the attributes of the characters of
+the command word.
+
+The bytes alone are not the screen. zsh's line editor draws the line in
+pieces and moves the cursor between them, so the text of the line can be
+broken up — and even reordered — in the byte stream, and which of the two
+happens depends on how the input reached the shell. Asserting on the
+reconstructed screen is therefore both more reliable and a stronger claim:
+the test can say that the characters of the command word were drawn green,
+not merely that the bytes for green appeared somewhere.
 
 That test is **skippable**: it needs `zsh/zpty`, a pseudo-terminal, and a
 terminal type with the standard xterm colour capabilities. When any of them
-is missing the test prints why and passes. On the machine these documents were
-written on, all three of its tests ran and passed.
+is missing the test prints why and passes. The file holds eight tests, and
+every one of them skips that way when the environment cannot provide what
+it needs — so a green test run does not by itself prove that the ZLE path
+is covered.

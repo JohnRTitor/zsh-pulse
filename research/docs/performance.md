@@ -17,7 +17,7 @@ Companion documents: [architecture](architecture.md) ·
 | Quantity | Value | Produced by |
 |---|---|---|
 | End-to-end cost of one keystroke through zsh | **0.86 µs**, range 0.83–0.89 µs over 3 runs | `bench/bench_module_call.zsh 20000 28` |
-| Cost of converting spans into `region_highlight` entries | **0.36 µs** for a 188-byte line with 9 regions | `cargo run --release -p zsh-module --example bench_region` |
+| Cost of converting spans into `region_highlight` entries | **0.39 µs** for a 188-byte line with 11 regions | `cargo run --release -p zsh-module --example bench_region` |
 | Marginal cost of one more region, end to end | **0.3–0.9 µs** per region | `bench/bench_zpty.zsh --regions N 60` |
 | Marginal cost of one more region, the module's own share | **~12 ns** per region | same, against the entry-building benchmark |
 | Target | ≤ 10 µs | [`../PLAN.md`](../PLAN.md) |
@@ -34,6 +34,29 @@ Companion documents: [architecture](architecture.md) ·
 | …the same, with the plugin *not* loaded (control) | **45.1 µs** median | the same harness, modified copy in `/tmp` |
 | `HighlightSpan` | 12 bytes | `std::mem::size_of` (see the note below) |
 | `LexState` | 53 bytes | `std::mem::size_of` (see the note below) |
+| Cost of the whole-line colouring — the path lookups and the command lookups | **not measured**; the 0.67 µs figure below predates them | — |
+| Cost of the adapter's share of a keystroke | **not measured**; the pty figure in §3.5 predates the changes of §4.2 | — |
+
+**The figures in this table predate the whole-line colouring.** The plugin
+now colours options, paths and unknown commands as well, which adds a
+`stat` per distinct literal word — at most sixteen of them on a line — and
+a hash lookup per command word to a keystroke. The 0.86 µs end-to-end
+figure and the 0.67 µs module figure were measured before that work, and
+**neither has been re-measured**. §4.1 says what is known about the new
+work and what is not.
+
+The adapter's own changes came after those figures as well: it emulates zsh
+once instead of twice, it no longer calls a function for every word of the
+line, and it no longer splits a line it will not highlight. §4.2 says what
+is known about them.
+
+**On the region-conversion figure.** The benchmark used to build its own
+spans from the lexer's tokens; it now asks the module for the spans it
+publishes (`published_spans`), so the number of regions it reports is the
+number of regions a real line gets — 11 rather than 9 for the benchmark's
+line. The figure was therefore re-measured: **0.39 µs** is the median of ten
+runs, of which seven were between 0.38 and 0.50 µs and three were as slow
+as 0.84 µs while the machine was busy.
 
 **On the two struct sizes:** the repository asserts only that `LexState` is at
 most 128 bytes
@@ -422,23 +445,23 @@ cost of the plugin working.
 
 ### 3.6 The test suite
 
-`cargo test --workspace` on the tree as it stood when this document was
-written:
+`cargo test --workspace` on the tree as it stands:
 
 | Target | Tests |
 |---|---|
 | `engine` (unit) | 19 |
-| `highlight` (unit) | 15 |
-| `lexer` (unit) | 45 |
+| `highlight` (unit) | 18 |
+| `lexer` (unit) | 70 |
 | `lexer` (`alloc_budget`) | 2 |
-| `zsh-abi` (unit) | 20 |
-| `zsh-module` (unit) | 19 |
-| `zsh-module` (`zsh_integration`, real zsh subprocesses) | 24 |
-| `zsh-module` (`zsh_pty`, real interactive zsh under a pty) | 3 |
+| `zsh-abi` (unit) | 27 |
+| `zsh-module` (unit) | 47 |
+| `zsh-module` (`zsh_integration`, real zsh subprocesses) | 51 |
+| `zsh-module` (`zsh_pty`, real interactive zsh under a pty) | 8 |
 | doc-tests | 2 |
-| **total** | **149**, all passing |
+| **total** | **244** |
 
-The 24 subprocess tests are the ones that matter for the ABI: each one runs
+The counts are the number of `#[test]` functions in each target. The 51
+subprocess tests are the ones that matter for the ABI: each one runs
 `zsh` and asserts on its exit status, so an ABI mistake is a failing test
 rather than a dead shell.
 
@@ -465,11 +488,111 @@ walks the parameter table, `assignaparam` calls `setarrvalue`, and
 `set_region_highlight` parses every row it is given
 ([`zsh-src/Src/Zle/zle_refresh.c:513-586`](../upstream/zsh-src/Src/Zle/zle_refresh.c#L513)).
 That is why the number of regions matters more than the length of the line,
-and why `region::MAX_ENTRIES` is 256
-([`crates/zsh-module/src/region.rs:156`](../../crates/zsh-module/src/region.rs#L156)).
+and why `region::MAX_ENTRIES` is 32
+([`crates/zsh-module/src/region.rs:276`](../../crates/zsh-module/src/region.rs#L276)).
 
 This breakdown is an *inference* from two independently measured numbers, not
-a profile. It has not been confirmed with `perf`.
+a profile. It has not been confirmed with `perf`. It was also measured
+before the whole-line colouring was added — see §4.1.
+
+### 4.1 The cost of colouring the whole line
+
+The line is now coloured in more places than it used to be, and two of the
+new colours cost something the old ones did not.
+
+**The path lookup is a syscall.** Every literal word is a candidate for
+naming a file — `Cargo.toml` names a file just as much as `./Cargo.toml`
+does, and the reference implementation looks every word up
+([`../upstream/fsh/fast-highlight:1265-1295`](../upstream/fsh/fast-highlight#L1265)).
+A literal word is resolved against `$PWD` or `$HOME` and looked up with
+`stat(2)`. That is **one `stat` per distinct literal word per keystroke,
+in the worst case**: a line with three different file names costs three
+`stat`s on every keystroke until the answers are cached.
+
+**The number of lookups on a line is bounded.** At most **16** words of a
+line are offered to the lookup (`MAX_PATH_LOOKUPS`), counted in the order
+they appear, so the words nearest the command — the ones most likely to be
+paths — are the ones that get looked up. A `stat` costs about **0.6 µs**,
+so a line that uses the whole allowance costs about **10 µs**, well inside
+the millisecond a keystroke has to fit in. The 0.6 µs figure is an estimate
+of the cost of one `stat`, not a measurement taken in this repository.
+
+**The budget is checked before each lookup, not only at the end.** A
+`stat` on a hung network filesystem can take milliseconds, and a line whose
+lookups were cancelled *after* they were made would have cost the user all
+of that wait and then thrown the answer away. The module therefore tests the
+one-millisecond budget **before every path lookup**
+([`crates/zsh-module/src/lib.rs:640-648`](../../crates/zsh-module/src/lib.rs#L640))
+and stops looking paths up once it is spent. The check after the whole line
+is done still exists — it is what clears the highlights when the line took
+too long — but it is no longer the only one. Stopping early turns "the user
+waits and gets nothing" into "the user waits only as long as the budget".
+
+**The answers are cached, and the cache expires.** The cache holds at most
+**64** entries, and every answer **expires after 2 seconds**, so a file
+that is created or deleted while the session runs is picked up rather than
+remembered wrongly. When the cache is full it is emptied, which costs one
+`stat` per path again and nothing more.
+
+**The shell-side lookup does not fork.** The adapter asks the shell whether
+it knows a command word, and the answer comes from a hash lookup in the
+shell's own tables (`$aliases`, `$functions`, `$builtins`, `$commands`, …).
+Nothing is spawned on the keystroke path — the property the startup harness
+proves ([`bench/bench_startup.zsh`](../../bench/bench_startup.zsh), §3.4) —
+and it still holds. The adapter keeps a cache of its own for the answers,
+with the same **2-second** lifetime, and it remembers the negative answers
+as well as the positive ones; the protocol is in
+[ZLE integration §1.5](zle-integration.md).
+
+**What has not been measured.** The module's own work per keystroke was
+**0.67 µs** (§4) *before* the path lookups and the command lookups were
+added, and **the new figure has not been re-measured**: the harness in
+`bench/` has not been re-run against the new code. The 0.67 µs figure must
+therefore not be read as the cost of the plugin as it stands now.
+
+What has not changed is the *shape* of the cost: the 1 ms wall-clock budget
+that guards a keystroke is the same, and the number of regions a line may
+produce is still capped at 32. Only the size of the cost is unknown.
+
+### 4.2 The adapter's share of a keystroke
+
+The adapter is shell code, and it runs on the same thread as the line
+editor: everything it does is part of the pause the user sees. Three things
+it used to do are gone.
+
+**It no longer emulates zsh twice.** `emulate -L zsh` resets every option
+in the shell, and it is not free on the interactive thread. The function
+that walks the words of the line used to emulate zsh itself, on top of the
+`emulate -L zsh` of the function that called it. It now sets only the two
+options it needs — `extendedglob` and `noglob` — and does so locally
+([`zsh/widgets.zsh:186`](../../zsh/widgets.zsh#L186)). The outer function
+still emulates zsh, once.
+
+**It no longer calls a function for every word of the line.** The walk
+*inside* a command substitution used to be entered for every word of the
+line; it is now entered only for a word that contains `$(` or a backtick
+([`zsh/widgets.zsh:214-216`](../../zsh/widgets.zsh#L214)). A zsh function
+call is not free, and this ran for every word.
+
+**It no longer splits a line it will not highlight.** The module does not
+highlight a line longer than 4 KiB, so the adapter refuses to look at one:
+the line is not split with `${(z)…}`, and its words are not walked, on
+every keystroke
+([`zsh/widgets.zsh:141-143`](../../zsh/widgets.zsh#L141)). A pasted
+megabyte used to cost a full split and a walk of every word — for a line
+that was never highlighted.
+
+**What has not been measured.** None of the three has a number attached to
+it: the cost of `emulate` on this machine is not known, and neither is the
+cost of a zsh function call or of the split of a long line. What the
+changes do is remove work that was done on every keystroke and whose result
+was thrown away.
+
+Like the whole-line colouring, the adapter's share of a keystroke **has not
+been re-measured end to end**: the pty figure in §3.5 — 73.1 µs for the arm
+that loads the adapter — was measured before these three changes. The
+0.86 µs figure in §3.1 is not affected by them: that harness calls the
+builtin directly, without the adapter.
 
 ---
 
@@ -532,6 +655,17 @@ This is the section to read before trusting any of the above.
    There are no numbers for them because there is no code for them.
 10. **Idle CPU and RSS.** Not measured. The worker thread exists and is
     polled; how much idle CPU it costs is unknown.
+11. **The whole-line colouring.** The path lookups (a `stat` per distinct
+     literal word, at most sixteen of them on a line) and the shell-side
+     command lookups were added after the numbers above were measured. The
+     0.67 µs module figure and the 0.86 µs end-to-end figure predate them,
+     and neither has been re-measured. §4.1 says what is known about the
+     new work and what is not.
+12. **The adapter's share of a keystroke.** The adapter no longer emulates
+     zsh twice, no longer enters the substitution walk for every word of
+     the line, and no longer splits a line it will not highlight. None of
+     that has been re-measured either: the pty figure in §3.5 predates it.
+     §4.2 says what is known about it and what is not.
 
 ---
 

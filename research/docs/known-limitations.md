@@ -59,9 +59,23 @@ pseudo-terminal harness.
 **The state of that harness.** It exists:
 [`crates/zsh-module/tests/zsh_pty.rs`](../../crates/zsh-module/tests/zsh_pty.rs).
 It drives a real interactive zsh under a pty, types a line into the line
-editor and asserts on the **bytes zsh writes to the terminal** — `ESC[1m
-ESC[36m` for `fg=cyan,bold`, `ESC[0m` to close the region. On the machine
-these documents were written on, all three of its tests ran and passed.
+editor and asserts on the **screen it drew**. The harness reconstructs that
+screen from the bytes zsh writes — the text, the cursor motions, the erases
+and the attributes in force — and then checks the attributes of the
+characters of the command word. The file holds eight tests, and every one of
+them skips with a printed reason when the environment cannot provide what
+it needs.
+
+**Why the screen and not the bytes.** zsh's line editor draws the line in
+pieces and moves the cursor between them, so the text of the line can be
+broken up — and even reordered — in the byte stream: what the user sees may
+be `echo SPARGXYZ` while the bytes are `SPARG` `ESC[10D` `echo` `ESC[6C`
+`X` `ESC[11D` `YZ`. A search for a piece of text in the raw bytes finds it
+only when zsh happened to draw it in one piece, and which of the two
+happens depends on how the input reached the shell. The screen is what the
+user sees, and it is the same every time. Asserting on it is also a
+*stronger* claim: the test can say that the characters of the command word
+were drawn green, not merely that the bytes for green appeared somewhere.
 
 **But it is conditional, and the conditions are real:**
 
@@ -99,7 +113,7 @@ keystrokes, the same region set, but with the highlighting replaced by a
 fixed byte sequence — so that the terminal output is identical in size and
 only the computation differs.
 
-### 1.3 `region_highlight` is replaced wholesale, so clearing it also clears another plugin's entries
+### 1.3 A *clear* still replaces `region_highlight` wholesale, so it clears another plugin's entries
 
 *(Fixed: the module now merges. It reads the entries zsh holds, drops the ones
 carrying its own `memo=shell-pulse`, keeps everyone else's, and appends its
@@ -115,37 +129,39 @@ Only zsh's four *special* regions — the region between point and mark, the
 isearch region, the suffix and the pasted text — survive
 ([`zsh-src/Src/Zle/zle.h:473`](../upstream/zsh-src/Src/Zle/zle.h#L473)).
 
-So if another plugin also writes `region_highlight`, **the last writer wins**
-and the other's regions disappear. Worse, the plugin's own *clear* path —
-taken when the line cannot be lexed, when the line is over 4 KiB, or when the
-1 ms budget is exceeded — writes an empty array and therefore removes another
-plugin's highlighting as well.
+So if another plugin also writes `region_highlight` **without** merging, the
+last writer wins and the other's regions disappear.
 
 **How you can tell.** Our own entries carry `memo=shell-pulse`
 ([`crates/zsh-module/src/region.rs:34`](../../crates/zsh-module/src/region.rs#L34)),
 which is exactly the mechanism zsh's documentation suggests for telling
 plugins' entries apart
 ([`zsh-src/Doc/Zsh/zle.yo:986-998`](../upstream/zsh-src/Doc/Zsh/zle.yo#L986)).
-**The merge is not implemented.** The `memo` tag is there so that it *can* be.
+The module reads the array back, drops the entries that carry its own
+`memo`, keeps everyone else's and appends its own. The behaviour is asserted
+by `another_plugins_entries_survive_our_publish` in
+[`crates/zsh-module/tests/zsh_integration.rs`](../../crates/zsh-module/tests/zsh_integration.rs).
 
-**What it would take.** Reading the array back, filtering out the entries
-whose `memo` is `shell-pulse`, and writing back the union. zsh's own
+**What is still true.** The *clear* path — taken when the line cannot be
+lexed, when the line is over 4 KiB, or when the 1 ms budget is exceeded —
+writes an empty array, and that still removes another plugin's highlighting
+as well. The merge is not applied on that path, because there is nothing to
+merge with: the module does not know what the other plugin's entries were.
+
+**What it would take** to fix that last part: reading the array back on the
+clear path too, and writing back everything that is not ours. zsh's own
 suggestion for this is to do the filtering in zsh
 (`region_highlight=(${region_highlight:#*memo=…})`), which would mean moving
 the merge into the adapter; doing it in Rust means reading the array back
 through the parameter getter, whose return value is a `sepjoin`ed string
 rather than an array, so the rows would have to be re-split.
 
-**The alternative** — and the one this project takes — is to make the plugin's
-regions the only ones it is responsible for and to document that it owns the
-array while it is running.
-
 ### 1.4 The incremental lexer is not used below 128 bytes, because it is slower there
 
 **What.** `LexCache::relex` re-parses a line shorter than
 `INCREMENTAL_MIN_LEN` (128) outright
 ([`crates/lexer/src/incremental.rs:53`](../../crates/lexer/src/incremental.rs#L53),
-[`crates/lexer/src/incremental.rs:166-171`](../../crates/lexer/src/incremental.rs#L166)).
+[`crates/lexer/src/incremental.rs:219-224`](../../crates/lexer/src/incremental.rs#L219)).
 The incremental path is measurably *slower* below that length, because the
 diff and the merge cost more than the scan they save.
 
@@ -158,7 +174,7 @@ incrementality). Against the right baseline the crossover is between 86 and
 **Why it is still fine.** The crossover is a measured constant, the policy is
 one `if`, and the raw machinery (`relex_incremental`) stays reachable so that
 the property tests keep exercising it
-([`crates/lexer/src/incremental.rs:453-471`](../../crates/lexer/src/incremental.rs#L452)).
+([`crates/lexer/src/incremental.rs:235`](../../crates/lexer/src/incremental.rs#L235)).
 
 **What it costs.** The *shipped* path for a short line never runs the splice.
 A bug in the splice that only manifests for short lines would therefore not
@@ -196,13 +212,13 @@ module's share could be stated rather than inferred.
 
 **What.** The plan's C2 says "only changed ranges reach zsh". The
 implementation does not do that. `highlight::diff`
-([`crates/highlight/src/lib.rs:203-241`](../../crates/highlight/src/lib.rs#L203))
+([`crates/highlight/src/lib.rs:223-241`](../../crates/highlight/src/lib.rs#L223))
 exists, is tested against a deliberately naive reference implementation
-([`crates/highlight/src/lib.rs:480-499`](../../crates/highlight/src/lib.rs#L480)),
+([`crates/highlight/src/lib.rs:510`](../../crates/highlight/src/lib.rs#L510)),
 and **is not called by the module**. The module compares the whole span set
 for equality and, if it differs, republishes *every* region
-([`crates/zsh-module/src/lib.rs:180-186`](../../crates/zsh-module/src/lib.rs#L180),
-[`crates/zsh-module/src/lib.rs:228-230`](../../crates/zsh-module/src/lib.rs#L228)).
+([`crates/zsh-module/src/lib.rs:241-246`](../../crates/zsh-module/src/lib.rs#L241),
+[`crates/zsh-module/src/lib.rs:322-331`](../../crates/zsh-module/src/lib.rs#L322)).
 
 **Why it was not done.** `region_highlight` is a single array: there is no
 way to publish *some* of the regions and leave the others alone. A partial
@@ -216,25 +232,134 @@ current shape. The dead code is a wart, not a bug: it should either be
 deleted or documented as the specification of "what changed", which is what
 it currently is.
 
-### 1.6 The `unchanged` fast path never fires for a short line
+### 1.6 The `unchanged` fast path saves the parse, not the comparison
+
+*(Fixed: `LexCache::relex_short` compares the new text with the one it has
+and reports `unchanged: true` when they are equal
+([`crates/lexer/src/incremental.rs:473-485`](../../crates/lexer/src/incremental.rs#L473)),
+so the "the line did not change" short-circuit fires for a short line as
+well. The residual is that the comparison itself is linear in the length of
+the line — see below.)*
 
 **What.** `Highlighter::update` has two short-circuits: "the line did not
 change" and "the styling did not change"
-([`crates/zsh-module/src/lib.rs:174-186`](../../crates/zsh-module/src/lib.rs#L174)).
-The first one is driven by `RelexOutcome::unchanged`, which
-`LexCache::relex_short` always reports as `false`
-([`crates/lexer/src/incremental.rs:417-426`](../../crates/lexer/src/incremental.rs#L417)),
-because a short line is re-parsed rather than diffed.
+([`crates/zsh-module/src/lib.rs:216-246`](../../crates/zsh-module/src/lib.rs#L216)).
+The first one is driven by `RelexOutcome::unchanged`. It used to be dead
+below the 128-byte threshold, because a short line was re-parsed rather
+than diffed and `relex_short` therefore always reported `false`.
 
-**Consequence.** For lines under 128 bytes the "line did not change" check is
-dead, and only the "styling did not change" check can save the work. The
-behaviour is still correct — the second check catches it — but the first
-check is doing nothing below the threshold, which is not obvious from the
-code.
+**What is still true.** The comparison is linear in the length of the line:
+`relex_short` compares the whole text, and the incremental path compares
+the common prefix and the common suffix, which is linear in the worst case
+as well. The fast path therefore saves the *parse*, not the *comparison* —
+the same linearity §1.1 is about.
 
-**What it would take.** `relex_short` could compare the new text with the
-cached text and report `unchanged: true` when they are equal. That is a
-`memcmp` the function already almost does.
+### 1.10 The whole-line colouring cannot know everything
+
+The line is now coloured in more places than it used to be, and each of the
+new colours depends on something the plugin does not have. These are the
+edges, and they are all deliberate.
+
+**A quoted command word is neither coloured as a command nor looked up.**
+To the lexer, `'ls'` is a quoted string rather than a command word, so the
+shell's answer about it — the shell looks the name up with the quoting
+removed — has no command word to apply to. The word is coloured as the
+quoted string it is, and the filesystem is not consulted for it either: a
+quoted word is not literal text. The same is true of `"ls"`.
+
+**A command inside a compound statement is not coloured as a command.**
+The lexer has no notion of reserved words. In `if true; then echo hi; fi`
+it sees `if`, `then` and `fi` as command words and `echo` as an ordinary
+argument: `then` ends the command position, so the word after it is an
+argument and not a command. The same is true of `while … do … done`,
+`until … do … done`, `for … do … done` and of a brace group `{ … }`. The
+command inside the compound statement is therefore drawn as the user typed
+it, while the reserved words around it are coloured like commands — the
+shell knows those, and the shell's answer applies to them.
+
+**`~user` is not resolved.** `~` and `~/…` are expanded to the home
+directory, but `~user` would need a lookup in the password database — on the
+interactive thread, on every keystroke. It is left alone.
+
+**The lookup is a `stat`, not an `lstat`.** It follows symlinks, so a
+symlink that points at a directory is coloured as a directory. That is the
+answer the shell itself would give, but it is not the answer `lstat` would
+give.
+
+**A word that is not literal text is never looked up.** `"$HOME/x"` and
+`$(pwd)/x` name a file, but the file they name is only knowable by running
+the shell, so they are left alone.
+
+**A relative word is resolved against `$PWD`, which is the shell's
+*logical* path.** `$PWD` may contain symlinks, and the physical path — what
+`pwd -P` prints — may be a different one. A relative path is therefore
+resolved against the logical directory, which is the directory the command
+would run in.
+
+**Both caches expire after two seconds.** The module's path cache holds 64
+answers and forgets each of them after two seconds, so a file that is
+created or deleted while the session runs is picked up, but not instantly:
+for up to two seconds the older answer is still the one that is used. The
+adapter's cache of the shell's answers expires on the same schedule, and it
+remembers the negative answers as well as the positive ones — a word the
+shell knew may stop being known when the user runs `unalias` or removes a
+function, and a command installed while the session runs has to be picked
+up too.
+
+**At most 16 words of a line are looked up on the filesystem.** Every
+literal word is a candidate for naming a file — `Cargo.toml` names a file
+just as much as `./Cargo.toml` does, and the reference implementation looks
+every word up
+([`../upstream/fsh/fast-highlight:1265-1295`](../upstream/fsh/fast-highlight#L1265)).
+The number of lookups on one line is therefore bounded
+(`MAX_PATH_LOOKUPS`, 16), and the words are offered to the lookup in the
+order they appear, so the ones nearest the command — the ones most likely
+to be paths — are the ones that get looked up. A word past the bound is
+left as the user typed it. A word that is not literal text costs no
+syscall, but it still counts against the bound.
+
+**At most 32 regions are published for one line** (`region::MAX_ENTRIES`).
+A long line — many quoted words, many options — produces more regions than
+the old colouring did, and the ones past the cap are dropped. The truncation
+is reported when `SHELL_PULSE_DEBUG` is set, but it is not otherwise
+visible.
+
+**A command word the shell was not asked about is never painted red or
+green.** The module colours a command word green or red only when the shell
+has answered for that exact word. Such a word is still looked up on the
+filesystem like every other literal word — so `~/bin/tool` is magenta — and
+otherwise it is drawn as the user typed it. A line the adapter could not
+parse, or a shell whose `zsh/parameter` is not loaded, therefore has no red
+words in it at all.
+
+**A substitution is only looked inside when it makes up the whole word.**
+`$(cmd)` and `` `cmd` `` hold a command of their own, and the adapter
+answers for the command inside them. `x$(cmd)y` is not looked inside: the
+text between the `$(` and the `)` is then not the whole command, and the
+command word inside it is left alone.
+
+### 1.11 The pathological line is bounded on both sides of the boundary
+
+**What.** Three limits stand between a pathological line and the interactive
+thread, and they sit on both sides of the Rust↔Zsh boundary:
+
+| Bound | Value | Where | What it stops |
+|---|---|---|---|
+| the adapter's line cap | 4 KiB (`SHELL_PULSE_MAX_LINE`) | [`zsh/widgets.zsh:90`](../../zsh/widgets.zsh#L90) | the line is not split and its words are not walked, so a pasted megabyte costs a length comparison and not a split |
+| the module's line limit | 4 KiB (`MAX_LINE`) | [`crates/zsh-module/src/lib.rs:102`](../../crates/zsh-module/src/lib.rs#L102) | the line is not highlighted, and its bytes are not copied out of zsh at all |
+| the module's answer cap | 4 KiB (`MAX_ANSWER_BYTES`) | [`crates/zsh-module/src/lib.rs:1650`](../../crates/zsh-module/src/lib.rs#L1650) | the words the shell answers about are not copied into the module's own buffer without limit |
+
+The last one matters because the module's buffers are deliberately reused:
+a buffer that had grown to the size of a paste would keep that capacity for
+the rest of the session. An answer that does not fit is dropped and the
+command word it was about is left alone — a *missing* colour, never a wrong
+one.
+
+**What it is worth.** None of these bounds is a substitute for the 1 ms
+budget: they bound the *size* of the work, the budget bounds its
+*duration*. The two sides of the boundary are described in
+[ZLE integration §5](zle-integration.md) and
+[boundary §3](rust-zsh-boundary.md).
 
 ---
 
@@ -249,7 +374,7 @@ row it is given.
 
 That is not a defect — it is the cost of the API. But it means **the number
 of regions matters more than the length of the line**, which is why
-`region::MAX_ENTRIES` is 256 and why the "skip when unchanged" rule is worth
+`region::MAX_ENTRIES` is 32 and why the "skip when unchanged" rule is worth
 more than any lexer optimisation. See
 [performance §4](performance.md).
 
@@ -340,10 +465,11 @@ detects one and skips highlighting it
 ([`../upstream/PERFORMANCE_FAILURES.md` §6](../upstream/PERFORMANCE_FAILURES.md));
 this plugin does not.
 
-A paste over 4 KiB is caught by the line-length limit, and a slow one by the
-1 ms budget. A paste *under* 4 KiB is highlighted in full, once, on the
-redraw after the paste — which costs one full parse of the pasted line, not
-one per pasted character.
+A paste over 4 KiB is caught by the line-length limit — by the adapter
+before it splits the line, and by the module before it copies it — and a
+slow one by the 1 ms budget. A paste *under* 4 KiB is highlighted in full,
+once, on the redraw after the paste — which costs one full parse of the
+pasted line, not one per pasted character.
 
 **What it would take.** zsh does not tell a widget that a paste happened, so
 the plugin would have to infer it — for example by noticing that `BUFFER`
@@ -387,7 +513,7 @@ wrong, but it is still a failure.
 ### 3.8 The colours are hard-coded
 
 The mapping from style to terminal attribute is a fixed table
-([`crates/zsh-module/src/region.rs:40-56`](../../crates/zsh-module/src/region.rs#L40)).
+([`crates/zsh-module/src/region.rs:91-120`](../../crates/zsh-module/src/region.rs#L91)).
 A user cannot restyle the plugin's output through `zle_highlight`, through a
 highlight group, or through a configuration variable: the plugin always emits
 the same literal attribute specifications.
@@ -464,17 +590,22 @@ readable on both light and dark terminals by eye, and by nothing else. A
 terminal with a light background and a poor colour scheme will look worse
 than no highlighting.
 
-### 5.2 Ordinary arguments are not highlighted
+### 5.2 An ordinary argument is not highlighted
 
 By design
-([`crates/zsh-module/src/region.rs:54`](../../crates/zsh-module/src/region.rs#L54)),
+([`crates/zsh-module/src/region.rs:118`](../../crates/zsh-module/src/region.rs#L118)),
 an ordinary argument gets no region at all, so it is drawn exactly as the
 user typed it. That is a deliberate readability choice, not a limitation —
 but it does mean the plugin highlights *structure*, not *everything*.
 
+The two exceptions are the words that say something about the machine
+rather than about the command: an option is cyan, and a word that names a
+file that exists is magenta. An argument that is neither is left alone.
+
 ### 5.3 The plugin owns the `region_highlight` array while it runs
 
-See §1.3. There is no merge, and no negotiation with other plugins.
+See §1.3. The entries are merged rather than replaced, but there is no
+negotiation with other plugins, and a *clear* still empties the array.
 
 ### 5.4 The plugin is zsh-only, and Linux/x86_64-only in practice
 
@@ -489,7 +620,7 @@ zsh sets `BINF_ADDED` in the flag word and rewrites `node.nam`
 [`zsh-src/Src/hashtable.c:171`](../upstream/zsh-src/Src/hashtable.c#L171)).
 The table is therefore mutable shared state, and the module reads it back
 through `addr_of_mut!` rather than through a shared reference
-([`crates/zsh-module/src/lib.rs:498-505`](../../crates/zsh-module/src/lib.rs#L498)).
+([`crates/zsh-module/src/lib.rs:1758`](../../crates/zsh-module/src/lib.rs#L1758)).
 It works, but it is the only place where the "zsh keeps the pointer" rule
 makes the code awkward.
 
@@ -518,10 +649,12 @@ are not.
 |---|---|---|---|
 | 1.1 | The end-to-end keystroke cost is linear in the line length | performance | low at realistic lengths |
 | 1.2 | The interactive ZLE path is only covered when the `zpty` harness can run; the pty latency harness cannot resolve the plugin's own cost | testing | **high** |
-| 1.3 | `region_highlight` is replaced wholesale; another plugin's entries are lost | correctness | **high** for a user who runs two plugins |
+| 1.3 | A *clear* still empties `region_highlight`; another plugin's entries are lost | correctness | medium — the ordinary publish merges |
 | 1.4 | The incremental path is unused below 128 bytes | design | low, measured |
 | 1.5 | The per-range diff is implemented but not used | dead code | low |
-| 1.6 | The `unchanged` fast path never fires for a short line | dead code | low |
+| 1.6 | The `unchanged` fast path saves the parse but not the comparison | performance | low, inherent |
+| 1.10 | The whole-line colouring cannot know everything: a quoted command word is neither coloured as a command nor looked up, a command inside a compound statement is not coloured as a command, `~user` is not resolved, symlinks are followed, a word that is not literal text is never looked up, both caches expire after 2 s, at most 16 words of a line are looked up on the filesystem, a long line loses the regions past 32, an unanswered command word is never painted red or green, and a substitution that is not the whole word is not looked inside | correctness | low, by design |
+| 1.11 | The pathological line is bounded on both sides of the boundary: the adapter's 4 KiB line cap, the module's 4 KiB line limit, the module's 4 KiB answer cap | performance | low, by design |
 | 2.1 | zsh's parameter machinery is ~80 % of the keystroke | performance | inherent to the API |
 | 2.2 | The benchmark reports the fastest run, not the median | measurement | medium |
 | 2.3 | The end-to-end harness uses zsh's clock, not `hyperfine` | measurement | medium |

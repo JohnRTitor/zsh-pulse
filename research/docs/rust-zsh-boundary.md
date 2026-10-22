@@ -103,7 +103,7 @@ Two directions, and the rules are different in each:
 All six are resolved with `dlsym(RTLD_DEFAULT, …)` during `setup_`, before
 any other zsh API is touched
 ([`crates/zsh-abi/src/probe.rs:72-84`](../../crates/zsh-abi/src/probe.rs#L72),
-[`crates/zsh-abi/src/api.rs:111-127`](../../crates/zsh-abi/src/api.rs#L111)).
+[`crates/zsh-abi/src/api.rs:203-222`](../../crates/zsh-abi/src/api.rs#L203)).
 **There is no link-time dependency on zsh at all** — the `zsh-abi` crate
 links and unit-tests normally in a non-zsh process.
 
@@ -134,12 +134,12 @@ so nobody can add one by accident.
 | # | Call | Made from | Arguments | What happens to the arguments |
 |---|---|---|---|---|
 | 1 | `dlsym(RTLD_DEFAULT, name)` | `probe.rs:76`, `api.rs:59`, `raw.rs:171` | a NUL-terminated symbol name | the name is a Rust `CString`, freed by Rust; the **result** is a function address that is never freed and never owned by anybody |
-| 2 | `addbuiltins(name, table, 1)` | `zsh-module/src/lib.rs:583` | a `&'static CStr` name and `&mut [Builtin; 2]` | **zsh keeps the pointer.** See §5. |
-| 3 | `getsparam(name)` | `api.rs:144`, `:161` | a `&'static CStr` name | returns a pointer **into zsh's own storage**; copied out at once, never freed by us |
-| 4 | `getsparam_u(name)` | `api.rs:190`, `:219` | a `&'static CStr` name | returns a pointer to a **static buffer owned by zsh**; copied out at once, never freed by us |
-| 5 | `zalloc(size)` | `api.rs:283`, `:317` | a byte count | the result is **owned by zsh** once it is handed to `setaparam` |
-| 6 | `ztrdup(string)` | `api.rs:292`, `:327` | a NUL-terminated string | the result is **owned by zsh** once it is handed to `setaparam` |
-| 7 | `setaparam(name, array)` | `api.rs:300`, `:333` | a name and a `zalloc`'d, NUL-terminated array | **takes ownership of the array and of every element** |
+| 2 | `addbuiltins(name, table, 1)` | `zsh-module/src/lib.rs:2489` | a `&'static CStr` name and `&mut [Builtin; 2]` | **zsh keeps the pointer.** See §5. |
+| 3 | `getsparam(name)` | `api.rs:238`, `:274` | a `&'static CStr` name | returns a pointer **into zsh's own storage**; copied out at once, never freed by us |
+| 4 | `getsparam_u(name)` | `api.rs:344`, `:372` | a `&'static CStr` name | returns a pointer to a **static buffer owned by zsh**; copied out at once, never freed by us |
+| 5 | `zalloc(size)` | `api.rs:470`, `:504` | a byte count | the result is **owned by zsh** once it is handed to `setaparam` |
+| 6 | `ztrdup(string)` | `api.rs:479`, `:514` | a NUL-terminated string | the result is **owned by zsh** once it is handed to `setaparam` |
+| 7 | `setaparam(name, array)` | `api.rs:487`, `:520` | a name and a `zalloc`'d, NUL-terminated array | **takes ownership of the array and of every element** |
 
 ### The parameters that cross
 
@@ -150,6 +150,62 @@ so nobody can add one by accident.
 | `region_highlight` | read (existence only) | every keystroke | `getsparam` is used only to ask "does this parameter exist?" |
 | `region_highlight` | **written** | when the styling changed | one `setaparam` per change; **nothing at all** when it did not |
 | `SHELL_PULSE_STATE` | written | only when `SHELL_PULSE_ECHO` is set | a debugging aid, off by default |
+
+### The argument vector
+
+The builtin's arguments cross the boundary too, and they cross in the
+*other* direction: **zsh owns them**.
+
+zsh calls the handler through a plain C function pointer
+([`zsh-src/Src/zsh.h:1436`](../upstream/zsh-src/Src/zsh.h#L1436)); the
+`char **` vector is NUL-terminated and does **not** include the command
+name. The module bounds its scan rather than trusting the terminator alone
+(§8.3).
+
+Two of those arguments are the shell's answers about the command words of
+the line:
+
+| Argument | Meaning |
+|---|---|
+| `--command-known=<word>` | the shell knows `<word>` as a command |
+| `--command-unknown=<word>` | the shell does not know `<word>` as a command |
+
+The word follows the `=` so that a word containing a space is still one
+argument, and both arguments may be repeated — one answer for each command
+word of the line. The protocol itself is described in
+[ZLE integration §1.5](zle-integration.md).
+
+**The module copies the answers into its own scratch.** The strings in the
+argument vector belong to zsh: they are valid only for the duration of the
+call, and the memory behind them is reused by the next call. A pointer into
+that vector would dangle the moment the builtin returned, so the module
+reads the bytes with `CStr::from_ptr` and copies them into a buffer of its
+own — one buffer for the words, back to back, and one table of answers that
+refer to ranges in it
+([`crates/zsh-module/src/lib.rs`](../../crates/zsh-module/src/lib.rs),
+`CommandAnswers`). The buffers are reused between keystrokes, so a keystroke
+does not allocate once they are warm.
+
+**The copy is bounded, in the number of answers and in their bytes.** The
+number of arguments the module will look at is bounded
+(`MAX_ARGUMENTS`, 64), and so is the number of bytes the words may take
+together (`MAX_ANSWER_BYTES`, 4 KiB — the same bound as the line the module
+is willing to highlight at all)
+([`crates/zsh-module/src/lib.rs:1650`](../../crates/zsh-module/src/lib.rs#L1650)).
+The words come from the line, and the line may be long: a pasted line of a
+megabyte would have been copied into the module's own buffer — and kept
+there for the rest of the session, because the buffer's capacity is
+deliberately reused. An answer that does not fit is dropped, and the command
+word it was about is left alone: a *missing* colour, never a wrong one.
+
+The word is copied **byte for byte, with its quoting preserved**, and the
+comparison with the word the lexer found is a comparison of bytes — not of
+anything zsh owns. The module therefore never points at zsh's memory while
+it is deciding what to publish, and it never keeps a pointer into the
+argument vector across the call. See rule 3 in §7.
+
+The arguments are read, never written, and never freed: zsh owns them for
+the whole call.
 
 ---
 
@@ -163,7 +219,7 @@ so nobody can add one by accident.
 | the builtin's name string | **Rust**, as a `static CStr` | 19 bytes + NUL | never — zsh holds the pointer | — |
 | the `BUFFER` bytes | **zsh** (static buffer) | — | never by us; we copy them | — |
 | the `CURSOR` bytes | **zsh** (static buffer) | — | never by us; we parse them | — |
-| the argument strings of the builtin | **zsh** | — | never by us; we only compare them | — |
+| the argument strings of the builtin | **zsh** | — | never by us; the command words are **copied** into the module's own scratch — at most 4 KiB of them — and compared there | — |
 
 ### The exact free path
 
@@ -258,13 +314,13 @@ hash table then stores that pointer
 
 1. The `struct builtin` array must **outlive the shell's use of it**. The
    module's table is a `static mut`
-   ([`crates/zsh-module/src/lib.rs:464-491`](../../crates/zsh-module/src/lib.rs#L464)),
+   ([`crates/zsh-module/src/lib.rs:1720-1747`](../../crates/zsh-module/src/lib.rs#L1720)),
    so it lives in the `.bss` of the cdylib for as long as the module is
    loaded.
 2. The **name string** is not copied either: `hn->nam = nam`
    ([`zsh-src/Src/hashtable.c:171`](../upstream/zsh-src/Src/hashtable.c#L175))
    stores the pointer. The module's name is a `static CStr`
-   ([`crates/zsh-module/src/lib.rs:456`](../../crates/zsh-module/src/lib.rs#L456)),
+   ([`crates/zsh-module/src/lib.rs:1712`](../../crates/zsh-module/src/lib.rs#L1712)),
    so it lives just as long.
 3. **zsh writes into the table**: `addbuiltins` sets
    `b->node.flags |= BINF_ADDED`
@@ -272,7 +328,7 @@ hash table then stores that pointer
    `addhashnode2` writes `hn->nam`. That is why the table is `static mut` and
    why the module reads it back through `addr_of_mut!` rather than through a
    shared reference
-   ([`crates/zsh-module/src/lib.rs:498-505`](../../crates/zsh-module/src/lib.rs#L498)).
+   ([`crates/zsh-module/src/lib.rs:1758`](../../crates/zsh-module/src/lib.rs#L1758)).
 4. The name zsh registers is `b->node.nam` **verbatim**. The `nam` argument
    of `addbuiltins` is only used in diagnostics
    ([`zsh-src/Src/module.c:552`](../upstream/zsh-src/Src/module.c#L553)). The
@@ -330,7 +386,7 @@ bytes and **segfaulted zsh**
 truncated to `int`
 ([`zsh-src/Src/params.c:3556-3559`](../upstream/zsh-src/Src/params.c#L3556)),
 so it always looks like garbage. The module ignores it
-([`crates/zsh-abi/src/api.rs:300`](../../crates/zsh-abi/src/api.rs#L300)).
+([`crates/zsh-abi/src/api.rs:487`](../../crates/zsh-abi/src/api.rs#L487)).
 
 **Rule: never test the return value of `setaparam`.**
 
@@ -345,6 +401,8 @@ so it always looks like garbage. The module ignores it
    ([`crates/zsh-abi/src/guard.rs:47-58`](../../crates/zsh-abi/src/guard.rs#L47)).
 3. **Never free anything zsh gave us.** zsh's parameter values, the static
    unmetafied buffer, the builtin's argument strings — none of them are ours.
+   What the module needs from the argument strings is *copied* into its own
+   scratch before it is used.
 4. **Never hand zsh Rust-owned memory** in a parameter that zsh will take
    ownership of.
 5. **If zsh will free it, it came from `zalloc` / `ztrdup`.** See §0.
@@ -354,11 +412,14 @@ so it always looks like garbage. The module ignores it
    ([`zsh-src/Src/params.c:3053`](../upstream/zsh-src/Src/params.c#L3053));
    the next parameter read overwrites it. `CURSOR` is read before `BUFFER`
    for exactly this reason
-   ([`crates/zsh-module/src/lib.rs:316-323`](../../crates/zsh-module/src/lib.rs#L316)).
+   ([`crates/zsh-module/src/lib.rs:1510-1515`](../../crates/zsh-module/src/lib.rs#L1510)).
 8. **Every string handed to zsh is NUL-terminated.** Use `c"…"` literals.
 9. **Never test `setaparam`'s return value.**
 10. **Anything zsh keeps a pointer to must outlive it.** The `Builtin` table
     and the builtin's name are `static` for that reason.
+11. **Never keep a pointer into the argument vector.** The strings in it
+    belong to zsh and are only valid for the duration of the call. Copy the
+    bytes you need into your own scratch, and compare the copy.
 
 ---
 
@@ -395,7 +456,7 @@ Otherwise it builds `<name>` with `/` → `Qs` and `_` → `Qu`
 which for `shellpulse/highlight` is `setup_shellpulseQshighlight`.
 
 The module exports **both** forms, so one build works on either kind of zsh
-([`crates/zsh-module/src/lib.rs:642-656`](../../crates/zsh-module/src/lib.rs#L642)).
+([`crates/zsh-module/src/lib.rs:2560-2584`](../../crates/zsh-module/src/lib.rs#L2560)).
 The one the host does not use is simply ignored.
 
 ### 8.3 The builtin handler signature
@@ -413,8 +474,32 @@ dereferences it.
 
 The `char **args` vector is NUL-terminated and does **not** include the
 command name. The module bounds its scan at 64 arguments
-([`crates/zsh-module/src/lib.rs:381`](../../crates/zsh-module/src/lib.rs#L381))
-rather than trusting the terminator alone.
+([`crates/zsh-module/src/lib.rs:1637`](../../crates/zsh-module/src/lib.rs#L1637))
+rather than trusting the terminator alone. The bytes the answers carry are
+bounded as well — see §3.
+
+### 8.4 A public entry point that does not touch zsh
+
+`published_spans` is a public function of the `zsh-module` crate
+([`crates/zsh-module/src/lib.rs:747`](../../crates/zsh-module/src/lib.rs#L747)):
+
+```rust
+pub fn published_spans(text: &[u8], answers: &[&[u8]]) -> Vec<HighlightSpan>
+```
+
+It is **not** a zsh entry point: it is not in the table in §8.1, zsh never
+calls it, and it touches no zsh API at all. It lexes the text and styles it
+from the answers it is handed. The paths are not looked up, because that
+needs the shell's directory and there is no shell here — so a word that
+names a file is styled the way the lexer styled it.
+
+It exists so that the benchmark and the tests can inspect **the real
+thing**: the spans the module publishes, rather than a stand-in built from
+the lexer's tokens. The benchmark used to build its own spans, and the
+number of regions it reported was therefore not the number of regions a
+real line gets. The crate is built as a `cdylib` *and* an `rlib`
+([`crates/zsh-module/Cargo.toml`](../../crates/zsh-module/Cargo.toml)) for
+exactly this reason: a `cdylib` alone cannot be linked into an example.
 
 ---
 
@@ -447,7 +532,7 @@ Every entry point therefore runs inside `guard()`
 ([`crates/zsh-abi/src/guard.rs:47-58`](../../crates/zsh-abi/src/guard.rs#L47)),
 which catches the panic, sets a sticky "degraded" flag and returns a benign
 value. The builtin then returns 0 immediately on every subsequent call
-([`crates/zsh-module/src/lib.rs:298-300`](../../crates/zsh-module/src/lib.rs#L298)),
+([`crates/zsh-module/src/lib.rs:1472-1475`](../../crates/zsh-module/src/lib.rs#L1472)),
 so the shell stays usable.
 
 The workspace is built with `panic = "unwind"` on purpose
@@ -462,7 +547,7 @@ ineffective. The guard catches *unwinding* panics only.
    `REQUIRED_SYMBOLS` in
    [`crates/zsh-abi/src/probe.rs:25-32`](../../crates/zsh-abi/src/probe.rs#L25)
    and to `Api::resolve`
-   ([`crates/zsh-abi/src/api.rs:111-127`](../../crates/zsh-abi/src/api.rs#L111)).
+   ([`crates/zsh-abi/src/api.rs:203-222`](../../crates/zsh-abi/src/api.rs#L203)).
    A missing symbol must be a *clean load failure*, not a later crash.
 2. **Transcribe the signature from the zsh source**, and cite the file and
    line. Do not guess it: guessing `char **` for `getsparam` segfaulted zsh.
