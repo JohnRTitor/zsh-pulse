@@ -128,14 +128,23 @@ pub mod zsh {
     pub const GETSPARAM_U: &str = "getsparam_u";
     /// Set a scalar parameter (`zsh-src/Src/params.c`).
     pub const SETAPARAM: &str = "setaparam";
-    /// Allocate a copy with zsh's allocator (`zsh-src/Src/utils.c`).
+    /// zsh's **permanent** allocator (`zsh-src/Src/mem.c:959`).
     ///
-    /// Required because `setaparam` **takes ownership** of the value array and
-    /// frees it with zsh's `freearray`; anything not allocated by zsh
-    /// corrupts the heap.
-    pub const DUPSTRING: &str = "dupstring";
-    /// zsh's allocator (`zsh-src/Src/mem.c`).
-    pub const ZHALLOC: &str = "zhalloc";
+    /// `zalloc` is a thin wrapper around `malloc`. It is the *only* allocator
+    /// whose memory may legally outlive the current `pushheap`/`popheap` pair,
+    /// and the only one `freearray` may be asked to release.
+    ///
+    /// The alternative, `zhalloc`, allocates from zsh's **pool** allocator.
+    /// Pool memory is rewound and recycled by `popheap()`
+    /// (`zsh-src/Src/mem.c:1425-1500`), so a pointer into a pool dies the
+    /// moment the next command runs. See [`crate::api`] for the full story.
+    pub const ZALLOC: &str = "zalloc";
+    /// Duplicate a string with zsh's permanent allocator
+    /// (`zsh-src/Src/string.c:62`).
+    ///
+    /// `ztrdup` is `zalloc` + `strcpy`. `dupstring`, the superficially
+    /// equivalent symbol, uses `zhalloc` and is therefore unusable here.
+    pub const ZTRDUP: &str = "ztrdup";
 }
 
 /// `dlopen`/`dlsym`, declared locally so this crate has **no dependencies**.

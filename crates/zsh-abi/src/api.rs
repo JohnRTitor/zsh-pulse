@@ -36,12 +36,26 @@ pub type GetSparamFn = unsafe extern "C" fn(*mut c_char) -> *mut c_char;
 /// `int setaparam(char *nam, char **val)`
 pub type SetaparamFn = unsafe extern "C" fn(*mut c_char, *mut *mut c_char) -> c_int;
 
-/// `char *dupstring(char const *)` — allocate with zsh's allocator.
-/// (`zsh-src/Src/params.c`, `zsh-src/Src/utils.c`)
-pub type DupStringFn = unsafe extern "C" fn(*const c_char) -> ZshString;
+/// The outcome of a capped read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CappedRead {
+    /// The parameter does not exist.
+    Missing,
+    /// The value is longer than the cap. Nothing was copied.
+    TooLong(usize),
+    /// The value was copied. This is its length in bytes.
+    Read(usize),
+}
 
-/// `void *zhalloc(size_t)` — zsh's allocator (`zsh-src/Src/mem.c`).
-pub type ZhAllocFn = unsafe extern "C" fn(usize) -> *mut core::ffi::c_void;
+/// `void *zalloc(size_t)` — zsh's **permanent** allocator (`zsh-src/Src/mem.c:959`).
+///
+/// This is `malloc` with zsh's out-of-memory handling. It is the only
+/// allocator whose memory survives zsh's `pushheap`/`popheap` cycle.
+pub type ZAllocFn = unsafe extern "C" fn(usize) -> *mut core::ffi::c_void;
+
+/// `char *ztrdup(char const *)` — duplicate a string with zsh's permanent
+/// allocator (`zsh-src/Src/string.c:62`).
+pub type ZTrdupFn = unsafe extern "C" fn(*const c_char) -> ZshString;
 
 /// Look up a zsh symbol and reinterpret it as `F`.
 ///
@@ -91,10 +105,10 @@ pub struct Api {
     pub getsparam_u: GetSparamFn,
     /// `setaparam`
     pub setaparam: SetaparamFn,
-    /// `dupstring`
-    pub dupstring: DupStringFn,
-    /// `zhalloc`
-    pub zhalloc: ZhAllocFn,
+    /// `zalloc` — permanent allocator.
+    pub zalloc: ZAllocFn,
+    /// `ztrdup` — permanent string duplication.
+    pub ztrdup: ZTrdupFn,
 }
 
 impl Api {
@@ -117,10 +131,49 @@ impl Api {
                 getsparam: fn_ptr(crate::raw::zsh::GETSPARAM)?,
                 getsparam_u: fn_ptr(crate::raw::zsh::GETSPARAM_U)?,
                 setaparam: fn_ptr(crate::raw::zsh::SETAPARAM)?,
-                dupstring: fn_ptr(crate::raw::zsh::DUPSTRING)?,
-                zhalloc: fn_ptr(crate::raw::zsh::ZHALLOC)?,
+                zalloc: fn_ptr(crate::raw::zsh::ZALLOC)?,
+                ztrdup: fn_ptr(crate::raw::zsh::ZTRDUP)?,
             })
         }
+    }
+
+    /// Whether the shell is currently inside a ZLE widget.
+    ///
+    /// `WIDGET` is one of the parameters `makezleparams` creates for the
+    /// duration of a widget (`zsh-src/Src/Zle/zle_params.c:141-188`), and
+    /// it is a *scalar*, so reading it costs nothing. It is the cheapest
+    /// reliable test for "am I in the line editor?".
+    ///
+    /// The module uses it for two reasons: the ZLE special parameters only
+    /// exist inside a widget, and the existence of `region_highlight` alone
+    /// cannot be told apart from a global array of that name.
+    ///
+    /// # Safety
+    ///
+    /// Must only be called from inside zsh.
+    pub unsafe fn in_zle(&self) -> bool {
+        // Safety: caller guarantees zsh context and a valid name.
+        let p = unsafe { (self.getsparam)(c"WIDGET".as_ptr() as *mut c_char) };
+        !p.is_null()
+    }
+
+    /// Whether a parameter with this name exists.
+    ///
+    /// `getsparam` returns `NULL` for a parameter that does not exist and a
+    /// non-null pointer for one that does — including an array parameter,
+    /// whose first element is returned (`zsh-src/Src/params.c:2344-2372`).
+    ///
+    /// This matters for the ZLE special parameters: they only exist while a
+    /// widget is running, and writing to `region_highlight` outside a widget
+    /// would create a *global* parameter of that name in the user's shell.
+    ///
+    /// # Safety
+    ///
+    /// Must only be called from inside zsh with a NUL-terminated name.
+    pub unsafe fn param_exists(&self, name: &std::ffi::CStr) -> bool {
+        // Safety: caller guarantees zsh context and a valid name.
+        let p = unsafe { (self.getsparam)(name.as_ptr() as *mut c_char) };
+        !p.is_null()
     }
 
     /// Read a scalar parameter as a lossily-converted `String`.
@@ -177,6 +230,39 @@ impl Api {
         Some(len)
     }
 
+    /// Read a scalar parameter's bytes, refusing to copy more than `max`.
+    ///
+    /// The command line is read this way: a user can paste an arbitrarily
+    /// long line, and the module must not copy it into its own memory just
+    /// to decide that it is too long to highlight.
+    ///
+    /// # Safety
+    ///
+    /// Must only be called from inside zsh with a NUL-terminated name.
+    pub unsafe fn read_param_bytes_capped(
+        &self,
+        name: &std::ffi::CStr,
+        out: &mut Vec<u8>,
+        max: usize,
+    ) -> CappedRead {
+        // Safety: caller guarantees zsh context and a valid name.
+        let p = unsafe { (self.getsparam_u)(name.as_ptr() as *mut c_char) };
+        if p.is_null() {
+            out.clear();
+            return CappedRead::Missing;
+        }
+        // Safety: zsh NUL-terminates the static unmetafied buffer.
+        let len = unsafe { std::ffi::CStr::from_ptr(p) }.to_bytes().len();
+        if len > max {
+            out.clear();
+            return CappedRead::TooLong(len);
+        }
+        out.clear();
+        // Safety: `p` points at `len` readable bytes, just measured.
+        out.extend_from_slice(unsafe { std::slice::from_raw_parts(p.cast::<u8>(), len) });
+        CappedRead::Read(len)
+    }
+
     /// Read a scalar parameter as an integer without building a `String`.
     ///
     /// Used for `CURSOR`, where the previous implementation allocated a `String`
@@ -214,13 +300,37 @@ impl Api {
     /// # Ownership — read this before calling
     ///
     /// `setaparam` takes **ownership** of the value array. `assignaparam`
-    /// (`zsh-src/Src/params.c:3318`) calls `freearray(val)` on every exit path,
-    /// including the success path. Passing a Rust stack array therefore makes
-    /// zsh `free()` a stack pointer: this was observed to **segfault zsh**
-    /// during Stage B.
+    /// (`zsh-src/Src/params.c:3318`) hands the array straight to
+    /// `setarrvalue` -> `arrsetfn` (`zsh-src/Src/params.c:2903`), which
+    /// stores it in the parameter and releases the previous value with
+    /// `freearray` (`zsh-src/Src/utils.c:4122`):
     ///
-    /// Both the array and its strings must therefore be allocated by zsh:
-    /// `zhalloc` for the array, `dupstring` for each element.
+    /// ```c
+    /// void freearray(char **s) {
+    ///     while (*s) zsfree(*s++);   /* frees each element */
+    ///     free(t);                   /* frees the array itself */
+    /// }
+    /// ```
+    ///
+    /// Two separate constraints follow, and getting either wrong corrupts the
+    /// user's shell:
+    ///
+    /// 1. **The array must come from `zalloc`.** `freearray` releases the
+    ///    array with `free()`, so the array must be plain `malloc` memory.
+    /// 2. **The elements must come from `ztrdup`.** `freearray` releases each
+    ///    element with `zsfree()`, which is `free()` in a zsh built without
+    ///    `ZSH_MEM` — so the elements must be plain `malloc` memory too.
+    ///
+    /// The superficially equivalent symbols `zhalloc` and `dupstring` are
+    /// **wrong**: they allocate from zsh's *pool* allocator, and pool memory
+    /// is rewound and recycled by `popheap()` (`zsh-src/Src/mem.c:1425`),
+    /// which zsh calls around every command (`zsh-src/Src/exec.c:1275`).
+    /// A parameter holding pool memory therefore points at recycled memory
+    /// the moment the next command runs — observed as a `SIGSEGV` inside
+    /// `sepjoin` while reading the parameter back.
+    ///
+    /// zsh's own idiom matches this exactly: `zalloc` for the array and
+    /// `ztrdup` for the elements (`zsh-src/Src/params.c:1013-1017`).
     ///
     /// The return value is not meaningful: `setaparam` is declared to return
     /// `int` but returns a `Param` pointer truncated to `int`
@@ -232,40 +342,58 @@ impl Api {
     pub unsafe fn set_param_string(&self, name: &std::ffi::CStr, value: &std::ffi::CStr) {
         // Two slots, NULL-terminated: the value and the terminator.
         let slots = core::mem::size_of::<*mut c_char>() * 2;
-        // SAFETY: zhalloc is resolved and we are inside zsh.
+        // Safety: zalloc is resolved and we are inside zsh.
         let array = unsafe {
-            let p = (self.zhalloc)(slots).cast::<*mut c_char>();
+            let p = (self.zalloc)(slots).cast::<*mut c_char>();
             if p.is_null() {
                 return;
             }
-            (*p) = (self.dupstring)(value.as_ptr());
+            // The array is NULL-terminated before anything is copied into
+            // it, so a failure half way through cannot leave zsh reading
+            // uninitialised memory.
+            (*p) = core::ptr::null_mut();
             (*p.add(1)) = core::ptr::null_mut();
+            let copy = (self.ztrdup)(value.as_ptr());
+            if copy.is_null() {
+                return;
+            }
+            (*p) = copy;
             p
         };
         // Safety: inside zsh; `array` is a NULL-terminated, zsh-allocated array.
         unsafe { (self.setaparam)(name.as_ptr() as *mut c_char, array) };
     }
 
-    /// Set an array parameter from already-zsh-allocated, NUL-terminated rows.
+    /// Set an array parameter from already-`ztrdup`-allocated, NUL-terminated
+    /// rows.
     ///
-    /// Each row must come from `dupstring`, and `rows` itself from `zhalloc`;
-    /// zsh frees both. See [`Api::set_param_string`] for the ownership rules.
+    /// The rows themselves must come from `ztrdup` and the row array from
+    /// `zalloc`; zsh frees both. See [`Api::set_param_string`] for the
+    /// ownership rules and why `zhalloc`/`dupstring` are wrong.
     ///
     /// # Safety
     ///
     /// Must only be called from inside zsh.
     pub unsafe fn set_param_array(&self, name: &std::ffi::CStr, rows: &[&std::ffi::CStr]) {
         let bytes = core::mem::size_of::<*mut c_char>() * (rows.len() + 1);
-        // Safety: zhalloc is resolved and we are inside zsh.
+        // Safety: zalloc is resolved and we are inside zsh.
         unsafe {
-            let array = (self.zhalloc)(bytes).cast::<*mut c_char>();
+            let array = (self.zalloc)(bytes).cast::<*mut c_char>();
             if array.is_null() {
                 return;
             }
-            for (i, row) in rows.iter().enumerate() {
-                (*array.add(i)) = (self.dupstring)(row.as_ptr());
+            // NULL-terminate the whole array first: if a copy fails half
+            // way through, zsh must not read uninitialised slots.
+            for i in 0..=rows.len() {
+                *array.add(i) = core::ptr::null_mut();
             }
-            (*array.add(rows.len())) = core::ptr::null_mut();
+            for (i, row) in rows.iter().enumerate() {
+                let copy = (self.ztrdup)(row.as_ptr());
+                if copy.is_null() {
+                    return;
+                }
+                (*array.add(i)) = copy;
+            }
             (self.setaparam)(name.as_ptr() as *mut c_char, array);
         }
     }

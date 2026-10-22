@@ -33,7 +33,7 @@ pub mod raw;
 
 pub use guard::{guard, is_degraded};
 pub use probe::{Capabilities, REQUIRED_SYMBOLS};
-pub use api::Api;
+pub use api::{Api, CappedRead};
 pub use raw::{Builtin, CStr, HashNode, Module, Options};
 
 /// Name this module registers its builtins under.

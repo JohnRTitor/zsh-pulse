@@ -27,8 +27,8 @@ pub const REQUIRED_SYMBOLS: &[&str] = &[
     crate::raw::zsh::GETSPARAM,
     crate::raw::zsh::GETSPARAM_U,
     crate::raw::zsh::SETAPARAM,
-    crate::raw::zsh::DUPSTRING,
-    crate::raw::zsh::ZHALLOC,
+    crate::raw::zsh::ZALLOC,
+    crate::raw::zsh::ZTRDUP,
 ];
 
 /// Outcome of probing the running zsh.
@@ -110,8 +110,18 @@ mod tests {
         assert!(REQUIRED_SYMBOLS.contains(&"getsparam"));
         assert!(REQUIRED_SYMBOLS.contains(&"getsparam_u"));
         assert!(REQUIRED_SYMBOLS.contains(&"setaparam"));
-        assert!(REQUIRED_SYMBOLS.contains(&"dupstring"));
-        assert!(REQUIRED_SYMBOLS.contains(&"zhalloc"));
+        assert!(REQUIRED_SYMBOLS.contains(&"zalloc"));
+        assert!(REQUIRED_SYMBOLS.contains(&"ztrdup"));
+    }
+
+    #[test]
+    fn the_pool_allocators_are_never_required() {
+        // `zhalloc` and `dupstring` allocate from zsh's *pool*, whose memory
+        // `popheap()` recycles. Storing pool memory in a zsh parameter leaves
+        // a dangling pointer that crashes the shell on the next command.
+        // Their absence from the required set is a deliberate guard.
+        assert!(!REQUIRED_SYMBOLS.contains(&"zhalloc"));
+        assert!(!REQUIRED_SYMBOLS.contains(&"dupstring"));
     }
 
     #[test]
