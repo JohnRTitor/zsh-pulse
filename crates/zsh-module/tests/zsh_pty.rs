@@ -221,10 +221,23 @@ while (( SECONDS < deadline )); do
   sleep 0.02
 done
 
-# Phase two: type the line, then wait for the bytes we expect.
+# Phase two: type the line(s), then wait for the bytes we expect.
+#
+# A newline in SP_TYPE starts a new command line: the text before it is
+# submitted and the rest is typed into the next one. Typing more than one
+# line matters -- a plugin that works on the first line and then goes quiet
+# looks exactly like one that works.
 typeset -i typed=0
 if (( ready )); then
-  zpty -wn $PTY "$TYPED"
+  typeset -a lines=("${(@s:\\n:)TYPED}")
+  integer li
+  for li in {1..${#lines}}; do
+    if (( li < ${#lines} )); then
+      zpty -w $PTY "$lines[li]"$'\n'
+    else
+      zpty -wn $PTY "$lines[li]"
+    fi
+  done
   typed=1
 fi
 
@@ -281,6 +294,8 @@ struct Scenario {
     wait_for: &'static [u8],
     /// Whether the shell under the pty loads the module.
     load_module: bool,
+    /// How many times the marker is expected to appear.
+    count: usize,
 }
 
 /// Kills the harness — and with it the pseudo-terminal — when the test
@@ -383,7 +398,7 @@ fn capture(scenario: &Scenario, term: &str, label: &str) -> Result<Capture, Stri
         .arg(&harness)
         .env("SP_READY_FILE", &ready)
         .env("SP_DONE_FILE", &done)
-        .env("SP_DONE_COUNT", "1")
+        .env("SP_DONE_COUNT", scenario.count.to_string())
         .env("SP_TYPE", scenario.typed)
         .env("SP_OUT", &out)
         .env("SP_TIMEOUT", "10")
@@ -486,6 +501,7 @@ fn the_typed_command_is_highlighted_on_the_terminal() {
             typed: "echo SPARGXYZ",
             wait_for: ARGUMENT.as_bytes(),
             load_module: true,
+            count: 1,
         },
         term,
         "highlighted",
@@ -564,6 +580,7 @@ fn an_empty_line_is_not_highlighted() {
             typed: "",
             wait_for: PROMPT.as_bytes(),
             load_module: true,
+            count: 1,
         },
         term,
         "empty",
@@ -591,6 +608,60 @@ fn an_empty_line_is_not_highlighted() {
     );
 }
 
+/// The highlighting has to survive a second command line.
+///
+/// A plugin that works on the first line and then goes quiet looks exactly
+/// like one that works, until you press Enter. Two things can break it: the
+/// hook being replaced by another plugin, and the module believing it still
+/// holds the previous line's regions after zsh has emptied them.
+#[test]
+fn the_highlighting_survives_a_second_command_line() {
+    require_zsh_pty!();
+    let Some(term) = colour_terminal() else {
+        skip(
+            "no terminal type with the standard xterm colour capabilities \
+             was found, so the bytes zsh writes for `fg=cyan,bold` cannot be known \
+             in advance and asserting on them would be a guess.",
+        );
+        return;
+    };
+    let capture = match capture(
+        &Scenario {
+            typed: "echo SPARGXYZ\necho SPARGXYZ",
+            wait_for: ARGUMENT.as_bytes(),
+            load_module: true,
+            count: 2,
+        },
+        term,
+        "two-lines",
+    ) {
+        Ok(capture) => capture,
+        Err(reason) => {
+            skip(&reason);
+            return;
+        }
+    };
+
+    assert!(
+        capture.contains(MODULE_LOADED.as_bytes()),
+        "the module did not load in the shell under the pty.\n{}",
+        capture.dump()
+    );
+
+    // The command word of *each* line must have been highlighted: the first
+    // one proves the hook works, the second proves it still works after the
+    // line was submitted and zsh emptied the display array.
+    let cyan = capture.occurrences(CYAN_BOLD).len();
+    assert!(
+        cyan >= 2,
+        "the command word was highlighted {cyan} time(s), expected at least two — \
+         one per command line.\nharness: {}\ncaptured {} bytes:\n{}",
+        capture.status,
+        capture.bytes.len(),
+        capture.dump()
+    );
+}
+
 #[test]
 fn without_the_module_nothing_is_highlighted() {
     require_zsh_pty!();
@@ -606,6 +677,7 @@ fn without_the_module_nothing_is_highlighted() {
             typed: "echo SPARGXYZ",
             wait_for: ARGUMENT.as_bytes(),
             load_module: false,
+            count: 1,
         },
         term,
         "no-module",

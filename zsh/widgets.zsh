@@ -1,13 +1,18 @@
 # shell-pulse — the zsh side of the plugin: the hooks.
 #
-# Sourced by `init.zsh` once the module has been loaded. It installs two
-# ZLE hooks:
+# Sourced by `init.zsh` once the module has been loaded.
+#
+# Two hooks are installed:
 #
 #   zle-line-pre-redraw  publish the highlights for the line being edited
 #   zle-line-init        tell the module that a new line is starting
 #
-# Both are chained: if another plugin already installed a hook of the same
-# name, it is called from ours rather than being replaced.
+# Both are installed with zsh's own `add-zle-hook-widget`, which keeps the
+# widgets that are already registered for a hook and calls them as well. That
+# matters: `zle -N` would *replace* whatever was registered, so two plugins
+# using the same hook would silently disable each other — and in practice
+# that is exactly what happened, because zsh-autocomplete registers a
+# wrapper for `zle-line-pre-redraw` after the `.zshrc` has been read.
 
 # The redraw hook.
 #
@@ -20,13 +25,7 @@
 # the module only reads the line, so it can never overwrite a
 # `region_highlight` array that belongs to the user or to another plugin.
 shell-pulse-highlight-redraw() {
-  # This runs from inside a widget, so `region_highlight` here is the ZLE
-  # special parameter and not a global array of the same name.
   shell-pulse-highlight --region-highlight
-  # Any hook that was already installed is called after ours.
-  if (( ${+_shell_pulse_previous_pre_redraw} )); then
-    "$_shell_pulse_previous_pre_redraw"
-  fi
 }
 
 # The start-of-line hook.
@@ -38,69 +37,31 @@ shell-pulse-highlight-redraw() {
 # matches the cached one — would be drawn with no highlighting at all.
 shell-pulse-highlight-line-init() {
   shell-pulse-highlight --reset
-  if (( ${+_shell_pulse_previous_line_init} )); then
-    "$_shell_pulse_previous_line_init"
-  fi
 }
 
-# Chain the hooks that are already installed rather than replacing them.
+# Install the hooks.
 #
-# zsh allows exactly one widget per name and `zle -N` replaces it. Other
-# plugins use these hooks too, so an existing hook is kept and called from
-# ours.
-#
-# `widgets[name]` is the function a widget runs, in the form `user:fn` for a
-# user-defined widget (`zsh-src/Doc/Zsh/mod_zleparameter.yo:19-21`), so the
-# prefix has to be stripped before the function can be called. A widget that
-# is not user-defined — a builtin, or a completion widget — cannot be
-# chained this way and is left alone.
-#
-# `zsh/zleparameter` provides the `widgets` array. Without it there is no
-# way to see what a widget does, so the chain cannot be built — and the
-# hook that was there is replaced rather than kept. That is said out loud,
-# because a silently dropped hook is worse than a noisy one.
-if zmodload zsh/zleparameter 2>/dev/null; then
-  if (( ${+widgets[zle-line-pre-redraw]} )); then
-    _shell_pulse_previous=${widgets[zle-line-pre-redraw]}
-    case $_shell_pulse_previous in
-      user:shell-pulse-highlight-redraw|user:shell-pulse-highlight-line-init)
-        # This file has already been sourced; do not chain ourselves.
-        ;;
-      user:*)
-        typeset -g _shell_pulse_previous_pre_redraw=${_shell_pulse_previous#user:}
-        ;;
-      *)
-        typeset -g _shell_pulse_unchainable_pre_redraw=1
-        ;;
-    esac
-    unset _shell_pulse_previous
-  fi
+# `add-zle-hook-widget` is zsh's own function for this
+# (`Functions/Misc/add-zle-hook-widget`): it registers a widget *alongside*
+# the ones already registered for the hook and calls them all, in order.
+# Using `zle -N` instead would replace them, and the plugin that was
+# replaced would stop working — silently, and only after the first command
+# line, because that is when the other plugin installs its own wrapper.
+if ! autoload -Uz add-zle-hook-widget 2>/dev/null; then
+  # No `add-zle-hook-widget` (a very old zsh): fall back to registering the
+  # widgets directly. Another plugin's hook for the same name is lost, which
+  # is the behaviour we are trying to avoid, but there is no better option.
+  zle -N zle-line-pre-redraw shell-pulse-highlight-redraw
+  zle -N zle-line-init shell-pulse-highlight-line-init
+else
+  # `add-zle-hook-widget` *autoloads* a widget it has not seen before, on
+  # the assumption that the widget is a file in `$fpath`. Our functions are
+  # already defined, and autoloading them would throw their bodies away and
+  # leave the shell looking for a file called `shell-pulse-highlight-redraw`.
+  # Registering them as widgets first makes it leave them alone.
+  zle -N shell-pulse-highlight-redraw shell-pulse-highlight-redraw
+  zle -N shell-pulse-highlight-line-init shell-pulse-highlight-line-init
 
-  if (( ${+widgets[zle-line-init]} )); then
-    _shell_pulse_previous=${widgets[zle-line-init]}
-    case $_shell_pulse_previous in
-      user:shell-pulse-highlight-redraw|user:shell-pulse-highlight-line-init)
-        ;;
-      user:*)
-        typeset -g _shell_pulse_previous_line_init=${_shell_pulse_previous#user:}
-        ;;
-      *)
-        typeset -g _shell_pulse_unchainable_line_init=1
-        ;;
-    esac
-    unset _shell_pulse_previous
-  fi
+  add-zle-hook-widget zle-line-pre-redraw shell-pulse-highlight-redraw
+  add-zle-hook-widget zle-line-init shell-pulse-highlight-line-init
 fi
-
-# A hook that could not be chained is reported rather than dropped in
-# silence: the user is losing another plugin's work.
-if ! zmodload zsh/zleparameter 2>/dev/null; then
-  print -u2 "shell-pulse: zsh/zleparameter is not available, so an existing" \
-    "zle-line-pre-redraw hook cannot be chained and will be replaced."
-elif [[ -n ${_shell_pulse_unchainable_pre_redraw:-} ]]; then
-  print -u2 "shell-pulse: the existing zle-line-pre-redraw hook is not a" \
-    "shell function and cannot be chained; it will be replaced."
-fi
-
-zle -N zle-line-pre-redraw shell-pulse-highlight-redraw
-zle -N zle-line-init shell-pulse-highlight-line-init

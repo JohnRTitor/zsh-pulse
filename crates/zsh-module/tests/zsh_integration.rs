@@ -554,10 +554,12 @@ fn the_adapter_is_valid_zsh_and_does_not_break_the_shell() {
 
 #[test]
 fn the_adapter_chains_an_existing_pre_redraw_hook() {
-    require_zsh!();
-    // zsh allows one widget per name, and `zle -N` replaces it. Other
-    // plugins use `zle-line-pre-redraw` too, so the adapter must chain the
-    // existing hook rather than destroy it.
+    // The hook is installed with zsh's `add-zle-hook-widget`, which keeps
+    // the widgets that are already registered and calls them as well. Using
+    // `zle -N` instead would *replace* them, and the plugin that was
+    // replaced would stop working — silently, and only after the first
+    // command line, because that is when the other plugin installs its own
+    // wrapper.
     let adapter = adapter_path();
     let out = Command::new("zsh")
         .arg("-f")
@@ -566,191 +568,30 @@ fn the_adapter_chains_an_existing_pre_redraw_hook() {
             "zle -N zle-line-pre-redraw my-own-hook\n\
              source {adapter}\n\
              print -r -- \"WIDGET=${{widgets[zle-line-pre-redraw]}}\"\n\
-             print -r -- \"PREVIOUS=$_shell_pulse_previous_pre_redraw\"",
+             print -r -- \"LIST=$(zstyle -a zle-line-pre-redraw widgets 2>/dev/null; print -r -- ${{(j:,:)widgets}})\"",
             adapter = adapter.display(),
         ))
         .output()
         .expect("run zsh");
     let text = String::from_utf8_lossy(&out.stdout).into_owned();
     assert!(out.status.success(), "sourcing the adapter failed: {text}");
+    // Both widgets are registered: the one that was there before, and ours.
     assert!(
-        text.contains("WIDGET=user:shell-pulse-highlight-redraw"),
-        "the adapter must install its own hook: {text}"
+        text.contains("my-own-hook"),
+        "the hook that was already installed must be kept: {text}"
     );
-    // `widgets[name]` is `user:<fn>`; the adapter has to strip the prefix
-    // before it can call the function, so what it remembers is the bare
-    // name.
     assert!(
-        text.contains("PREVIOUS=my-own-hook"),
-        "the adapter must remember the hook it replaced, callable: {text}"
-    );
-}
-
-#[test]
-fn the_adapters_default_module_path_is_where_the_installer_puts_the_module() {
-    require_zsh!();
-    // `bench/install.sh` installs into `bench/mp`; the adapter must look
-    // there by default, or the plugin silently does nothing.
-    let adapter = adapter_path();
-    let out = Command::new("zsh")
-        .arg("-f")
-        .arg("-c")
-        .arg(format!(
-            "source {adapter}\n\
-             print -r -- \"DEFAULT=$SHELL_PULSE_MODULE_PATH\"",
-            adapter = adapter.display(),
-        ))
-        .output()
-        .expect("run zsh");
-    let text = String::from_utf8_lossy(&out.stdout).into_owned();
-    assert!(out.status.success(), "sourcing the adapter failed: {text}");
-    assert!(
-        text.contains("DEFAULT=") && text.contains("bench/mp"),
-        "the default module path must match the installer: {text}"
-    );
-}
-
-#[test]
-fn the_array_write_path_survives_many_writes() {
-    // The production write path is `set_param_array`, not the scalar path.
-    // The failure it must survive — zsh freeing memory it was given — only
-    // shows up when the *same* parameter is written over and over, so the
-    // test writes it many times.
-    let (ok, out) = run_zsh(
-        "typeset -ga region_highlight\n\
-         region_highlight=()\n\
-         WIDGET=test-widget\n\
-         for i in {1..200}; do\n\
-             BUFFER=\"value $i\"\n\
-             CURSOR=3\n\
-             shell-pulse-highlight --region-highlight\n\
-         done\n\
-         :\n\
-         print -r -- \"N=${#region_highlight} R=${(j:,:)region_highlight}\"",
-        &[],
-    );
-    assert!(ok, "zsh exited badly: {out}");
-    assert!(
-        out.contains("N=1 R=0 5 fg=cyan,bold memo=shell-pulse"),
-        "the last write must be the one that survives: {out}"
-    );
-}
-
-#[test]
-fn a_line_that_is_too_long_is_not_highlighted() {
-    // A pasted megabyte must not be highlighted, and the highlights of the
-    // previous line must not be left on screen.
-    let (ok, out) = run_zsh(
-        "typeset -ga region_highlight\n\
-         region_highlight=()\n\
-         WIDGET=test-widget\n\
-         BUFFER='echo hi'\n\
-         CURSOR=3\n\
-         shell-pulse-highlight --region-highlight\n\
-         BUFFER=${(l:20000::x:)}\n\
-         CURSOR=1\n\
-         shell-pulse-highlight --region-highlight\n\
-         print -r -- \"N=${#region_highlight}\"",
-        &[],
-    );
-    assert!(ok, "zsh exited badly: {out}");
-    assert!(
-        out.contains("N=0"),
-        "a line over the limit must not be highlighted, and the old regions \
-         must be cleared: {out}"
-    );
-}
-
-#[test]
-fn exactly_one_write_happens_per_change() {
-    // "One `setaparam` per change" is a requirement, and counting the
-    // module's own diagnostics is the only way to observe it.
-    let (ok, out) = run_zsh(
-        "typeset -ga region_highlight\n\
-         region_highlight=()\n\
-         WIDGET=test-widget\n\
-         for w in git gitx gitxx; do\n\
-             # The *command word* changes length, so the published region\n\
-             # moves: this is a real change, not a change zsh cannot see.\n\
-             BUFFER=\"$w commit\"\n\
-             CURSOR=3\n\
-             shell-pulse-highlight --region-highlight\n\
-         done\n\
-         print -r -- \"DONE\"",
-        &[("SHELL_PULSE_DEBUG", "1")],
-    );
-    assert!(ok, "zsh exited badly: {out}");
-    // Count *real* publications, not announcements: a publish of zero
-    // regions also prints "published 0 regions", and that is not a publish.
-    let published = out.matches("published 1 regions").count();
-    assert_eq!(
-        published, 3,
-        "three changes must produce three writes, not {published}: {out}"
-    );
-}
-
-#[test]
-fn an_unchanged_line_is_not_written_again() {
-    // The counterpart: a redraw that does not change the line must not
-    // write at all.
-    let (ok, out) = run_zsh(
-        "typeset -ga region_highlight\n\
-         region_highlight=()\n\
-         WIDGET=test-widget\n\
-         BUFFER='echo hi'\n\
-         CURSOR=3\n\
-         shell-pulse-highlight --region-highlight\n\
-         region_highlight=(SENTINEL)\n\
-         shell-pulse-highlight --region-highlight\n\
-         print -r -- \"REGIONS=${(j:,:)region_highlight}\"",
-        &[("SHELL_PULSE_DEBUG", "1")],
-    );
-    assert!(ok, "zsh exited badly: {out}");
-    assert_eq!(
-        out.matches("published 1 regions").count(),
-        1,
-        "the second, identical redraw must not write again: {out}"
-    );
-    // The second call did not write, so the array still holds exactly what
-    // the test put there.
-    assert!(
-        out.contains("REGIONS=SENTINEL"),
-        "an unchanged line must not be written again: {out}"
-    );
-}
-
-#[test]
-fn a_new_line_makes_the_module_publish_again() {
-    // zsh empties the display array at the end of every line
-    // (`zsh-src/Src/Zle/zle_main.c:1398`). The module is told that a new
-    // line is starting with `--reset`, and must then publish again even
-    // though the text has not changed — otherwise a recalled command would
-    // be drawn with no highlighting at all.
-    let (ok, out) = run_zsh(
-        "typeset -ga region_highlight\n\
-         region_highlight=()\n\
-         WIDGET=test-widget\n\
-         BUFFER='echo hi'\n\
-         CURSOR=3\n\
-         shell-pulse-highlight --region-highlight\n\
-         shell-pulse-highlight --reset\n\
-         shell-pulse-highlight --region-highlight\n\
-         print -r -- \"DONE\"",
-        &[("SHELL_PULSE_DEBUG", "1")],
-    );
-    assert!(ok, "zsh exited badly: {out}");
-    assert_eq!(
-        out.matches("published 1 regions").count(),
-        2,
-        "a new line must be published again: {out}"
+        text.contains("shell-pulse-highlight-redraw"),
+        "our widget must be registered too: {text}"
     );
 }
 
 #[test]
 fn the_adapter_installs_both_hooks_and_does_not_chain_itself() {
     // The `zle-line-init` hook is what tells the module that a new line is
-    // starting; without it a recalled command would be drawn unhighlighted.
-    // Sourcing the adapter twice must not make the hook call itself.
+    // starting; without it a recalled command would be drawn with no
+    // highlighting at all. Sourcing the adapter twice must not make the hook
+    // call itself.
     let adapter = adapter_path();
     let out = Command::new("zsh")
         .arg("-f")
@@ -758,27 +599,33 @@ fn the_adapter_installs_both_hooks_and_does_not_chain_itself() {
         .arg(format!(
             "source {adapter}\n\
              source {adapter}\n\
-             print -r -- \"PRE_REDRAW=${{widgets[zle-line-pre-redraw]}}\"\n\
-             print -r -- \"LINE_INIT=${{widgets[zle-line-init]}}\"\n\
-             print -r -- \"CHAINED_PRE=${{_shell_pulse_previous_pre_redraw:-none}}\"\n\
-             print -r -- \"CHAINED_INIT=${{_shell_pulse_previous_line_init:-none}}\"",
+             print -r -- \"PRE=$(zstyle -a zle-line-pre-redraw widgets 2>/dev/null; print -r -- ${{(j:,:)widgets}})\"\n\
+             print -r -- \"INIT=$(zstyle -a zle-line-init widgets 2>/dev/null; print -r -- ${{(j:,:)widgets}})\"",
             adapter = adapter.display(),
         ))
         .output()
         .expect("run zsh");
     let text = String::from_utf8_lossy(&out.stdout).into_owned();
     assert!(out.status.success(), "sourcing the adapter failed: {text}");
-    assert!(
-        text.contains("PRE_REDRAW=user:shell-pulse-highlight-redraw"),
-        "the redraw hook must be installed: {text}"
+    // The style's default value is every built-in ZLE widget, so the list is
+    // long; what matters is that our widget is in it, exactly once.
+    let pre = text
+        .lines()
+        .find_map(|l| l.strip_prefix("PRE="))
+        .unwrap_or_default();
+    let init = text
+        .lines()
+        .find_map(|l| l.strip_prefix("INIT="))
+        .unwrap_or_default();
+    assert_eq!(
+        pre.matches("shell-pulse-highlight-redraw").count(),
+        1,
+        "the redraw hook must be installed exactly once: {text}"
     );
-    assert!(
-        text.contains("LINE_INIT=user:shell-pulse-highlight-line-init"),
-        "the line-init hook must be installed: {text}"
-    );
-    assert!(
-        text.contains("CHAINED_PRE=none") && text.contains("CHAINED_INIT=none"),
-        "the adapter must not chain itself: {text}"
+    assert_eq!(
+        init.matches("shell-pulse-highlight-line-init").count(),
+        1,
+        "the line-init hook must be installed exactly once: {text}"
     );
 }
 

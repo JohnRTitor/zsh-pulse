@@ -19,7 +19,7 @@
         };
 
         devShells.default = pkgs.mkShell {
-          packages = [ pkgs.cargo pkgs.rustc pkgs.zsh pkgs.clang ];
+          packages = [ pkgs.cargo pkgs.rustc pkgs.clippy pkgs.zsh pkgs.clang ];
         };
       });
 }
