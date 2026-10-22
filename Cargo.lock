@@ -10,6 +10,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "highlight"
+version = "0.1.0"
+dependencies = [
+ "lexer",
+]
+
+[[package]]
+name = "lexer"
+version = "0.1.0"
+
+[[package]]
 name = "zsh-abi"
 version = "0.1.0"
 
@@ -18,5 +29,7 @@ name = "zsh-module"
 version = "0.1.0"
 dependencies = [
  "engine",
+ "highlight",
+ "lexer",
  "zsh-abi",
 ]

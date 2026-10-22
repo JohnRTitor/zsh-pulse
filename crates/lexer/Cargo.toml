@@ -1,0 +1,13 @@
+[package]
+name = "lexer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+# Deliberately dependency-free: this crate is pure Rust with no zsh types,
+# no FFI and no unsafe, so it can be unit-tested and benchmarked on its own.
+[dependencies]
+
+[lints.rust]
+missing_debug_implementations = "warn"

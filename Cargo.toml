@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/zsh-abi", "crates/zsh-module", "crates/engine"]
+members = ["crates/zsh-abi", "crates/zsh-module", "crates/engine", "crates/lexer", "crates/highlight"]
 resolver = "3"
 
 [workspace.package]
@@ -11,6 +11,8 @@ rust-version = "1.85"
 [workspace.dependencies]
 zsh-abi = { path = "crates/zsh-abi" }
 engine = { path = "crates/engine" }
+lexer = { path = "crates/lexer" }
+highlight = { path = "crates/highlight" }
 
 [profile.release]
 opt-level = 3
