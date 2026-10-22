@@ -13,6 +13,23 @@
 //!
 //! Run with: `cargo test -p zsh-module --test zsh_pty`
 //!
+//! # The colours
+//!
+//! The plugin publishes these attributes (the table is in
+//! `crates/zsh-module/src/region.rs`):
+//!
+//! | what | attribute | the bytes zsh writes |
+//! |---|---|---|
+//! | a command the shell knows | `fg=green` | `ESC [ 3 2 m` |
+//! | a command the shell does not know | `fg=red,bold` | `ESC [ 1 m` `ESC [ 3 1 m` |
+//! | a command-line option (`-l`, `--amend`) | `fg=cyan` | `ESC [ 3 6 m` |
+//! | a word naming an existing directory | `fg=magenta,underline` | `ESC [ 4 m` `ESC [ 3 5 m` |
+//! | a word naming an existing file | `fg=magenta` | `ESC [ 3 5 m` |
+//!
+//! zsh writes the **attributes first and the foreground colour second**,
+//! and the bytes themselves come from the terminal's capabilities — so
+//! they are measured here, not assumed. See [`Palette`].
+//!
 //! # Skipping
 //!
 //! The harness needs three things a machine may not have: a `zsh` with the
@@ -108,32 +125,156 @@ const MODULE_LOADED: &str = "SP_MODULE_LOADED";
 ///
 /// An ordinary argument is not highlighted, so this text is what proves
 /// that the highlight stops at the end of the command.
+///
+/// It is also the only part of the line that reaches the terminal as
+/// *contiguous* bytes: zsh writes the attribute of a styled word before
+/// every one of its characters, so a styled word cannot be searched for
+/// in the capture.
 const ARGUMENT: &str = "SPARGXYZ";
 
-/// The bytes zsh writes for the `fg=cyan,bold` region of the command word.
+/// The argument typed after the command word of the *second* line.
+///
+/// A different word on purpose. With the same marker on both lines the
+/// harness's wait would be satisfied by the first line alone — the
+/// marker appears once as the drawn argument and once as the output of
+/// the `echo` — and the second line would never have to be drawn.
+const SECOND_ARGUMENT: &str = "SPARGZULU";
+
+/// The bytes zsh writes for the attributes shell-pulse publishes.
 ///
 /// **Measured, not assumed.** The bytes zsh writes for an attribute come
 /// from the terminal's capabilities, so the exact sequence depends on
-/// `TERM`. On the terminals this test accepts (see [`colour_terminal`])
-/// those capabilities are the standard xterm ones, and zsh writes the
-/// attributes first and the foreground colour second: SGR 1 is bold and
-/// SGR 36 is cyan, so `fg=cyan,bold` becomes `ESC [ 1 m` `ESC [ 3 6 m`.
+/// `TERM`. zsh's prompt escapes are the same machinery the line editor
+/// uses to turn an attribute into terminal bytes, so they say what the
+/// terminal supports: `%B` is the bold sequence, `%U` the underline one,
+/// `%F{green}` the foreground-colour one and `%f` the way back to the
+/// default foreground.
 ///
-/// The `zsh_pty` test binary dumps the raw bytes it captured, so this
-/// constant can be checked against reality rather than against a guess.
-const CYAN_BOLD: &[u8] = b"\x1b[1m\x1b[36m";
-
-/// The bytes zsh writes for the cyan foreground colour on its own.
-const CYAN: &[u8] = b"\x1b[36m";
-
-/// The bytes zsh writes to put the foreground colour back to the default.
+/// zsh writes the **attributes first and the foreground colour second**,
+/// so `fg=red,bold` becomes `ESC [ 1 m` `ESC [ 3 1 m` and
+/// `fg=magenta,underline` becomes `ESC [ 4 m` `ESC [ 3 5 m`.
 ///
-/// This is what closes a highlighted region. SGR 39 is "default
-/// foreground", and zsh writes it when it leaves the region — on every
-/// terminal this test accepts. (Some terminals also get a full reset,
-/// `ESC [ 0 m`, but the `linux` terminfo does not, so this sequence is
-/// the one that can be relied on.)
-const DEFAULT_FOREGROUND: &[u8] = b"\x1b[39m";
+/// The `zsh_pty` test binary dumps the raw bytes it captured, so these
+/// can be checked against reality rather than against a guess.
+struct Palette {
+    /// SGR 1: bold.
+    bold: Vec<u8>,
+    /// SGR 4: underline.
+    underline: Vec<u8>,
+    /// SGR 31: the red foreground.
+    red: Vec<u8>,
+    /// SGR 32: the green foreground.
+    green: Vec<u8>,
+    /// SGR 33: the yellow foreground.
+    yellow: Vec<u8>,
+    /// SGR 34: the blue foreground.
+    blue: Vec<u8>,
+    /// SGR 35: the magenta foreground.
+    magenta: Vec<u8>,
+    /// SGR 36: the cyan foreground.
+    cyan: Vec<u8>,
+    /// SGR 39: the default foreground — what closes a region.
+    ///
+    /// This is what closes a highlighted region. SGR 39 is "default
+    /// foreground", and zsh writes it when it leaves the region — on every
+    /// terminal this test accepts. (Some terminals also get a full reset,
+    /// `ESC [ 0 m`, but the `linux` terminfo does not, so this sequence is
+    /// the one that can be relied on.)
+    default_foreground: Vec<u8>,
+    /// The bytes for `fg=red,bold`: the attribute, then the colour.
+    red_bold: Vec<u8>,
+    /// The bytes for `fg=magenta,underline`: the attribute, then the colour.
+    magenta_underline: Vec<u8>,
+}
+
+impl Palette {
+    /// Measure the sequences zsh writes under `term`.
+    ///
+    /// Every sequence is asked of zsh itself, through the prompt escape
+    /// that stands for it. Nothing here is written down by hand: a
+    /// terminal that answers differently would answer differently here
+    /// too, and the assertions would follow it.
+    fn measure(term: &str) -> Palette {
+        let bold = prompt_escape(term, "%B");
+        let underline = prompt_escape(term, "%U");
+        let red = prompt_escape(term, "%F{red}");
+        let green = prompt_escape(term, "%F{green}");
+        let yellow = prompt_escape(term, "%F{yellow}");
+        let blue = prompt_escape(term, "%F{blue}");
+        let magenta = prompt_escape(term, "%F{magenta}");
+        let cyan = prompt_escape(term, "%F{cyan}");
+        let default_foreground = prompt_escape(term, "%f");
+        Palette {
+            // The attributes come first and the foreground colour second:
+            // this is the order zsh writes them in, and it is the order
+            // `fg=red,bold` and `fg=magenta,underline` are read in.
+            red_bold: [bold.as_slice(), red.as_slice()].concat(),
+            magenta_underline: [underline.as_slice(), magenta.as_slice()].concat(),
+            bold,
+            underline,
+            red,
+            green,
+            yellow,
+            blue,
+            magenta,
+            cyan,
+            default_foreground,
+        }
+    }
+
+    /// Whether the terminal answers with the standard xterm sequences.
+    ///
+    /// SGR 1 is bold, SGR 4 is underline, SGR 31, 32, 33, 34, 35 and 36
+    /// are red, green, yellow, blue, magenta and cyan, and SGR 39 is the
+    /// default foreground. The test pins `TERM` to a terminal with these
+    /// capabilities, so that the bytes it asserts on are the ones in the
+    /// table at the top of this file.
+    fn is_standard_xterm(&self) -> bool {
+        self.bold == b"\x1b[1m".as_slice()
+            && self.underline == b"\x1b[4m".as_slice()
+            && self.red == b"\x1b[31m".as_slice()
+            && self.green == b"\x1b[32m".as_slice()
+            && self.yellow == b"\x1b[33m".as_slice()
+            && self.blue == b"\x1b[34m".as_slice()
+            && self.magenta == b"\x1b[35m".as_slice()
+            && self.cyan == b"\x1b[36m".as_slice()
+            && self.default_foreground == b"\x1b[39m".as_slice()
+    }
+
+    /// Every sequence the plugin can write.
+    ///
+    /// The plugin's styles are a colour, an attribute, or both
+    /// (`crates/zsh-module/src/region.rs`), so "nothing was coloured" has
+    /// to be checked against all of them: the six colours it publishes,
+    /// the two attributes, and the two combinations. Checking only one of
+    /// them would let the others through.
+    fn every_sequence(&self) -> Vec<&[u8]> {
+        vec![
+            self.bold.as_slice(),
+            self.underline.as_slice(),
+            self.red.as_slice(),
+            self.green.as_slice(),
+            self.yellow.as_slice(),
+            self.blue.as_slice(),
+            self.magenta.as_slice(),
+            self.cyan.as_slice(),
+            self.red_bold.as_slice(),
+            self.magenta_underline.as_slice(),
+        ]
+    }
+}
+
+/// A terminal the assertions may be made about.
+///
+/// The `TERM` name and the bytes zsh writes for the plugin's attributes
+/// belong together: the bytes are measured from that terminal's
+/// capabilities, so they may only be used with that terminal.
+struct Terminal {
+    /// The `TERM` to run the pseudo-terminal under.
+    name: &'static str,
+    /// The bytes zsh writes for the attributes shell-pulse publishes.
+    palette: Palette,
+}
 
 /// The zsh harness that drives the pseudo-terminal.
 ///
@@ -229,7 +370,14 @@ done
 # looks exactly like one that works.
 typeset -i typed=0
 if (( ready )); then
-  typeset -a lines=("${(@s:\\n:)TYPED}")
+  # The text is split on *newlines*, with the `f` flag of the `(@)`
+  # parameter expansion flag.
+  #
+  # `${(@s:\\n:)TYPED}` would not do: inside double quotes `\\` is one
+  # backslash, so that expansion splits on the two characters `\` and `n`
+  # -- and a text without them is never split at all. The two command
+  # lines would have been typed as one.
+  typeset -a lines=("${(@f)TYPED}")
   integer li
   for li in {1..${#lines}}; do
     if (( li < ${#lines} )); then
@@ -270,26 +418,241 @@ impl Capture {
         self.bytes.windows(needle.len()).any(|window| window == needle)
     }
 
-    /// Every offset at which `needle` occurs.
-    fn occurrences(&self, needle: &[u8]) -> Vec<usize> {
-        self.bytes
-            .windows(needle.len())
-            .enumerate()
-            .filter(|(_, window)| *window == needle)
-            .map(|(at, _)| at)
-            .collect()
-    }
-
     /// The captured bytes, escaped so that a failure message is readable.
     fn dump(&self) -> String {
         String::from_utf8_lossy(&self.bytes).escape_debug().to_string()
     }
+
+    /// The screen the shell drew.
+    ///
+    /// The bytes on the wire are **not** the screen. zsh's line editor
+    /// draws the line in pieces and moves the cursor between them, so the
+    /// text of the line can be broken up — and even reordered — in the
+    /// byte stream: what the user sees may be `echo SPARGXYZ` while the
+    /// bytes are `SPARG` `ESC[10D` `echo` `ESC[6C` `X` `ESC[11D` `YZ`.
+    ///
+    /// Which of the two a test looks at decides whether it is reliable.
+    /// A search for a piece of text in the raw bytes finds it only when
+    /// zsh happened to draw it in one piece, which it does not always do:
+    /// the capture depends on how the input happened to reach the shell.
+    /// The screen is what the user sees, and it is the same every time.
+    fn screen(&self) -> Screen {
+        Screen::of(&self.bytes)
+    }
+
+    /// The positions in the screen at which `needle` appears.
+    ///
+    /// The positions are screen positions, so they can be handed to
+    /// [`Capture::attrs_at`].
+    fn screen_occurrences(&self, needle: &[u8]) -> Vec<usize> {
+        self.screen().occurrences(needle)
+    }
+
+    /// The positions of the characters that were drawn with these
+    /// attributes.
+    fn screen_positions_with(&self, attrs: Attrs) -> Vec<usize> {
+        self.screen().positions_with(attrs)
+    }
+
+    /// The attributes that were in force at a position of the screen.
+    ///
+    /// A region that was never closed would still be in force there.
+    fn attrs_at(&self, position: usize) -> Option<Attrs> {
+        self.screen().attrs_at(position)
+    }
+}
+
+/// The screen a capture drew.
+///
+/// Only what zsh's line editor actually does is modelled: it writes text
+/// at the cursor, moves the cursor, erases the line and sets the
+/// attributes. Everything else in the byte stream is skipped.
+struct Screen {
+    /// The characters on the line.
+    cells: Vec<Cell>,
+}
+
+/// One character of the screen.
+struct Cell {
+    /// The byte on the screen.
+    byte: u8,
+    /// The attributes that were in force when it was written.
+    attrs: Attrs,
+}
+
+/// The attributes in force on the screen.
+///
+/// The escape sequences zsh writes are the terminal's own, and they are
+/// parsed out of the bytes rather than written down: SGR 30 to 37 are the
+/// foreground colours, 1 is bold, 4 is underline, 22 and 24 turn those
+/// off again and 39 is the default foreground.
+///
+/// The *whole* set matters, not just the last sequence: `fg=red,bold` is
+/// written as `ESC [ 1 m` `ESC [ 3 1 m`, and a character is red **and**
+/// bold only because both were set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct Attrs {
+    /// The foreground colour, as the SGR number: 32 for green.
+    fg: Option<u8>,
+    /// Whether the text is bold.
+    bold: bool,
+    /// Whether the text is underlined.
+    underline: bool,
+}
+
+impl Attrs {
+    /// The attributes a run of escape sequences sets.
+    ///
+    /// The run is parsed the way the screen parses it, so the expected
+    /// attributes of a region and the attributes the screen saw are
+    /// computed the same way.
+    fn of(bytes: &[u8]) -> Attrs {
+        let mut attrs = Attrs::default();
+        let mut at = 0;
+        while at < bytes.len() {
+            if bytes.get(at) != Some(&0x1b) || bytes.get(at + 1) != Some(&b'[') {
+                at += 1;
+                continue;
+            }
+            let mut end = at + 2;
+            while end < bytes.len() && !(0x40..=0x7e).contains(&bytes[end]) {
+                end += 1;
+            }
+            if bytes.get(end) == Some(&b'm') {
+                attrs.apply(&bytes[at + 2..end]);
+            }
+            at = (end + 1).min(bytes.len());
+        }
+        attrs
+    }
+
+    /// Apply the parameters of one SGR sequence.
+    fn apply(&mut self, parameters: &[u8]) {
+        for part in parameters.split(|b| *b == b';') {
+            let number = std::str::from_utf8(part)
+                .ok()
+                .and_then(|s| s.trim().parse::<u8>().ok())
+                .unwrap_or(0);
+            match number {
+                0 => *self = Attrs::default(),
+                1 => self.bold = true,
+                22 => self.bold = false,
+                4 => self.underline = true,
+                24 => self.underline = false,
+                30..=37 => self.fg = Some(number),
+                39 => self.fg = None,
+                _ => {}
+            }
+        }
+    }
+}
+
+impl Screen {
+    /// Reconstruct the screen from the bytes of a capture.
+    fn of(bytes: &[u8]) -> Screen {
+        let mut screen = Screen { cells: Vec::new() };
+        let mut cursor = 0usize;
+        let mut attrs = Attrs::default();
+        let mut at = 0usize;
+        while at < bytes.len() {
+            let byte = bytes[at];
+            if byte == 0x1b {
+                // An escape sequence. The one that matters is the CSI
+                // sequence: `ESC [` and then parameters and a final byte.
+                let Some(&b'[') = bytes.get(at + 1) else {
+                    // Some other escape: skip the escape and the byte
+                    // after it.
+                    at += 2;
+                    continue;
+                };
+                let mut end = at + 2;
+                while end < bytes.len() && !(0x40..=0x7e).contains(&bytes[end]) {
+                    end += 1;
+                }
+                let final_byte = bytes.get(end).copied();
+                let parameters = &bytes[at + 2..end.min(bytes.len())];
+                match final_byte {
+                    Some(b'm') => attrs.apply(parameters),
+                    Some(b'C') => cursor += count(parameters, 1),
+                    Some(b'D') => cursor = cursor.saturating_sub(count(parameters, 1)),
+                    Some(b'K') | Some(b'J') => {
+                        // Erase from the cursor to the end of the line.
+                        screen.cells.truncate(cursor.min(screen.cells.len()));
+                    }
+                    _ => {}
+                }
+                at = (end + 1).min(bytes.len());
+                continue;
+            }
+            if byte >= 0x20 {
+                let cell = Cell { byte, attrs };
+                if cursor < screen.cells.len() {
+                    screen.cells[cursor] = cell;
+                } else {
+                    screen.cells.push(cell);
+                }
+                cursor += 1;
+            }
+            at += 1;
+        }
+        screen
+    }
+
+    /// The positions at which `needle` appears on the screen.
+    fn occurrences(&self, needle: &[u8]) -> Vec<usize> {
+        if needle.is_empty() || needle.len() > self.cells.len() {
+            return Vec::new();
+        }
+        self.cells
+            .windows(needle.len())
+            .enumerate()
+            .filter(|(_, window)| window.iter().map(|c| c.byte).eq(needle.iter().copied()))
+            .map(|(at, _)| at)
+            .collect()
+    }
+
+    /// The positions of the characters drawn with these attributes.
+    fn positions_with(&self, attrs: Attrs) -> Vec<usize> {
+        self.cells
+            .iter()
+            .enumerate()
+            .filter(|(_, cell)| cell.attrs == attrs)
+            .map(|(at, _)| at)
+            .collect()
+    }
+
+    /// The attributes that were in force at a position of the screen.
+    fn attrs_at(&self, position: usize) -> Option<Attrs> {
+        self.cells.get(position).map(|cell| cell.attrs)
+    }
+}
+
+/// The number a cursor-motion sequence moves by.
+///
+/// The sequence is `ESC [ <digits> <letter>`; a sequence with no digits
+/// moves by one.
+fn count(parameters: &[u8], default: usize) -> usize {
+    let digits: Vec<u8> = parameters
+        .iter()
+        .copied()
+        .take_while(|b| b.is_ascii_digit())
+        .collect();
+    if digits.is_empty() {
+        return default;
+    }
+    std::str::from_utf8(&digits)
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(default)
 }
 
 /// A scenario to run under the pseudo-terminal.
 struct Scenario {
     /// The text typed into the line editor.
-    typed: &'static str,
+    ///
+    /// A `String` and not a `&'static str`: a scenario may have to type
+    /// a path that is only known when the test runs.
+    typed: String,
     /// The bytes the harness waits for after typing.
     wait_for: &'static [u8],
     /// Whether the shell under the pty loads the module.
@@ -351,6 +714,18 @@ fn write_child_rc(dir: &Path, load_module: bool) {
     rc.push_str(&format!("PS1='{PROMPT}'\n"));
     rc.push_str("RPROMPT=\n");
     rc.push_str("PROMPT_EOL_MARK=''\n");
+    // The size of the terminal.
+    //
+    // The pseudo-terminal the harness opens has no size of its own: the
+    // harness runs with its output on a pipe, so there is no terminal to
+    // copy the size from. zsh falls back to the terminfo default, so this
+    // usually changes nothing — but the screen the test reconstructs is
+    // the screen the line was drawn for, and that should not depend on
+    // what the fallback happens to be.
+    //
+    // The child sets the size itself: its terminal *is* the
+    // pseudo-terminal.
+    rc.push_str("stty rows 24 cols 80 2>/dev/null\n");
     if load_module {
         // The adapter looks for the module here, exactly as a user who
         // ran `bench/install.sh` would have it.
@@ -399,7 +774,7 @@ fn capture(scenario: &Scenario, term: &str, label: &str) -> Result<Capture, Stri
         .env("SP_READY_FILE", &ready)
         .env("SP_DONE_FILE", &done)
         .env("SP_DONE_COUNT", scenario.count.to_string())
-        .env("SP_TYPE", scenario.typed)
+        .env("SP_TYPE", &scenario.typed)
         .env("SP_OUT", &out)
         .env("SP_TIMEOUT", "10")
         .env("ZDOTDIR", &rc_dir)
@@ -463,16 +838,21 @@ fn prompt_escape(term: &str, escape: &str) -> Vec<u8> {
     out.stdout
 }
 
-/// The `TERM` to run the pseudo-terminal under.
+/// The `TERM` to run the pseudo-terminal under, and the bytes it produces.
 ///
 /// The bytes zsh writes for an attribute come from the terminal's
 /// capabilities, so the exact sequence depends on `TERM`. The test pins
-/// `TERM` to a terminal whose capabilities are the standard xterm ones and
-/// checks that with zsh itself before using it: `%B` is the bold sequence
-/// and `%F{cyan}` the foreground-colour one. Asserting on bytes this test
-/// did not measure would be a guess, and a terminal that answers
-/// differently would make the guess wrong.
-fn colour_terminal() -> Option<&'static str> {
+/// `TERM` to a terminal whose capabilities are the standard xterm ones
+/// and checks that with zsh itself before using it: `%B` is the bold
+/// sequence, `%U` the underline one and `%F{cyan}` the foreground-colour
+/// one. Asserting on bytes this test did not measure would be a guess,
+/// and a terminal that answers differently would make the guess wrong.
+///
+/// Every sequence an assertion in this file uses is checked, not only the
+/// two the first version of this test needed: a terminal that answers
+/// `cyan` correctly but `magenta` differently would make the later
+/// assertions wrong.
+fn colour_terminal() -> Option<Terminal> {
     const CANDIDATES: &[&str] = &[
         "xterm-256color",
         "xterm",
@@ -480,8 +860,11 @@ fn colour_terminal() -> Option<&'static str> {
         "linux",
         "xterm-kitty",
     ];
-    CANDIDATES.iter().copied().find(|term| {
-        prompt_escape(term, "%B") == b"\x1b[1m" && prompt_escape(term, "%F{cyan}") == b"\x1b[36m"
+    CANDIDATES.iter().copied().find_map(|name| {
+        let palette = Palette::measure(name);
+        palette
+            .is_standard_xterm()
+            .then_some(Terminal { name, palette })
     })
 }
 
@@ -491,19 +874,19 @@ fn the_typed_command_is_highlighted_on_the_terminal() {
     let Some(term) = colour_terminal() else {
         skip(
             "no terminal type with the standard xterm colour capabilities \
-             was found, so the bytes zsh writes for `fg=cyan,bold` cannot be known \
+             was found, so the bytes zsh writes for `fg=green` cannot be known \
              in advance and asserting on them would be a guess.",
         );
         return;
     };
     let capture = match capture(
         &Scenario {
-            typed: "echo SPARGXYZ",
+            typed: "echo SPARGXYZ".to_string(),
             wait_for: ARGUMENT.as_bytes(),
             load_module: true,
             count: 1,
         },
-        term,
+        term.name,
         "highlighted",
     ) {
         Ok(capture) => capture,
@@ -522,11 +905,14 @@ fn the_typed_command_is_highlighted_on_the_terminal() {
         capture.dump()
     );
 
+    // The command word is `fg=green`: the shell knows `echo`, so the
+    // plugin paints it green.
     assert!(
-        capture.contains(CYAN_BOLD),
-        "the cyan+bold region of the command word never reached the terminal.\n\
-         expected the bytes {CYAN_BOLD:?} somewhere in the terminal output.\n\
+        capture.contains(&term.palette.green),
+        "the green region of the command word never reached the terminal.\n\
+         expected the bytes {:?} somewhere in the terminal output.\n\
          harness: {}\ncaptured {} bytes:\n{}",
+        term.palette.green,
         capture.status,
         capture.bytes.len(),
         capture.dump()
@@ -535,14 +921,15 @@ fn the_typed_command_is_highlighted_on_the_terminal() {
     // The region has to be closed again, or the rest of the line would be
     // drawn in the command's colour.
     assert!(
-        capture.contains(DEFAULT_FOREGROUND),
+        capture.contains(&term.palette.default_foreground),
         "the highlighted region was never closed: expected the bytes \
-         {DEFAULT_FOREGROUND:?}.\n{}",
+         {:?}.\n{}",
+        term.palette.default_foreground,
         capture.dump()
     );
 
     // The argument was typed and drawn.
-    let drawn = capture.occurrences(ARGUMENT.as_bytes());
+    let drawn = capture.screen_occurrences(ARGUMENT.as_bytes());
     assert!(
         !drawn.is_empty(),
         "the argument {ARGUMENT} was never drawn, so the line was not edited \
@@ -552,12 +939,12 @@ fn the_typed_command_is_highlighted_on_the_terminal() {
 
     // The highlight stops at the end of the command word: an ordinary
     // argument is not styled, so the bytes in front of the argument cannot
-    // be the cyan sequence.
+    // be the green sequence.
     for at in drawn {
-        let before = &capture.bytes[at.saturating_sub(CYAN_BOLD.len())..at];
+        let before = &capture.bytes[at.saturating_sub(term.palette.green.len())..at];
         assert_ne!(
             before,
-            CYAN_BOLD,
+            term.palette.green.as_slice(),
             "the argument {ARGUMENT} was drawn inside the highlighted region: \
              an ordinary argument must not be styled.\n{}",
             capture.dump()
@@ -570,19 +957,19 @@ fn an_empty_line_is_not_highlighted() {
     require_zsh_pty!();
     let Some(term) = colour_terminal() else {
         skip(
-            "no terminal type with the standard xterm colour \
+            "no terminal type with the standard xterm \
              capabilities was found, so there is nothing to compare against.",
         );
         return;
     };
     let capture = match capture(
         &Scenario {
-            typed: "",
+            typed: String::new(),
             wait_for: PROMPT.as_bytes(),
             load_module: true,
             count: 1,
         },
-        term,
+        term.name,
         "empty",
     ) {
         Ok(capture) => capture,
@@ -599,13 +986,20 @@ fn an_empty_line_is_not_highlighted() {
         "the module did not load in the shell under the pty.\n{}",
         capture.dump()
     );
-    assert!(
-        !capture.contains(CYAN),
-        "an empty line has no styled region, so nothing may be drawn in \
-         colour.\ncaptured {} bytes:\n{}",
-        capture.bytes.len(),
-        capture.dump()
-    );
+    // Not one of the sequences the plugin can write may be there: the
+    // plugin publishes six colours and two attributes, and an empty line
+    // has none of them. Checking a single colour would let the others
+    // through.
+    for sequence in term.palette.every_sequence() {
+        assert!(
+            !capture.contains(sequence),
+            "an empty line has no styled region, so nothing may be drawn in \
+             colour, but the bytes {sequence:?} are in the terminal output.\n\
+             captured {} bytes:\n{}",
+            capture.bytes.len(),
+            capture.dump()
+        );
+    }
 }
 
 /// The highlighting has to survive a second command line.
@@ -620,19 +1014,24 @@ fn the_highlighting_survives_a_second_command_line() {
     let Some(term) = colour_terminal() else {
         skip(
             "no terminal type with the standard xterm colour capabilities \
-             was found, so the bytes zsh writes for `fg=cyan,bold` cannot be known \
+             was found, so the bytes zsh writes for `fg=green` cannot be known \
              in advance and asserting on them would be a guess.",
         );
         return;
     };
     let capture = match capture(
         &Scenario {
-            typed: "echo SPARGXYZ\necho SPARGXYZ",
-            wait_for: ARGUMENT.as_bytes(),
+            // Two *different* markers, one per line. With the same marker
+            // on both lines the wait would be satisfied by the first line
+            // alone: `SPARGXYZ` appears once as the drawn argument and
+            // once as the output of the `echo`, so the second line would
+            // never have to be drawn at all.
+            typed: "echo SPARGXYZ\necho SPARGZULU".to_string(),
+            wait_for: SECOND_ARGUMENT.as_bytes(),
             load_module: true,
-            count: 2,
+            count: 1,
         },
-        term,
+        term.name,
         "two-lines",
     ) {
         Ok(capture) => capture,
@@ -648,14 +1047,51 @@ fn the_highlighting_survives_a_second_command_line() {
         capture.dump()
     );
 
-    // The command word of *each* line must have been highlighted: the first
-    // one proves the hook works, the second proves it still works after the
-    // line was submitted and zsh emptied the display array.
-    let cyan = capture.occurrences(CYAN_BOLD).len();
+    // Both lines were drawn.
+    let first = capture.screen_occurrences(ARGUMENT.as_bytes());
+    let second = capture.screen_occurrences(SECOND_ARGUMENT.as_bytes());
     assert!(
-        cyan >= 2,
-        "the command word was highlighted {cyan} time(s), expected at least two — \
-         one per command line.\nharness: {}\ncaptured {} bytes:\n{}",
+        !first.is_empty(),
+        "the argument {ARGUMENT} of the first line was never drawn, so the \
+         first line was not edited at all.\n{}",
+        capture.dump()
+    );
+    assert!(
+        !second.is_empty(),
+        "the argument {SECOND_ARGUMENT} of the second line was never drawn, \
+         so the second line was not edited at all.\n{}",
+        capture.dump()
+    );
+
+    // The command word of *each* line must have been highlighted: the
+    // first one proves the hook works, the second proves it still works
+    // after the line was submitted and zsh emptied the display array.
+    //
+    // The green of the first line is drawn before that line's argument;
+    // the green of the second line is drawn after it — between the two
+    // arguments there is only the output of the first `echo` and the
+    // prompt of the second line, and neither of them is coloured.
+    let green = capture.screen_positions_with(Attrs::of(&term.palette.green));
+    assert!(
+        !green.is_empty(),
+        "the command word was never highlighted in green.\n{}",
+        capture.dump()
+    );
+    let first_at = first[0];
+    let second_at = second[0];
+    assert!(
+        green.iter().any(|at| *at < first_at),
+        "the command word of the *first* line was never highlighted in green.\n\
+         harness: {}\ncaptured {} bytes:\n{}",
+        capture.status,
+        capture.bytes.len(),
+        capture.dump()
+    );
+    assert!(
+        green.iter().any(|at| *at > first_at && *at < second_at),
+        "the command word of the *second* line was never highlighted in \
+         green: every green is outside the second line.\n\
+         harness: {}\ncaptured {} bytes:\n{}",
         capture.status,
         capture.bytes.len(),
         capture.dump()
@@ -667,19 +1103,19 @@ fn without_the_module_nothing_is_highlighted() {
     require_zsh_pty!();
     let Some(term) = colour_terminal() else {
         skip(
-            "no terminal type with the standard xterm colour \
+            "no terminal type with the standard xterm \
              capabilities was found, so there is nothing to compare against.",
         );
         return;
     };
     let capture = match capture(
         &Scenario {
-            typed: "echo SPARGXYZ",
+            typed: "echo SPARGXYZ".to_string(),
             wait_for: ARGUMENT.as_bytes(),
             load_module: false,
             count: 1,
         },
-        term,
+        term.name,
         "no-module",
     ) {
         Ok(capture) => capture,
@@ -698,16 +1134,399 @@ fn without_the_module_nothing_is_highlighted() {
         capture.dump()
     );
     assert!(
-        capture.contains(ARGUMENT.as_bytes()),
+        !capture.screen_occurrences(ARGUMENT.as_bytes()).is_empty(),
         "the line was never drawn, so there is nothing to compare against.\n{}",
         capture.dump()
     );
+    // Not one of the sequences the plugin can write may be there. zsh
+    // itself must not colour the command line; if it does, the other
+    // tests in this file cannot tell shell-pulse's highlighting apart
+    // from zsh's own.
+    for sequence in term.palette.every_sequence() {
+        assert!(
+            !capture.contains(sequence),
+            "zsh itself must not colour the command line; if it does, the \
+             other tests in this file cannot tell shell-pulse's highlighting \
+             apart from zsh's own, but the bytes {sequence:?} are in the \
+             terminal output.\ncaptured {} bytes:\n{}",
+            capture.bytes.len(),
+            capture.dump()
+        );
+    }
+}
+
+/// A command the shell knows is green.
+///
+/// `echo` is a builtin, so the shell knows it and the plugin paints the
+/// command word green.
+///
+/// The prefixes of the word are a different matter: while the word is
+/// being typed the shell is asked about `e`, `ec` and `ech`, none of
+/// which it knows, so those are red. The *last* red therefore belongs to
+/// a prefix and has to come before the green of the finished word — a
+/// plugin that painted `echo` red would put a red after the green.
+#[test]
+fn a_known_command_is_green_on_the_terminal() {
+    require_zsh_pty!();
+    let Some(term) = colour_terminal() else {
+        skip(
+            "no terminal type with the standard xterm colour capabilities \
+             was found, so the bytes zsh writes for `fg=green` cannot be known \
+             in advance and asserting on them would be a guess.",
+        );
+        return;
+    };
+    let capture = match capture(
+        &Scenario {
+            typed: "echo SPARGXYZ".to_string(),
+            wait_for: ARGUMENT.as_bytes(),
+            load_module: true,
+            count: 1,
+        },
+        term.name,
+        "known-command",
+    ) {
+        Ok(capture) => capture,
+        Err(reason) => {
+            skip(&reason);
+            return;
+        }
+    };
+
+    // The module really loaded: without it the whole scenario would be
+    // testing a shell that never had the plugin in it.
     assert!(
-        !capture.contains(CYAN),
-        "zsh itself must not colour the command line; if it does, the other \
-         test in this file cannot tell shell-pulse's highlighting apart from \
-         zsh's own.\ncaptured {} bytes:\n{}",
+        capture.contains(MODULE_LOADED.as_bytes()),
+        "the module did not load in the shell under the pty, so nothing could \
+         have been highlighted.\n{}",
+        capture.dump()
+    );
+
+    // The green reached the terminal.
+    let green = capture.screen_positions_with(Attrs::of(&term.palette.green));
+    assert!(
+        !green.is_empty(),
+        "the command word was not painted green: the bytes {:?} never \
+         reached the terminal.\n\
+         harness: {}\ncaptured {} bytes:\n{}",
+        term.palette.green,
+        capture.status,
         capture.bytes.len(),
         capture.dump()
     );
+
+    // The *finished* word is the green one. Every red the plugin painted
+    // belongs to a prefix the shell did not know yet, and those are drawn
+    // first.
+    let red = capture.screen_positions_with(Attrs::of(&term.palette.red_bold));
+    let last_red = red.last().copied();
+    let last_green = *green.last().expect("the green was checked above");
+    assert!(
+        last_red.is_none_or(|last| last < last_green),
+        "the command word was painted red although the shell knows `echo`: \
+         the last red is at offset {last_red:?} and the last green at offset \
+         {last_green}.\n{}",
+        capture.dump()
+    );
+
+    // The green region was closed before the argument was drawn: the
+    // attributes in force at the argument are the default ones.
+    let drawn = capture.screen_occurrences(ARGUMENT.as_bytes());
+    assert!(
+        !drawn.is_empty(),
+        "the argument {ARGUMENT} was never drawn, so the line was not edited \
+         at all.\n{}",
+        capture.dump()
+    );
+    for at in drawn {
+        assert_eq!(
+            capture.attrs_at(at),
+            Some(Attrs::of(&term.palette.default_foreground)),
+            "the command word was still in green when the argument was \
+             drawn, so the region was never closed.\n{}",
+            capture.dump()
+        );
+    }
+}
+
+/// A command the shell does not know is red and bold.
+///
+/// The word `nosuchcommandxyz` is not a builtin, not a command on `$PATH`
+/// and not an alias, so the plugin paints it red and bold. Its prefixes
+/// are unknown too — `n`, `no`, `nos` — so the whole word is red and
+/// *no* green may appear: a green would mean the plugin thought the
+/// shell knew the word.
+#[test]
+fn an_unknown_command_is_red_and_bold_on_the_terminal() {
+    require_zsh_pty!();
+    let Some(term) = colour_terminal() else {
+        skip(
+            "no terminal type with the standard xterm colour capabilities \
+             was found, so the bytes zsh writes for `fg=red,bold` cannot be \
+             known in advance and asserting on them would be a guess.",
+        );
+        return;
+    };
+    let capture = match capture(
+        &Scenario {
+            typed: "nosuchcommandxyz SPARGXYZ".to_string(),
+            wait_for: ARGUMENT.as_bytes(),
+            load_module: true,
+            count: 1,
+        },
+        term.name,
+        "unknown-command",
+    ) {
+        Ok(capture) => capture,
+        Err(reason) => {
+            skip(&reason);
+            return;
+        }
+    };
+
+    // The module really loaded: without it the whole scenario would be
+    // testing a shell that never had the plugin in it.
+    assert!(
+        capture.contains(MODULE_LOADED.as_bytes()),
+        "the module did not load in the shell under the pty, so nothing could \
+         have been highlighted.\n{}",
+        capture.dump()
+    );
+
+    // The red and bold reached the terminal.
+    assert!(
+        capture.contains(&term.palette.red_bold),
+        "the red+bold region of the unknown command never reached the \
+         terminal.\nexpected the bytes {:?} somewhere in the terminal \
+         output.\nharness: {}\ncaptured {} bytes:\n{}",
+        term.palette.red_bold,
+        capture.status,
+        capture.bytes.len(),
+        capture.dump()
+    );
+
+    // No green at all: the shell does not know this word, so nothing may
+    // be painted green. This is the check that keeps the test honest — a
+    // plugin that painted every word green would fail here.
+    assert!(
+        !capture.contains(&term.palette.green),
+        "the unknown command was painted green: the bytes {:?} are in the \
+         terminal output, but the shell does not know `nosuchcommandxyz`.\n\
+         harness: {}\ncaptured {} bytes:\n{}",
+        term.palette.green,
+        capture.status,
+        capture.bytes.len(),
+        capture.dump()
+    );
+
+    // The red region was closed before the argument was drawn: the
+    // attributes in force at the argument are the default ones.
+    let drawn = capture.screen_occurrences(ARGUMENT.as_bytes());
+    assert!(
+        !drawn.is_empty(),
+        "the argument {ARGUMENT} was never drawn, so the line was not edited \
+         at all.\n{}",
+        capture.dump()
+    );
+    for at in drawn {
+        assert_eq!(
+            capture.attrs_at(at),
+            Some(Attrs::of(&term.palette.default_foreground)),
+            "the command word was still in red when the argument was drawn, \
+             so the region was never closed.\n{}",
+            capture.dump()
+        );
+    }
+}
+
+/// A command-line option is cyan.
+///
+/// `ls` is a command the shell knows, so the command word is green; the
+/// option `--color` that follows it is cyan. The option is further right
+/// on the line than the command word, so its cyan has to come after the
+/// green — and its region has to be closed before the argument is drawn.
+#[test]
+fn an_option_is_highlighted_on_the_terminal() {
+    require_zsh_pty!();
+    let Some(term) = colour_terminal() else {
+        skip(
+            "no terminal type with the standard xterm colour capabilities \
+             was found, so the bytes zsh writes for `fg=cyan` cannot be known \
+             in advance and asserting on them would be a guess.",
+        );
+        return;
+    };
+    let capture = match capture(
+        &Scenario {
+            typed: "ls --color SPARGXYZ".to_string(),
+            wait_for: ARGUMENT.as_bytes(),
+            load_module: true,
+            count: 1,
+        },
+        term.name,
+        "option",
+    ) {
+        Ok(capture) => capture,
+        Err(reason) => {
+            skip(&reason);
+            return;
+        }
+    };
+
+    // The module really loaded: without it the whole scenario would be
+    // testing a shell that never had the plugin in it.
+    assert!(
+        capture.contains(MODULE_LOADED.as_bytes()),
+        "the module did not load in the shell under the pty, so nothing could \
+         have been highlighted.\n{}",
+        capture.dump()
+    );
+
+    // The cyan reached the terminal.
+    let cyan = capture.screen_positions_with(Attrs::of(&term.palette.cyan));
+    assert!(
+        !cyan.is_empty(),
+        "the option was not painted cyan: the bytes {:?} never reached the \
+         terminal.\nharness: {}\ncaptured {} bytes:\n{}",
+        term.palette.cyan,
+        capture.status,
+        capture.bytes.len(),
+        capture.dump()
+    );
+
+    // The command word comes first on the line, so the option's cyan has
+    // to come after the command word's green.
+    let green = capture.screen_positions_with(Attrs::of(&term.palette.green));
+    assert!(
+        !green.is_empty(),
+        "the command word `ls` was not painted green, so the order of the \
+         two regions cannot be checked.\n{}",
+        capture.dump()
+    );
+    assert!(
+        green[0] < cyan[0],
+        "the option was painted before the command word: the first green is \
+         at offset {} and the first cyan at offset {}.\n{}",
+        green[0],
+        cyan[0],
+        capture.dump()
+    );
+
+    // The option's region was closed before the argument was drawn: the
+    // attributes in force at the argument are the default ones.
+    let drawn = capture.screen_occurrences(ARGUMENT.as_bytes());
+    assert!(
+        !drawn.is_empty(),
+        "the argument {ARGUMENT} was never drawn, so the line was not edited \
+         at all.\n{}",
+        capture.dump()
+    );
+    for at in drawn {
+        assert_eq!(
+            capture.attrs_at(at),
+            Some(Attrs::of(&term.palette.default_foreground)),
+            "the option was still in cyan when the argument was drawn, so \
+             the region was never closed.\n{}",
+            capture.dump()
+        );
+    }
+}
+
+/// A word naming an existing directory is magenta and underlined.
+///
+/// The plugin looks the word up in the filesystem: a word that names an
+/// existing directory is magenta *and* underlined, so that it can be told
+/// apart from a plain file, which is magenta only.
+///
+/// The directory used here is `std::env::temp_dir()` — the same place the
+/// harness puts its own scratch directory, so it certainly exists.
+#[test]
+fn an_existing_directory_is_magenta_and_underlined_on_the_terminal() {
+    require_zsh_pty!();
+    let Some(term) = colour_terminal() else {
+        skip(
+            "no terminal type with the standard xterm colour capabilities \
+             was found, so the bytes zsh writes for `fg=magenta,underline` \
+             cannot be known in advance and asserting on them would be a \
+             guess.",
+        );
+        return;
+    };
+    let directory = std::env::temp_dir();
+    // A path with a space in it cannot be typed as one word, so the
+    // scenario would not be the one it claims to be.
+    if directory.display().to_string().contains(' ') {
+        skip(
+            "the temporary directory name contains a space, so it cannot be \
+             typed as a single word and the scenario would not test what it \
+             claims to test.",
+        );
+        return;
+    }
+    let capture = match capture(
+        &Scenario {
+            typed: format!("ls {} SPARGXYZ", directory.display()),
+            wait_for: ARGUMENT.as_bytes(),
+            load_module: true,
+            count: 1,
+        },
+        term.name,
+        "directory",
+    ) {
+        Ok(capture) => capture,
+        Err(reason) => {
+            skip(&reason);
+            return;
+        }
+    };
+
+    // The module really loaded: without it the whole scenario would be
+    // testing a shell that never had the plugin in it.
+    assert!(
+        capture.contains(MODULE_LOADED.as_bytes()),
+        "the module did not load in the shell under the pty, so nothing could \
+         have been highlighted.\n{}",
+        capture.dump()
+    );
+
+    // The magenta and the underline reached the terminal, in the order
+    // zsh writes them: the attribute first, the colour second.
+    assert!(
+        capture.contains(&term.palette.magenta_underline),
+        "the magenta+underline region of the directory never reached the \
+         terminal.\nexpected the bytes {:?} somewhere in the terminal \
+         output.\nharness: {}\ncaptured {} bytes:\n{}",
+        term.palette.magenta_underline,
+        capture.status,
+        capture.bytes.len(),
+        capture.dump()
+    );
+    assert!(
+        capture.contains(&term.palette.magenta),
+        "the magenta colour of the directory never reached the terminal.\n{}",
+        capture.dump()
+    );
+    assert!(
+        capture.contains(&term.palette.underline),
+        "the underline of the directory never reached the terminal.\n{}",
+        capture.dump()
+    );
+
+    // The argument was typed and drawn, outside the highlighted region.
+    let drawn = capture.screen_occurrences(ARGUMENT.as_bytes());
+    assert!(
+        !drawn.is_empty(),
+        "the argument {ARGUMENT} was never drawn, so the line was not edited \
+         at all.\n{}",
+        capture.dump()
+    );
+    for at in drawn {
+        assert_eq!(
+            capture.attrs_at(at),
+            Some(Attrs::of(&term.palette.default_foreground)),
+            "the directory was still underlined when the argument was drawn, \
+             so the region was never closed.\n{}",
+            capture.dump()
+        );
+    }
 }

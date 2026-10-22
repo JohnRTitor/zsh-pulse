@@ -333,13 +333,19 @@ fn the_highlighter_fills_region_highlight() {
     // The whole write path: read the line, highlight it, hand the result to
     // zsh. A global `region_highlight` stands in for the ZLE special
     // parameter, which only exists while a widget is running.
+    //
+    // The answer is given on the command line: the module only colours a
+    // command word the shell was asked about, so the call has to say that
+    // `echo` is a command the shell knows. Without the answer there would
+    // be no region at all, and the test would prove nothing about the
+    // write path.
     let (ok, out) = run_zsh(
         "typeset -ga region_highlight\n\
          region_highlight=()\n\
          WIDGET=test-widget\n\
          BUFFER='echo hi'\n\
          CURSOR=3\n\
-         shell-pulse-highlight --region-highlight\n\
+         shell-pulse-highlight --region-highlight --command-known=echo\n\
          print -r -- \"REGIONS=<${(j:,:)region_highlight}>\"",
         &[],
     );
@@ -349,11 +355,12 @@ fn the_highlighter_fills_region_highlight() {
     // The assertion is on the *whole* array, so a duplicate or a missing
     // region would fail it.
     assert!(
-        out.contains("REGIONS=<0 4 fg=cyan,bold memo=shell-pulse>"),
+        out.contains("REGIONS=<0 4 fg=green memo=shell-pulse>"),
         "unexpected regions: {out}"
     );
+    // `hi` is an ordinary argument: it is not highlighted at all.
     assert!(
-        !out.contains("fg=red") && !out.contains("fg=green"),
+        !out.contains("5 7"),
         "only the command should have been highlighted: {out}"
     );
 }
@@ -363,13 +370,17 @@ fn the_highlighter_reports_character_offsets_not_byte_offsets() {
     require_zsh!();
     // zsh's `region_highlight` uses the same units as `CURSOR`, which count
     // characters. A multi-byte character must not shift the offsets.
+    //
+    // Both command words of the line are answered for: `echo` and `grep`
+    // are two commands, and the second one is just as much a command as
+    // the first.
     let (ok, out) = run_zsh(
         "typeset -ga region_highlight\n\
          region_highlight=()\n\
          WIDGET=test-widget\n\
          BUFFER=$'echo \\u00e9 | grep x'\n\
          CURSOR=3\n\
-         shell-pulse-highlight --region-highlight\n\
+         shell-pulse-highlight --region-highlight --command-known=echo --command-known=grep\n\
          print -r -- \"REGIONS=<${(j:,:)region_highlight}>\"",
         &[],
     );
@@ -379,8 +390,8 @@ fn the_highlighter_reports_character_offsets_not_byte_offsets() {
     // would report 8.
     assert!(
         out.contains(
-            "REGIONS=<0 4 fg=cyan,bold memo=shell-pulse,7 8 fg=red memo=shell-pulse,\
-             9 13 fg=cyan,bold memo=shell-pulse>"
+            "REGIONS=<0 4 fg=green memo=shell-pulse,7 8 fg=red memo=shell-pulse,\
+             9 13 fg=green memo=shell-pulse>"
         ),
         "the offsets must be characters, not bytes: {out}"
     );
@@ -413,13 +424,17 @@ fn the_regions_are_not_published_unless_the_caller_asks() {
     // The regions are only published when the caller passes the flag. That
     // is what keeps the module from overwriting a global `region_highlight`
     // that the user or another plugin owns.
+    //
+    // The answer is given, so that there *is* a region the module would
+    // publish: without it, the test would pass even if the module
+    // published on every call.
     let (ok, out) = run_zsh(
         "typeset -ga region_highlight\n\
          region_highlight=(SENTINEL)\n\
          WIDGET=test-widget\n\
          BUFFER='echo hi'\n\
          CURSOR=3\n\
-         shell-pulse-highlight\n\
+         shell-pulse-highlight --command-known=echo\n\
          print -r -- \"REGIONS=${(j:,:)region_highlight}\"",
         &[],
     );
@@ -460,23 +475,26 @@ fn an_unchanged_line_is_not_pushed_again() {
 fn a_changed_line_is_pushed_again() {
     require_zsh!();
     // The counterpart of the test above: a real change must be pushed.
+    //
+    // The answer is given so that there *is* a region to push: a command
+    // word the module was not told about gets no region at all.
     let (ok, out) = run_zsh(
         "typeset -ga region_highlight\n\
          region_highlight=()\n\
          WIDGET=test-widget\n\
          BUFFER='echo hi'\n\
          CURSOR=3\n\
-         shell-pulse-highlight --region-highlight\n\
+         shell-pulse-highlight --region-highlight --command-known=echo\n\
          region_highlight=(SENTINEL)\n\
          BUFFER='echo there'\n\
          CURSOR=3\n\
-         shell-pulse-highlight --region-highlight\n\
+         shell-pulse-highlight --region-highlight --command-known=echo\n\
          print -r -- \"REGIONS=${(j:,:)region_highlight}\"",
         &[],
     );
     assert!(ok, "zsh exited badly: {out}");
     assert!(
-        out.contains("REGIONS=SENTINEL,0 4 fg=cyan,bold memo=shell-pulse"),
+        out.contains("REGIONS=SENTINEL,0 4 fg=green memo=shell-pulse"),
         "a changed line must be pushed again, keeping what another plugin \
          had: {out}"
     );
@@ -505,7 +523,7 @@ fn a_line_that_cannot_be_parsed_is_left_unhighlighted() {
     assert!(ok, "zsh exited badly: {out}");
     assert!(out.contains("SURVIVED"), "the shell did not finish: {out}");
     assert!(
-        !out.contains("fg=cyan"),
+        !out.contains("fg=green") && !out.contains("fg=red"),
         "an unparseable line must not keep the old highlights: {out}"
     );
 }
@@ -663,13 +681,13 @@ fn another_plugins_entries_survive_our_publish() {
          WIDGET=test-widget\n\
          BUFFER='echo hi'\n\
          CURSOR=3\n\
-         shell-pulse-highlight --region-highlight\n\
+         shell-pulse-highlight --region-highlight --command-known=echo\n\
          print -r -- \"REGIONS=<${(j:,:)region_highlight}>\"",
         &[],
     );
     assert!(ok, "zsh exited badly: {out}");
     assert!(
-        out.contains("REGIONS=<SENTINEL,0 4 fg=cyan,bold memo=shell-pulse>"),
+        out.contains("REGIONS=<SENTINEL,0 4 fg=green memo=shell-pulse>"),
         "another plugin's entry must survive our publish: {out}"
     );
 }
@@ -685,14 +703,641 @@ fn our_own_previous_entries_are_replaced_not_accumulated() {
          for w in git gitx gitxx; do\n\
              BUFFER=\"$w commit\"\n\
              CURSOR=3\n\
-             shell-pulse-highlight --region-highlight\n\
+             shell-pulse-highlight --region-highlight --command-known=$w\n\
          done\n\
          print -r -- \"REGIONS=<${(j:,:)region_highlight}>\"",
         &[],
     );
     assert!(ok, "zsh exited badly: {out}");
     assert!(
-        out.contains("REGIONS=<0 5 fg=cyan,bold memo=shell-pulse>"),
+        out.contains("REGIONS=<0 5 fg=green memo=shell-pulse>"),
         "only our latest entry must be published: {out}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// The command word: green when the shell knows it, red when it does not
+// ---------------------------------------------------------------------------
+
+/// The path of the adapter's widget file.
+///
+/// The widget file is what asks the shell what it knows about the command
+/// word, so the tests that need that answer have to source it.
+fn widgets_path() -> std::path::PathBuf {
+    adapter_path()
+        .parent()
+        .expect("the zsh directory")
+        .join("widgets.zsh")
+}
+
+/// Quote a string for zsh.
+///
+/// The strings go into the script as single-quoted words, so that `$`,
+/// `` ` `` and `\` mean nothing to the shell.
+fn zsh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
+/// The regions the module publishes for `buffer`.
+///
+/// The adapter is sourced and its redraw hook is called, so the shell is
+/// asked what it knows about the command word: the whole path, exactly as
+/// it runs in the user's shell.
+fn regions_for(buffer: &str) -> String {
+    let widgets = widgets_path();
+    let (ok, out) = run_zsh(
+        &format!(
+            "source {widgets}\n\
+             typeset -ga region_highlight\n\
+             region_highlight=()\n\
+             WIDGET=test-widget\n\
+             BUFFER={buffer}\n\
+             CURSOR=1\n\
+             shell-pulse-highlight-redraw\n\
+             print -r -- \"REGIONS=<${{(j:,:)region_highlight}}>\"",
+            widgets = widgets.display(),
+            buffer = zsh_quote(buffer),
+        ),
+        &[],
+    );
+    assert!(ok, "zsh exited badly: {out}");
+    out
+}
+
+/// The regions the module publishes for `buffer`, with the shell in `dir`.
+///
+/// A relative path is resolved against the shell's own `$PWD`, so a test
+/// about a file in a particular directory has to put the shell there.
+fn regions_for_in(dir: &std::path::Path, buffer: &str) -> String {
+    let widgets = widgets_path();
+    let (ok, out) = run_zsh(
+        &format!(
+            "cd {dir}\n\
+             source {widgets}\n\
+             typeset -ga region_highlight\n\
+             region_highlight=()\n\
+             WIDGET=test-widget\n\
+             BUFFER={buffer}\n\
+             CURSOR=1\n\
+             shell-pulse-highlight-redraw\n\
+             print -r -- \"REGIONS=<${{(j:,:)region_highlight}}>\"",
+            dir = zsh_quote(&dir.display().to_string()),
+            widgets = widgets.display(),
+            buffer = zsh_quote(buffer),
+        ),
+        &[],
+    );
+    assert!(ok, "zsh exited badly: {out}");
+    out
+}
+
+/// The regions the module publishes for `buffer`, with the shell's answer
+/// given on the command line.
+///
+/// This is the module on its own: the caller says what the shell knows
+/// about the command word, which is what the adapter does in the user's
+/// shell.
+fn regions_with_answer(buffer: &str, answer: &str) -> String {
+    let (ok, out) = run_zsh(
+        &format!(
+            "typeset -ga region_highlight\n\
+             region_highlight=()\n\
+             WIDGET=test-widget\n\
+             BUFFER={buffer}\n\
+             CURSOR=1\n\
+             shell-pulse-highlight --region-highlight {answer}\n\
+             print -r -- \"REGIONS=<${{(j:,:)region_highlight}}>\"",
+            buffer = zsh_quote(buffer),
+            answer = answer,
+        ),
+        &[],
+    );
+    assert!(ok, "zsh exited badly: {out}");
+    out
+}
+
+#[test]
+fn a_command_the_shell_knows_is_green() {
+    require_zsh!();
+    let out = regions_for("ls");
+    assert!(
+        out.contains("REGIONS=<0 2 fg=green memo=shell-pulse>"),
+        "a command the shell knows must be green: {out}"
+    );
+}
+
+#[test]
+fn the_shells_own_tables_decide_what_the_shell_knows() {
+    require_zsh!();
+    // The shell knows a word because of its own tables: an alias, a global
+    // alias, a function, a suffix alias, a builtin, a command on `$PATH` or
+    // a reserved word. Each of them is a different table, and each of them
+    // has to be consulted — a lookup that only asked about `$commands`
+    // would call an alias unknown.
+    //
+    // The names are made up, so they cannot be a command on `$PATH` by
+    // accident.
+    let widgets = widgets_path();
+    let (ok, out) = run_zsh(
+        &format!(
+            "source {widgets}\n\
+             alias sp-alias='echo'\n\
+             galiases[sp-galias]='echo'\n\
+             sp-function() {{ :; }}\n\
+             saliases[sp-suffix]='echo'\n\
+             typeset -ga region_highlight\n\
+             region_highlight=()\n\
+             WIDGET=test-widget\n\
+             for w in sp-alias sp-galias sp-function sp-suffix if; do\n\
+                 BUFFER=$w\n\
+                 CURSOR=1\n\
+                 region_highlight=()\n\
+                 shell-pulse-highlight-redraw\n\
+                 print -r -- \"WORD=$w REGIONS=<${{(j:,:)region_highlight}}>\"\n\
+             done",
+            widgets = widgets.display(),
+        ),
+        &[],
+    );
+    assert!(ok, "zsh exited badly: {out}");
+    for word in ["sp-alias", "sp-galias", "sp-function", "sp-suffix", "if"] {
+        let expected = format!("WORD={word} REGIONS=<0 {} fg=green memo=shell-pulse>", word.len());
+        assert!(
+            out.contains(&expected),
+            "the shell knows `{word}` through its own tables, so it must be \
+             green: {out}"
+        );
+    }
+}
+
+#[test]
+fn the_command_words_of_a_line_are_found_the_way_the_shell_finds_them() {
+    require_zsh!();
+    // The adapter walks the line the way the shell walks it. Every one of
+    // these lines has a different shape, and a word that is not a command
+    // must not be answered for: an answer about the wrong word is a
+    // *wrong colour*, not a missing one.
+    let cases: &[(&str, &[&str])] = &[
+        // The command words of the line, in order.
+        ("ls", &["ls"]),
+        ("ls | grep x", &["ls", "grep"]),
+        ("ls; grep x", &["ls", "grep"]),
+        ("ls && grep x", &["ls", "grep"]),
+        ("ls || grep x", &["ls", "grep"]),
+        ("ls |& grep x", &["ls", "grep"]),
+        ("FOO=bar ls", &["ls"]),
+        ("FOO+=bar ls", &["ls"]),
+        // A redirection and its target are not commands.
+        ("ls > out.txt grep", &["ls"]),
+        ("ls >out.txt grep", &["ls"]),
+        // A file-descriptor duplication writes to no file, so the number it
+        // duplicates is not a command either.
+        ("ls 2>&1 | grep x", &["ls", "grep"]),
+        // A redirection in front of the command does not hide it.
+        ("> out ls", &["ls"]),
+        // `&>` redirects both streams: it has a file, so the next word is
+        // its target and not a command.
+        ("ls &>all", &["ls"]),
+        // The command inside a substitution is a command.
+        ("echo $(ls)", &["echo", "ls"]),
+    ];
+    for (line, expected) in cases {
+        let out = regions_for(line);
+        for word in *expected {
+            let green = "fg=green memo=shell-pulse";
+            assert!(
+                out.contains(green),
+                "`{word}` of `{line}` is a command the shell knows, so it \
+                 must be green: {out}"
+            );
+        }
+        // Every command word is answered: the number of green regions is
+        // the number of command words.
+        let greens = out.matches("fg=green").count();
+        assert_eq!(
+            greens,
+            expected.len(),
+            "`{line}` has the command words {expected:?}, so it must have \
+             that many green regions: {out}"
+        );
+    }
+}
+
+#[test]
+fn a_command_the_shell_cannot_be_asked_about_is_left_alone() {
+    require_zsh!();
+    // The shell's tables are what say whether the shell knows a command.
+    // If they cannot be reached — `zsh/parameter` could not be loaded, say
+    // — the shell cannot answer, and the answer is *nothing*, not "no".
+    //
+    // An answer of "no" would paint every command word red, which says
+    // "the shell does not know this command" about a command the shell was
+    // never asked about.
+    let widgets = widgets_path();
+    let (ok, out) = run_zsh(
+        &format!(
+            "source {widgets}\n\
+             shell-pulse-highlight-can-ask() {{ return 1 }}\n\
+             typeset -ga region_highlight\n\
+             region_highlight=()\n\
+             WIDGET=test-widget\n\
+             BUFFER='definitelynotacommand'\n\
+             CURSOR=1\n\
+             shell-pulse-highlight-redraw\n\
+             print -r -- \"REGIONS=<${{(j:,:)region_highlight}}>\"",
+            widgets = widgets.display(),
+        ),
+        &[],
+    );
+    assert!(ok, "zsh exited badly: {out}");
+    assert!(
+        !out.contains("fg=red") && !out.contains("fg=green"),
+        "a command word the shell could not be asked about must be left \
+         alone: {out}"
+    );
+}
+
+#[test]
+fn a_command_the_shell_does_not_know_is_red() {
+    require_zsh!();
+    let out = regions_for("definitelynotacommand");
+    assert!(
+        out.contains("REGIONS=<0 21 fg=red,bold memo=shell-pulse>"),
+        "a command the shell does not know must be red: {out}"
+    );
+}
+
+#[test]
+fn a_builtin_is_green() {
+    require_zsh!();
+    // A builtin is in the shell's own table, so it is known even when
+    // there is no such file anywhere.
+    let out = regions_for("echo");
+    assert!(
+        out.contains("REGIONS=<0 4 fg=green memo=shell-pulse>"),
+        "a builtin must be green: {out}"
+    );
+}
+
+#[test]
+fn a_leading_assignment_does_not_hide_the_command() {
+    require_zsh!();
+    // `FOO=bar cmd` runs `cmd`: the command word is the first word that
+    // is not an assignment.
+    let out = regions_for("FOO=bar ls");
+    assert!(
+        out.contains(
+            "REGIONS=<0 7 fg=yellow memo=shell-pulse,8 10 fg=green memo=shell-pulse>"
+        ),
+        "the command word is the first word that is not an assignment: {out}"
+    );
+}
+
+#[test]
+fn a_leading_assignment_does_not_hide_an_unknown_command() {
+    require_zsh!();
+    let out = regions_for("FOO=bar definitelynotacommand");
+    assert!(
+        out.contains(
+            "REGIONS=<0 7 fg=yellow memo=shell-pulse,\
+             8 29 fg=red,bold memo=shell-pulse>"
+        ),
+        "the command word is the first word that is not an assignment: {out}"
+    );
+}
+
+#[test]
+fn an_answer_about_another_word_is_not_applied() {
+    require_zsh!();
+    // The shell and the lexer do not always agree on where the command
+    // word is. When they do not, the answer must be dropped rather than
+    // applied to a word it is not about: colouring the wrong word red
+    // would be worse than not colouring it at all.
+    let out = regions_with_answer("ls", "--command-unknown=other");
+    assert!(
+        !out.contains("fg=red"),
+        "the wrong word must never be coloured red: {out}"
+    );
+    // An answer about another word is no answer at all: the command word
+    // is left alone rather than painted green.
+    assert!(
+        !out.contains("fg=green"),
+        "a command word without an answer must be left alone: {out}"
+    );
+}
+
+#[test]
+fn the_shells_answer_is_applied_to_the_command_word() {
+    require_zsh!();
+    // The other side of the test above: when the answer is about the word
+    // the lexer found, it is applied.
+    let out = regions_with_answer("ls", "--command-unknown=ls");
+    assert!(
+        out.contains("REGIONS=<0 2 fg=red,bold memo=shell-pulse>"),
+        "the answer must be applied to the command word: {out}"
+    );
+}
+
+#[test]
+fn the_arguments_are_not_coloured_as_commands() {
+    require_zsh!();
+    // Only the command word is a command. `ls` here is an argument, and it
+    // must not be coloured like one.
+    let out = regions_for("echo ls");
+    assert!(
+        out.contains("REGIONS=<0 4 fg=green memo=shell-pulse>"),
+        "only the command word may be a command: {out}"
+    );
+}
+
+#[test]
+fn a_command_word_without_an_answer_is_left_alone() {
+    require_zsh!();
+    // The module cannot see the shell's tables, so it can only colour a
+    // command word the shell was asked about. When it was not asked — as
+    // here, where the module is called on its own — the command word is
+    // left exactly as the user typed it.
+    //
+    // Painting it green would be a lie: green means "the shell knows this
+    // command", and nobody said so.
+    let out = regions_with_answer("ls", "");
+    assert!(
+        !out.contains("fg=green") && !out.contains("fg=red"),
+        "a command word without an answer must not be coloured: {out}"
+    );
+}
+
+#[test]
+fn every_command_word_of_a_pipeline_is_coloured() {
+    require_zsh!();
+    // `ls | grep x` runs two commands, and the second one is just as much a
+    // command as the first. The adapter answers for both, and the module
+    // colours both.
+    //
+    // The argument `x` is not a command and must not be coloured.
+    let out = regions_for("ls | grep x");
+    assert!(
+        out.contains("0 2 fg=green memo=shell-pulse"),
+        "the first command of the pipeline must be green: {out}"
+    );
+    assert!(
+        out.contains("5 9 fg=green memo=shell-pulse"),
+        "the second command of the pipeline must be green too: {out}"
+    );
+    assert!(
+        !out.contains("10 11"),
+        "the argument of the pipeline must not be coloured: {out}"
+    );
+}
+
+#[test]
+fn an_unknown_command_of_a_pipeline_is_red() {
+    require_zsh!();
+    // The other side of the test above: a command the shell does not know
+    // is red, wherever it stands in the line.
+    //
+    // This is the case that used to be wrong: the second command word had
+    // no answer and fell back to the lexer's own style, which is green —
+    // so an unknown command in a pipeline looked like one the shell knew.
+    let out = regions_for("ls | definitelynotacommand");
+    assert!(
+        out.contains("0 2 fg=green memo=shell-pulse"),
+        "the first command of the pipeline must be green: {out}"
+    );
+    assert!(
+        out.contains("5 26 fg=red,bold memo=shell-pulse"),
+        "the unknown command of the pipeline must be red: {out}"
+    );
+}
+
+#[test]
+fn a_redirection_does_not_hide_the_command() {
+    require_zsh!();
+    // `cmd > out` runs `cmd`: the file the output goes to is not a
+    // command, and the command word is still the command word.
+    let out = regions_for("echo > out.txt");
+    assert!(
+        out.contains("0 4 fg=green memo=shell-pulse"),
+        "a redirection must not hide the command word: {out}"
+    );
+}
+
+#[test]
+fn a_file_descriptor_duplication_does_not_hide_the_command() {
+    require_zsh!();
+    // `2>&1` duplicates a file descriptor and writes to no file, so the
+    // number it duplicates must not be mistaken for the command word.
+    let out = regions_for("echo 2>&1");
+    assert!(
+        out.contains("REGIONS=<0 4 fg=green memo=shell-pulse,5 8 fg=red memo=shell-pulse>"),
+        "a file-descriptor duplication must not hide the command word, and \\
+         the number it duplicates must not be coloured: {out}"
+    );
+}
+
+#[test]
+fn the_old_answer_protocol_is_not_honoured() {
+    require_zsh!();
+    // The protocol used to be `--command-word=<word>` plus a separate
+    // `--command-known` flag. A stale adapter that still speaks it must
+    // not paint every command word red: an answer that is not understood
+    // is no answer at all.
+    let out = regions_with_answer("ls", "--command-word=ls --command-unknown");
+    assert!(
+        !out.contains("fg=red"),
+        "the old protocol must not be honoured: {out}"
+    );
+}
+
+#[test]
+fn an_option_is_cyan() {
+    require_zsh!();
+    let out = regions_for("git commit --amend");
+    assert!(
+        out.contains(
+            "REGIONS=<0 3 fg=green memo=shell-pulse,11 18 fg=cyan memo=shell-pulse>"
+        ),
+        "an option must be cyan: {out}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Paths
+// ---------------------------------------------------------------------------
+
+/// A file and a directory that exist, for the path tests.
+///
+/// They are created under the temporary directory, so that the test does
+/// not depend on what happens to be in the working directory.
+fn existing_paths() -> (std::path::PathBuf, std::path::PathBuf) {
+    // The name carries the process id: two test processes on one machine
+    // would otherwise delete each other's files.
+    let dir = std::env::temp_dir().join(format!("shell-pulse-path-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create the test directory");
+    let file = dir.join("a-file");
+    std::fs::write(&file, b"a file\n").expect("write the test file");
+    (file, dir)
+}
+
+#[test]
+fn an_existing_file_is_magenta() {
+    require_zsh!();
+    let (file, _dir) = existing_paths();
+    let path = file.display().to_string();
+    let out = regions_for(&format!("cat {path}"));
+    // The path starts after `cat ` and is as long as it is.
+    let expected = format!(
+        "REGIONS=<0 3 fg=green memo=shell-pulse,4 {} fg=magenta memo=shell-pulse>",
+        4 + path.len()
+    );
+    assert!(
+        out.contains(&expected),
+        "an existing file must be magenta: {out}"
+    );
+}
+
+#[test]
+fn an_existing_directory_is_magenta_and_underlined() {
+    require_zsh!();
+    let (_file, dir) = existing_paths();
+    let path = dir.display().to_string();
+    let out = regions_for(&format!("cat {path}"));
+    let expected = format!(
+        "REGIONS=<0 3 fg=green memo=shell-pulse,\
+         4 {} fg=magenta,underline memo=shell-pulse>",
+        4 + path.len()
+    );
+    assert!(
+        out.contains(&expected),
+        "an existing directory must be magenta and underlined: {out}"
+    );
+}
+
+#[test]
+fn a_word_that_does_not_exist_is_not_a_path() {
+    require_zsh!();
+    // The word has a slash in it, so it *could* be a path — but there is
+    // nothing there, so it keeps its ordinary style.
+    let out = regions_for("cat ./no-such-file-here");
+    assert!(
+        out.contains("REGIONS=<0 3 fg=green memo=shell-pulse>"),
+        "a word that does not exist must not be highlighted: {out}"
+    );
+}
+
+#[test]
+fn a_tilde_is_the_home_directory() {
+    require_zsh!();
+    // `~` expands to the home directory, which is a directory: magenta and
+    // underlined. The test needs a home directory to expand to.
+    if std::env::var_os("HOME").is_none() {
+        eprintln!(
+            "SKIPPED: `HOME` is not set, so there is no home directory for \
+             `~` to expand to."
+        );
+        return;
+    }
+    let out = regions_for("cat ~");
+    assert!(
+        out.contains(
+            "REGIONS=<0 3 fg=green memo=shell-pulse,\
+             4 5 fg=magenta,underline memo=shell-pulse>"
+        ),
+        "a tilde is the home directory, which is a directory: {out}"
+    );
+}
+
+#[test]
+fn the_command_inside_a_substitution_is_coloured() {
+    require_zsh!();
+    // `$(cmd)` holds a command of its own, and the module finds it: the
+    // answer has to be about the word *inside* the substitution, not about
+    // the whole `$(cmd)`.
+    let out = regions_for("echo $(ls)");
+    assert!(
+        out.contains("0 4 fg=green memo=shell-pulse"),
+        "the outer command must be green: {out}"
+    );
+    assert!(
+        out.contains("7 9 fg=green memo=shell-pulse"),
+        "the command inside the substitution must be green too: {out}"
+    );
+}
+
+#[test]
+fn an_argument_that_names_nothing_is_not_highlighted() {
+    require_zsh!();
+    // `hi` is looked up — every literal word is a candidate for naming a
+    // file — but there is no file called `hi`, so it stays exactly as the
+    // user typed it.
+    let out = regions_for("echo hi");
+    assert!(
+        out.contains("REGIONS=<0 4 fg=green memo=shell-pulse>"),
+        "an argument that names nothing must not be highlighted: {out}"
+    );
+}
+
+#[test]
+fn a_bare_file_name_is_magenta() {
+    require_zsh!();
+    // A file name needs no slash: `Cargo.toml` names a file just as much
+    // as `./Cargo.toml` does. The reference implementation looks every
+    // word up (`research/upstream/fsh/fast-highlight:1265-1295`), and so
+    // does this one.
+    let dir = std::env::temp_dir().join(format!(
+        "shell-pulse-bare-name-test-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).expect("create the test directory");
+    std::fs::write(dir.join("a-file"), b"a file\n").expect("write the test file");
+    let out = regions_for_in(&dir, "cat a-file");
+    assert!(
+        out.contains("4 10 fg=magenta memo=shell-pulse"),
+        "a bare file name must be magenta: {out}"
+    );
+}
+
+#[test]
+fn a_bare_directory_name_is_magenta_and_underlined() {
+    require_zsh!();
+    let dir = std::env::temp_dir().join(format!(
+        "shell-pulse-bare-dir-test-{}",
+        std::process::id()
+    ));
+    // The directory is removed first: a run that left it behind would
+    // find the name already there, and the first half of this test would
+    // fail.
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create the test directory");
+    let out = regions_for_in(&dir, "ls a-dir");
+    // The directory does not exist, so the name is left alone: the point
+    // of this test is that the *word* is looked up, and a word that names
+    // nothing is not coloured.
+    assert!(
+        !out.contains("3 8 fg=magenta"),
+        "a name that names nothing must not be coloured: {out}"
+    );
+    std::fs::create_dir_all(dir.join("a-dir")).expect("create the test directory");
+    let out = regions_for_in(&dir, "ls a-dir");
+    assert!(
+        out.contains("3 8 fg=magenta,underline memo=shell-pulse"),
+        "a bare directory name must be magenta and underlined: {out}"
+    );
+}
+
+#[test]
+fn an_append_assignment_does_not_hide_the_command() {
+    require_zsh!();
+    // `FOO+=bar cmd` appends to `FOO` and runs `cmd`. The Rust lexer
+    // knows that an assignment may end in `+=`
+    // (`crates/lexer/src/scanner.rs`, `looks_like_assignment`), and the
+    // adapter has to know it too: if the two sides disagreed about what
+    // an assignment is, the command word would never be answered and
+    // would never be coloured.
+    let out = regions_for("FOO+=bar ls");
+    assert!(
+        out.contains("9 11 fg=green memo=shell-pulse"),
+        "an append assignment must not hide the command word: {out}"
     );
 }

@@ -41,8 +41,16 @@ fn newest_source_mtime(dir: &std::path::Path) -> Option<std::time::SystemTime> {
     for entry in entries.flatten() {
         let path = entry.path();
         let mtime = if path.is_dir() {
-            // `target/` holds build artifacts, not sources.
-            if path.file_name().is_some_and(|n| n == "target") {
+            // `target/` holds build artifacts, not sources; the test
+            // directories hold tests, not the library.
+            //
+            // A test file is not part of the library, and treating it as a
+            // reason to rebuild would make every edit to a test trigger a
+            // `cargo build` from *inside* a test — and that build blocks on
+            // the build lock the `cargo test` running it already holds.
+            if path.file_name().is_some_and(|n| {
+                n == "target" || n == "tests" || n == "benches" || n == "examples"
+            }) {
                 None
             } else {
                 newest_source_mtime(&path)

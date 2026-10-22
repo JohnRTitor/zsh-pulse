@@ -16,15 +16,21 @@
 //! reports two things: the time per conversion, and the number of
 //! allocations it makes.
 //!
+//! The spans it converts are the ones the module really publishes — it
+//! asks the module for them, with the answers the shell would give — so
+//! the number of regions reported here is the number of regions the user's
+//! line really gets. The paths are not looked up, because that needs a
+//! shell; a word that names a file is styled as the lexer styled it.
+//!
 //! ```text
 //! cargo run --release -p zsh-module --example bench_region
 //! ```
 
 use std::time::Instant;
 
-use highlight::{char_offsets_into, StyleId, SpanSet};
+use highlight::{char_offsets_into, StyleId};
 use lexer::lex;
-use shellpulse_highlight::region;
+use shellpulse_highlight::{published_spans, region};
 
 /// A command line with a realistic number of styled regions.
 fn line() -> String {
@@ -39,15 +45,21 @@ fn main() {
     let text = line();
     let bytes = text.as_bytes();
     let result = lex(bytes).expect("the line scans");
-    let spans = SpanSet::from_tokens(&result.tokens);
+    // The spans the module publishes: the shell knows `git`, and the
+    // options and the quoted arguments are styled by the lexer.
+    let spans = published_spans(bytes, &[b"--command-known=git"]);
     let styled: Vec<_> = spans
-        .spans()
         .iter()
         .copied()
         .filter(|s| region::attribute(s.style).is_some())
         .collect();
     println!("line:          {} bytes", text.len());
-    println!("spans:         {} ({} styled)", spans.len(), styled.len());
+    println!(
+        "tokens:        {} ({} spans, {} styled)",
+        result.tokens.len(),
+        spans.len(),
+        styled.len()
+    );
     println!();
 
     // --- the character-offset map ---------------------------------------

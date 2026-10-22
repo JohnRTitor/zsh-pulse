@@ -19,13 +19,14 @@
 //!
 #![allow(clippy::missing_safety_doc)]
 
+use std::os::unix::ffi::OsStrExt;
 use std::ptr::addr_of_mut;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use engine::EngineState;
-use highlight::{char_offsets_into, SpanSet};
-use lexer::LexCache;
+use highlight::{ChangedRange, HighlightSpan, StyleId, char_offsets_into};
+use lexer::{LexCache, Token, TokenKind};
 use zsh_abi::raw::{Builtin, CStr, Module};
 use zsh_abi::{Api, CappedRead, guard, probe};
 
@@ -112,12 +113,17 @@ struct Highlighter {
     /// The incremental lexer.
     cache: LexCache,
     /// The spans of the line as it is now.
-    spans: SpanSet,
+    ///
+    /// These are the spans that are *published*, not the lexer's spans:
+    /// two of the styles — whether the shell knows the command, and
+    /// whether an argument names a file that exists — cannot be decided
+    /// by the lexer.
+    spans: Vec<HighlightSpan>,
     /// The spans that were last handed to zsh.
     ///
     /// The two are swapped rather than copied, so a keystroke does not
     /// allocate: the span buffer is reused whichever way the comparison goes.
-    pushed_spans: SpanSet,
+    pushed_spans: Vec<HighlightSpan>,
     /// The `region_highlight` entries of the last line.
     entries: region::Entries,
     /// The byte-to-character map of the last line.
@@ -146,6 +152,13 @@ struct Highlighter {
     /// (`zsh-src/Src/Zle/zle_main.c:1398`), so the flag is reset when a new
     /// line starts.
     pushed: bool,
+    /// The answers to "does this path exist?".
+    ///
+    /// The same path is looked up on every keystroke, and the module is on
+    /// the interactive thread, so the answers are remembered.
+    paths: PathCache,
+    /// The scratch the path lookups need.
+    scratch: PathScratch,
 }
 
 impl Highlighter {
@@ -161,11 +174,23 @@ impl Highlighter {
     /// line is not highlighted, and its bytes were not copied, so `buffer`
     /// is empty.
     ///
+    /// `answers` is what the shell said about the command words of the
+    /// line: the shell — not the module — knows whether a word is an
+    /// alias, a function, a builtin, a command on `$PATH` or a reserved
+    /// word.
+    ///
     /// # Safety
     ///
     /// `api` must be the resolved zsh API and the call must happen inside
     /// zsh.
-    unsafe fn update(&mut self, api: &Api, buffer: &[u8], too_long: bool, publish: bool) {
+    unsafe fn update(
+        &mut self,
+        api: &Api,
+        buffer: &[u8],
+        too_long: bool,
+        publish: bool,
+        answers: &CommandAnswers,
+    ) {
         if too_long {
             // Too long to be worth highlighting. The highlights that are on
             // screen describe the *previous* line, so they must go: leaving
@@ -194,7 +219,25 @@ impl Highlighter {
             return;
         }
 
-        self.spans.update_from_tokens(self.cache.tokens());
+        // The spans that are published are not the lexer's spans: two of the
+        // styles cannot be decided by the lexer. They are built here.
+        //
+        // The fields are taken apart so that the tokens — which borrow the
+        // lexer — and the buffers that are written to do not borrow each
+        // other.
+        let Highlighter {
+            cache,
+            spans,
+            paths,
+            scratch,
+            ..
+        } = self;
+        let tokens = cache.tokens();
+        // The path lookups are timed from the start of the keystroke, so
+        // that every path of this keystroke is judged by the same clock.
+        scratch.now = started;
+        // Safety: inside zsh.
+        unsafe { build_spans(spans, paths, scratch, api, buffer, tokens, answers) };
         if self.spans == self.pushed_spans && self.pushed {
             // The styling has not changed, so the regions zsh holds are
             // still correct. Leaving them alone is the whole point of the
@@ -237,7 +280,7 @@ impl Highlighter {
         if *debug_enabled() {
             // The diff is the "what changed" report: which ranges of the
             // line are styled differently from the last version.
-            let changes = highlight::diff(&self.pushed_spans, &self.spans);
+            let changes = changed_ranges(&self.pushed_spans, &self.spans);
             let ranges: Vec<String> = changes
                 .iter()
                 .map(|c| format!("{}..{}", c.start, c.end))
@@ -277,7 +320,7 @@ impl Highlighter {
             return;
         }
         let (rows, truncated) =
-            self.entries.build_merged(&existing, self.spans.spans(), offsets);
+            self.entries.build_merged(&existing, &self.spans, offsets);
         if *debug_enabled() {
             debug(&format!("published {} regions", rows.len()));
         }
@@ -347,6 +390,891 @@ impl Highlighter {
     }
 }
 
+// ---------------------------------------------------------------------------
+// The command words
+// ---------------------------------------------------------------------------
+
+/// What the shell said about a command word.
+///
+/// The shell — not the module — knows whether a word is an alias, a
+/// function, a builtin, a command on `$PATH` or a reserved word: those are
+/// the shell's own tables. The adapter looks the word up and passes the
+/// answer to the module in the arguments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CommandKnowledge {
+    /// The shell knows the word.
+    Known,
+    /// The shell does not know the word.
+    Unknown,
+}
+
+/// One answer from the shell: what it said about one command word.
+///
+/// The word is part of the answer: the module only applies an answer to
+/// the word it matches, byte for byte. If the shell and the lexer do not
+/// agree on where the command word is, the answer is dropped rather than
+/// applied to the wrong word.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CommandAnswer {
+    /// Where the word starts in the answers' word buffer.
+    start: u32,
+    /// How long the word is, in bytes.
+    len: u32,
+    /// What the shell said about the word.
+    knowledge: CommandKnowledge,
+}
+
+impl CommandAnswer {
+    /// The word this answer is about.
+    ///
+    /// The word lives in the answers' own buffer, so the answer does not
+    /// point at anything: the words are copied out of zsh's argument
+    /// vector when they are read.
+    fn word<'a>(&self, words: &'a [u8]) -> &'a [u8] {
+        let start = self.start as usize;
+        let end = start + self.len as usize;
+        words.get(start..end).unwrap_or(&[])
+    }
+}
+
+/// The shell's answers about the command words of the line.
+///
+/// A line can hold more than one command word — `ls | wc -l` has two —
+/// so the answers are a **list**. Each answer carries the word it is
+/// about, the raw text of the word as the user typed it, and the module
+/// applies an answer only to the word that matches it exactly.
+///
+/// The words are kept in one buffer, back to back, and the answers refer
+/// to ranges in it: the buffer is reused between keystrokes, so a
+/// keystroke does not allocate.
+#[derive(Debug, Default)]
+struct CommandAnswers {
+    /// The words the shell was asked about, back to back.
+    words: Vec<u8>,
+    /// The answers, as ranges into `words`.
+    answers: Vec<CommandAnswer>,
+}
+
+impl CommandAnswers {
+    /// No answers at all.
+    const fn new() -> Self {
+        Self {
+            words: Vec::new(),
+            answers: Vec::new(),
+        }
+    }
+
+    /// Forget every answer.
+    ///
+    /// The buffers keep their capacity: the answers of one keystroke are
+    /// replaced by the answers of the next, and a reallocation on the
+    /// interactive thread is exactly what the scratch exists to avoid.
+    fn clear(&mut self) {
+        self.words.clear();
+        self.answers.clear();
+    }
+
+    /// Record what the shell said about a word.
+    ///
+    /// The word is copied into the buffer, so the answer does not point at
+    /// zsh's argument vector.
+    ///
+    /// The copy is bounded: the words come from the line, and the line may
+    /// be long. The number of answers is bounded too — see
+    /// [`MAX_ARGUMENTS`] — but the *bytes* they take were not, and a
+    /// pasted line of a megabyte would have been copied into the module's
+    /// own buffer and kept there for the rest of the session.
+    fn push(&mut self, word: &[u8], knowledge: CommandKnowledge) {
+        if self.words.len() + word.len() > MAX_ANSWER_BYTES {
+            // The answer does not fit: it is dropped, and the command word
+            // it was about is left alone. That is the same outcome as an
+            // answer the shell never gave, and it is a *missing* colour,
+            // never a wrong one.
+            return;
+        }
+        // The buffer holds the words of one keystroke, so it is small: the
+        // conversion cannot fail in practice, and a word that somehow did
+        // not fit would simply never match.
+        let start = u32::try_from(self.words.len()).unwrap_or(u32::MAX);
+        self.words.extend_from_slice(word);
+        self.answers.push(CommandAnswer {
+            start,
+            len: u32::try_from(word.len()).unwrap_or(u32::MAX),
+            knowledge,
+        });
+    }
+
+    /// What the shell said about this word.
+    ///
+    /// `None` when the shell said nothing about it. That is not the same
+    /// as "the shell does not know it": an unanswered command word is
+    /// left exactly as the user typed it, while an unknown one is
+    /// painted red.
+    ///
+    /// The first answer about a word wins. The shell does not contradict
+    /// itself, and an answer that contradicts an earlier one would be
+    /// about a different word anyway.
+    fn knowledge_of(&self, word: &[u8]) -> Option<CommandKnowledge> {
+        self.answers
+            .iter()
+            .find(|answer| answer.word(&self.words) == word)
+            .map(|answer| answer.knowledge)
+    }
+
+    /// Read the shell's answers out of the argument vector.
+    ///
+    /// The protocol is a list: `--command-known=<word>` says the shell
+    /// knows the word, `--command-unknown=<word>` says it does not, and
+    /// both may be repeated — one answer for each command word of the
+    /// line.
+    ///
+    /// The word follows the `=` so that a word with a space in it is
+    /// still one argument, and it is the raw text of the word as the
+    /// user typed it: the module compares it with the word it found,
+    /// byte for byte.
+    ///
+    /// The words are copied out of zsh's argument vector rather than
+    /// pointed at: the vector belongs to zsh, and the keystroke path
+    /// must not allocate — and the answers must not outlive the call
+    /// they belong to.
+    fn set_from_args(&mut self, args: *mut *mut std::ffi::c_char) {
+        self.clear();
+        if args.is_null() {
+            return;
+        }
+        for i in 0..MAX_ARGUMENTS {
+            // Safety: the argument vector is NUL-terminated, and the loop
+            // is bounded.
+            let p = unsafe { *args.add(i) };
+            if p.is_null() {
+                return;
+            }
+            // Safety: zsh passes NUL-terminated argument strings.
+            let bytes = unsafe { std::ffi::CStr::from_ptr(p) }.to_bytes();
+            if let Some(word) = bytes.strip_prefix(COMMAND_KNOWN_ARGUMENT) {
+                self.push(word, CommandKnowledge::Known);
+            } else if let Some(word) = bytes.strip_prefix(COMMAND_UNKNOWN_ARGUMENT) {
+                self.push(word, CommandKnowledge::Unknown);
+            }
+        }
+    }
+}
+
+/// The argument that says the shell knows the command word.
+///
+/// The word follows the `=`, so that a word with a space in it is still
+/// one argument.
+const COMMAND_KNOWN_ARGUMENT: &[u8] = b"--command-known=";
+
+/// The argument that says the shell does not know the command word.
+const COMMAND_UNKNOWN_ARGUMENT: &[u8] = b"--command-unknown=";
+
+/// What to do with a word.
+///
+/// The three cases are genuinely different, and conflating them is a
+/// bug. A word that keeps the lexer's style is *styled*; a word with no
+/// region at all is left exactly as the user typed it. The difference
+/// is visible: the lexer's own style for a command word is
+/// [`StyleId::Command`], which is green, and green asserts that the
+/// shell knows the command — an assertion that was never established
+/// for a word the shell said nothing about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WordStyle {
+    /// The word is styled with this style.
+    Styled(StyleId),
+    /// The word keeps the style the lexer gave it.
+    AsLexed,
+    /// The word gets no region at all.
+    Unstyled,
+}
+
+// ---------------------------------------------------------------------------
+// Building the spans
+// ---------------------------------------------------------------------------
+
+/// Build the styled spans of the line.
+///
+/// The lexer says what each word *is*. Two things it cannot say are
+/// answered here:
+///
+/// - whether the shell knows the command word. That is the shell's
+///   business, and the shell says so in the arguments;
+/// - whether an argument names a file that exists. That needs the
+///   filesystem, so only a word that could be a path is looked up, and the
+///   answer is remembered.
+///
+/// # Safety
+///
+/// Must be called inside zsh: the shell's directory and home directory are
+/// read from the shell's parameters.
+unsafe fn build_spans(
+    spans: &mut Vec<HighlightSpan>,
+    paths: &mut PathCache,
+    scratch: &mut PathScratch,
+    api: &Api,
+    buffer: &[u8],
+    tokens: &[Token],
+    answers: &CommandAnswers,
+) {
+    // The shell's directory is read again on every keystroke: the user may
+    // have changed directory since the last one. It is read at most once
+    // per keystroke, and only when a path actually needs it.
+    scratch.cwd_read = false;
+    scratch.home_read = false;
+
+    // The path lookup is the only part that needs the shell, so it is
+    // handed to the core as a closure. The core — the part that decides
+    // what a command word looks like — is then free of the shell, and can
+    // be exercised on its own.
+    //
+    // The number of lookups is bounded per line: every literal word is a
+    // candidate for being a file name, and a long line would otherwise
+    // cost one `stat` per word. The words are looked up in the order they
+    // appear, so the ones nearest the command — the ones most likely to
+    // be paths — are the ones that are looked up.
+    let mut lookups = 0usize;
+    let mut path = |word: &[Token]| {
+        if lookups >= MAX_PATH_LOOKUPS {
+            return None;
+        }
+        // The budget is checked *before* the lookup, not only after the
+        // whole line is done: a `stat` on a network filesystem can take
+        // milliseconds, and the answer to a line that took too long is
+        // thrown away. Stopping early turns "the user waits and gets
+        // nothing" into "the user waits only as long as the budget".
+        if scratch.now.elapsed() > BUDGET {
+            return None;
+        }
+        lookups += 1;
+        // Safety: inside zsh.
+        unsafe { path_style(paths, scratch, api, word, buffer) }
+    };
+    build_spans_with(spans, buffer, tokens, answers, &mut path);
+}
+
+/// How many paths are looked up on one line.
+///
+/// Every literal word can name a file, and the reference implementation
+/// looks every one of them up
+/// (`research/upstream/fsh/fast-highlight:1265-1295`). A `stat` costs
+/// about a microsecond, so a line with many arguments would cost a
+/// noticeable pause on the interactive thread.
+///
+/// The bound keeps the cost of one keystroke predictable: sixteen lookups
+/// is about fifteen microseconds, well inside the millisecond the
+/// keystroke has to fit in. The words are looked up in the order they
+/// appear, so the ones that are looked up are the ones nearest the
+/// command.
+const MAX_PATH_LOOKUPS: usize = 16;
+
+/// Build the styled spans of the line, given how to style an argument.
+///
+/// `path_style` answers the one question the lexer cannot: what an
+/// argument that names a file looks like. `None` means that the argument
+/// does not name anything that exists, and it keeps the lexer's style.
+///
+/// Everything else — in particular what a *command* word looks like — is
+/// decided from `answers`, the shell's own words about the command words
+/// of the line.
+fn build_spans_with<F>(
+    spans: &mut Vec<HighlightSpan>,
+    buffer: &[u8],
+    tokens: &[Token],
+    answers: &CommandAnswers,
+    path_style: &mut F,
+) where
+    F: FnMut(&[Token]) -> Option<StyleId>,
+{
+    spans.clear();
+
+    let mut i = 0;
+    while i < tokens.len() {
+        let token = tokens[i];
+        if !token.kind.is_word_part() {
+            // Not a word: an operator, a redirection, a comment or a
+            // here-document. It keeps the style the lexer gave it.
+            push_span(spans, token.start, token.end, StyleId::of(token.kind));
+            i += 1;
+            continue;
+        }
+
+        // The word: a run of tokens that touch each other. The space
+        // between two words is what tells them apart.
+        let start = i;
+        let mut end = i + 1;
+        while end < tokens.len()
+            && tokens[end].kind.is_word_part()
+            && tokens[end - 1].end == tokens[end].start
+        {
+            end += 1;
+        }
+        let word = &tokens[start..end];
+
+        // A command word is styled from the shell's answers; every other
+        // word is an argument, and may name a file that exists.
+        //
+        // There is more than one command word in a line — `ls | wc -l`
+        // has two — and the shell answers for each of them, so every
+        // command word is looked up.
+        let style = if is_command_word(word, buffer) {
+            command_style(word, buffer, answers, path_style)
+        } else {
+            match path_style(word) {
+                Some(style) => WordStyle::Styled(style),
+                None => WordStyle::AsLexed,
+            }
+        };
+
+        push_word(spans, word, buffer, answers, style);
+        i = end;
+    }
+}
+
+/// The spans the module publishes for a line.
+///
+/// The command words are styled from `answers`, the way the shell's own
+/// answer styles them: `--command-known=<word>` says the shell knows the
+/// word and `--command-unknown=<word>` says it does not. A command word
+/// the answers say nothing about gets no span at all.
+///
+/// The paths are **not** looked up: that needs the shell's directory, and
+/// this function has no shell. A word that names a file is therefore
+/// styled as the lexer styled it.
+///
+/// This is what the benchmark measures and what the tests inspect: the
+/// spans the module really publishes, not a stand-in. A line that does
+/// not scan has no spans.
+pub fn published_spans(text: &[u8], answers: &[&[u8]]) -> Vec<HighlightSpan> {
+    let Ok(lexed) = lexer::lex(text) else {
+        return Vec::new();
+    };
+    let mut command_answers = CommandAnswers::new();
+    for answer in answers {
+        if let Some(word) = answer.strip_prefix(COMMAND_KNOWN_ARGUMENT) {
+            command_answers.push(word, CommandKnowledge::Known);
+        } else if let Some(word) = answer.strip_prefix(COMMAND_UNKNOWN_ARGUMENT) {
+            command_answers.push(word, CommandKnowledge::Unknown);
+        }
+    }
+    let mut spans = Vec::new();
+    build_spans_with(
+        &mut spans,
+        text,
+        &lexed.tokens,
+        &command_answers,
+        &mut |_word| None,
+    );
+    spans
+}
+
+/// Publish the spans of one word.
+///
+/// `style` is what the word as a whole gets. The exception is a token
+/// inside the word that is a command in its own right — the `cmd` of
+/// `$(cmd)`, say: such a token is styled from the shell's answers like
+/// any other command, and gets no region at all when the shell said
+/// nothing about it.
+fn push_word(
+    spans: &mut Vec<HighlightSpan>,
+    word: &[Token],
+    buffer: &[u8],
+    answers: &CommandAnswers,
+    style: WordStyle,
+) {
+    for token in word {
+        let token_style = match style {
+            WordStyle::Styled(style) => Some(style),
+            WordStyle::AsLexed => {
+                if token.kind == TokenKind::Command {
+                    // A command inside a word: the command of a command
+                    // substitution. It is a command in its own right, so
+                    // it is styled from the shell's answers — and the
+                    // lexer's green is not published for a command
+                    // nobody said anything about.
+                    command_token_style(token, buffer, answers)
+                } else {
+                    Some(StyleId::of(token.kind))
+                }
+            }
+            WordStyle::Unstyled => None,
+        };
+        if let Some(style) = token_style {
+            push_span(spans, token.start, token.end, style);
+        }
+    }
+}
+
+/// The style of one command token, given what the shell said about it.
+///
+/// A command token with no answer gets no style at all: the word it is
+/// in keeps the style the lexer gave it, and the command itself is left
+/// alone.
+fn command_token_style(token: &Token, buffer: &[u8], answers: &CommandAnswers) -> Option<StyleId> {
+    match answers.knowledge_of(token_bytes(token, buffer)) {
+        Some(CommandKnowledge::Known) => Some(StyleId::Command),
+        Some(CommandKnowledge::Unknown) => Some(StyleId::UnknownCommand),
+        None => None,
+    }
+}
+
+/// Whether the word is a command word.
+///
+/// A word is a command word when the lexer says so. The one case the
+/// lexer cannot say plainly is a word that starts with a tilde: the
+/// scanner emits the `~` as a glob, because that is what it is in a word
+/// like `~/*.txt`, and the rest of the word keeps the kind the word has.
+/// `~/bin/tool` is therefore a glob followed by a command, and it is a
+/// command word like any other.
+///
+/// A word is *not* a command word when the command is somewhere inside
+/// it — the `cmd` of `$(cmd)` is a command, but the word `$(cmd)` is a
+/// substitution.
+fn is_command_word(word: &[Token], buffer: &[u8]) -> bool {
+    let Some(first) = word.first() else {
+        return false;
+    };
+    if first.kind == TokenKind::Command {
+        return true;
+    }
+    // A `~` at the start of a word is a tilde expansion rather than a
+    // glob, and the rest of the word is still the command.
+    first.kind == TokenKind::Glob
+        && token_bytes(first, buffer) == b"~"
+        && word.iter().any(|t| t.kind == TokenKind::Command)
+}
+
+/// The style of a command word, given what the shell said about it.
+///
+/// A command word the shell knows is green; one the shell does not know
+/// is red and bold, the way the reference implementation colours an
+/// unknown token (`research/upstream/fsh/fast-highlight:58-93`).
+///
+/// A command word the shell said **nothing** about gets no region at
+/// all. The lexer's own style for a command word is green, and green
+/// asserts that the shell knows the command — an assertion that was
+/// never established. Publishing it would paint the `nosuchcmd` of
+/// `ls | nosuchcmd` green, which is what the module used to do.
+///
+/// A word the shell does not know may still name a file that exists —
+/// `~/bin/tool` is a path, not a typo — so the filesystem is consulted
+/// before the word is called unknown. The reference implementation does
+/// the same: it looks the word up as a command first and only then
+/// checks whether it is a path.
+fn command_style<F>(
+    word: &[Token],
+    buffer: &[u8],
+    answers: &CommandAnswers,
+    path_style: &mut F,
+) -> WordStyle
+where
+    F: FnMut(&[Token]) -> Option<StyleId>,
+{
+    // The answer is about one word. If it is not the word the lexer
+    // found, it is dropped: colouring the wrong word red would be worse
+    // than not colouring it at all.
+    match answers.knowledge_of(word_text(word, buffer)) {
+        Some(CommandKnowledge::Known) => WordStyle::Styled(StyleId::Command),
+        Some(CommandKnowledge::Unknown) => match path_style(word) {
+            Some(style) => WordStyle::Styled(style),
+            None => WordStyle::Styled(StyleId::UnknownCommand),
+        },
+        None => match path_style(word) {
+            Some(style) => WordStyle::Styled(style),
+            None => WordStyle::Unstyled,
+        },
+    }
+}
+
+/// The style of a word that could name a file.
+///
+/// `None` when the word does not name a file, or does not name anything
+/// that exists.
+///
+/// Every literal word is a candidate: `Cargo.toml` names a file just as
+/// much as `./Cargo.toml` does, and the reference implementation looks
+/// every word up (`research/upstream/fsh/fast-highlight:1265-1295`). The
+/// number of lookups is bounded per line — see [`MAX_PATH_LOOKUPS`].
+///
+/// # Safety
+///
+/// Must be called inside zsh: the shell's directory and home directory are
+/// read from the shell's parameters.
+unsafe fn path_style(
+    paths: &mut PathCache,
+    scratch: &mut PathScratch,
+    api: &Api,
+    word: &[Token],
+    buffer: &[u8],
+) -> Option<StyleId> {
+    // The time of the keystroke, which is when the path is looked up.
+    let now = scratch.now;
+    // Only a word that is literal text can name a file. A word with a
+    // quote or an expansion in it names whatever the shell makes of it, and
+    // that is not knowable without running the shell.
+    if !is_literal(word, buffer) {
+        return None;
+    }
+    let text = word_text(word, buffer);
+
+    // Resolve the word against the shell's directory.
+    scratch.path.clear();
+    if let Some(rest) = text.strip_prefix(b"~") {
+        // `~` and `~/...` expand to the home directory. `~user` needs a
+        // password database lookup, which is not worth doing on the
+        // interactive thread.
+        if !rest.is_empty() && !rest.starts_with(b"/") {
+            return None;
+        }
+        // Safety: inside zsh.
+        unsafe { read_home(api, scratch) };
+        if scratch.home.is_empty() {
+            // The shell has no `$HOME`, so the word does not name a path
+            // that can be looked up.
+            return None;
+        }
+        scratch.path.extend_from_slice(&scratch.home);
+        scratch.path.extend_from_slice(rest);
+    } else if text.starts_with(b"/") {
+        scratch.path.extend_from_slice(text);
+    } else {
+        // A relative path is relative to the shell's directory.
+        // Safety: inside zsh.
+        unsafe { read_cwd(api, scratch) };
+        if scratch.cwd.is_empty() {
+            // The shell has no `$PWD`, so a relative path cannot be
+            // resolved.
+            return None;
+        }
+        scratch.path.extend_from_slice(&scratch.cwd);
+        scratch.path.push(b'/');
+        scratch.path.extend_from_slice(text);
+    }
+
+    match paths.lookup(&scratch.path, now) {
+        Some(PathKind::Dir) => Some(StyleId::PathToDir),
+        Some(PathKind::File) => Some(StyleId::Path),
+        None => None,
+    }
+}
+
+/// Whether the word is literal text, so that it can name a file.
+///
+/// A word with a quote or an expansion in it is not literal: the file it
+/// names is not knowable without running the shell, so it is left alone.
+fn is_literal(word: &[Token], buffer: &[u8]) -> bool {
+    let mut rest = word.iter();
+    let Some(first) = rest.next() else {
+        return false;
+    };
+    // A `Command` token is plain text as well: it is how the lexer spells
+    // the words that stand in command position, and the text of such a
+    // word is literal.
+    let plain = |t: &Token| t.kind == TokenKind::Word || t.kind == TokenKind::Command;
+    if first.kind == TokenKind::Word || first.kind == TokenKind::Command {
+        return rest.all(plain);
+    }
+    // A `~` at the start of a word is a tilde expansion rather than a
+    // glob, and the rest of the word is still literal text.
+    first.kind == TokenKind::Glob
+        && token_bytes(first, buffer) == b"~"
+        && rest.all(plain)
+}
+
+/// The bytes of the word.
+///
+/// The tokens of a word touch each other, so the word is the slice of the
+/// line they cover.
+fn word_text<'a>(word: &[Token], buffer: &'a [u8]) -> &'a [u8] {
+    let Some(first) = word.first() else {
+        return &[];
+    };
+    let Some(last) = word.last() else {
+        return &[];
+    };
+    buffer
+        .get(first.start as usize..last.end as usize)
+        .unwrap_or(&[])
+}
+
+/// The bytes of one token.
+fn token_bytes<'a>(token: &Token, buffer: &'a [u8]) -> &'a [u8] {
+    buffer
+        .get(token.start as usize..token.end as usize)
+        .unwrap_or(&[])
+}
+
+/// Add a span, merging it with the previous one when they have the same
+/// style and touch each other.
+///
+/// The merge is what keeps the number of regions proportional to the
+/// number of *visual* runs: a double-quoted string is three tokens but one
+/// run.
+fn push_span(spans: &mut Vec<HighlightSpan>, start: u32, end: u32, style: StyleId) {
+    if end <= start {
+        return;
+    }
+    match spans.last_mut() {
+        Some(last) if last.style == style && last.end == start => last.end = end,
+        _ => spans.push(HighlightSpan::new(start, end, style)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Paths
+// ---------------------------------------------------------------------------
+
+/// What a path turned out to be.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PathKind {
+    /// A file that exists.
+    File,
+    /// A directory that exists.
+    Dir,
+}
+
+/// One remembered answer about a path.
+#[derive(Debug)]
+struct PathEntry {
+    /// The resolved path.
+    path: Box<[u8]>,
+    /// What it is, if it exists.
+    kind: Option<PathKind>,
+    /// When the answer was made.
+    ///
+    /// The answer goes stale: a file that is created while the user is
+    /// typing must be picked up, and a file that is deleted must stop
+    /// being highlighted. The entry is therefore only trusted for
+    /// [`PATH_TTL`].
+    looked_up: Instant,
+}
+
+/// The answers to "does this path exist, and what is it?".
+///
+/// The module is on the interactive thread and the same path is looked up
+/// on every keystroke, so the answers are remembered.
+///
+/// The cache is keyed by the *resolved* path, so a change of directory
+/// cannot make a stale answer look current: the same word resolves to a
+/// different path, and is therefore looked up again.
+///
+/// Every answer has a **time to live**. Without one, a file that did not
+/// exist when it was typed would stay unhighlighted for the rest of the
+/// session — even after the user created it — and a file that was deleted
+/// would stay highlighted. Both are visible bugs, and both are fixed by
+/// looking the path up again once the answer has grown old.
+#[derive(Debug, Default)]
+struct PathCache {
+    /// The answers, in the order they were found.
+    entries: Vec<PathEntry>,
+}
+
+/// How many paths are remembered.
+///
+/// A session can see a lot of paths, and the cache must not grow without
+/// bound. When it is full it is emptied, which costs one `stat` per path
+/// again and nothing more.
+const MAX_CACHED_PATHS: usize = 64;
+
+/// How long an answer about a path is trusted.
+///
+/// Two seconds is short enough that a file the user has just created is
+/// picked up while they are still typing the line that names it, and long
+/// enough that the repeated lookups of a single line — one per keystroke —
+/// are served from the cache.
+///
+/// The lookup itself is a `stat(2)`: it does not fork and it does not
+/// block for long, so looking a path up again is cheap. What the cache
+/// saves is the *number* of them, not their cost.
+const PATH_TTL: Duration = Duration::from_secs(2);
+
+impl PathCache {
+    /// What the path is, asking the filesystem only the first time.
+    ///
+    /// `None` means that nothing exists at that path.
+    ///
+    /// The answer is only trusted for [`PATH_TTL`]: after that the path
+    /// is looked up again, so a file that appears — or disappears — while
+    /// the user is typing is picked up.
+    ///
+    /// `now` is the time of the keystroke. It is passed in rather than
+    /// read here so that the whole keystroke shares one clock reading,
+    /// and so that the expiry can be tested without waiting for it.
+    fn lookup(&mut self, path: &[u8], now: Instant) -> Option<PathKind> {
+        if let Some(entry) = self.entries.iter_mut().find(|e| &*e.path == path) {
+            if now.duration_since(entry.looked_up) < PATH_TTL {
+                // The answer is fresh enough to be trusted.
+                return entry.kind;
+            }
+            // The answer is too old to be trusted: the file may have been
+            // created or deleted since it was made.
+            let kind = stat_path(path);
+            entry.kind = kind;
+            entry.looked_up = now;
+            return kind;
+        }
+        let kind = stat_path(path);
+        if self.entries.len() >= MAX_CACHED_PATHS {
+            self.entries.clear();
+        }
+        self.entries.push(PathEntry {
+            path: Box::from(path),
+            kind,
+            looked_up: now,
+        });
+        kind
+    }
+}
+
+/// What is at this path, if anything.
+///
+/// The path is used as raw bytes: a file name is not necessarily valid
+/// UTF-8, and the module must not mangle it. `OsStr::from_bytes` is the
+/// Unix way of saying exactly that.
+fn stat_path(path: &[u8]) -> Option<PathKind> {
+    let os = std::ffi::OsStr::from_bytes(path);
+    match std::fs::metadata(std::path::Path::new(os)) {
+        Ok(meta) if meta.is_dir() => Some(PathKind::Dir),
+        Ok(_) => Some(PathKind::File),
+        Err(_) => None,
+    }
+}
+
+/// The scratch the path lookups need.
+///
+/// Reused between keystrokes: a lookup must not allocate on the
+/// interactive thread.
+#[derive(Debug)]
+struct PathScratch {
+    /// The resolved path.
+    path: Vec<u8>,
+    /// The shell's current directory.
+    cwd: Vec<u8>,
+    /// The shell's home directory.
+    home: Vec<u8>,
+    /// Whether the current directory has been read.
+    cwd_read: bool,
+    /// Whether the home directory has been read.
+    home_read: bool,
+    /// The time of the keystroke.
+    ///
+    /// The path cache uses it to decide whether an answer has grown old:
+    /// one clock reading for the whole keystroke, and the same reading
+    /// for every path of that keystroke.
+    now: Instant,
+}
+
+impl Default for PathScratch {
+    fn default() -> Self {
+        Self {
+            path: Vec::new(),
+            cwd: Vec::new(),
+            home: Vec::new(),
+            cwd_read: false,
+            home_read: false,
+            now: Instant::now(),
+        }
+    }
+}
+
+/// Read the shell's current directory into the scratch.
+///
+/// # Safety
+///
+/// Must be called inside zsh.
+unsafe fn read_cwd(api: &Api, scratch: &mut PathScratch) {
+    if scratch.cwd_read {
+        return;
+    }
+    scratch.cwd_read = true;
+    // Safety: inside zsh, and the name is NUL-terminated.
+    let read = unsafe { api.read_param_bytes(cstr(b"PWD\0"), &mut scratch.cwd) };
+    if read.is_none() {
+        // The shell has no `$PWD`.
+        scratch.cwd.clear();
+    }
+}
+
+/// Read the shell's home directory into the scratch.
+///
+/// # Safety
+///
+/// Must be called inside zsh.
+unsafe fn read_home(api: &Api, scratch: &mut PathScratch) {
+    if scratch.home_read {
+        return;
+    }
+    scratch.home_read = true;
+    // Safety: inside zsh, and the name is NUL-terminated.
+    let read = unsafe { api.read_param_bytes(cstr(b"HOME\0"), &mut scratch.home) };
+    if read.is_none() {
+        // The shell has no `$HOME`.
+        scratch.home.clear();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// What changed
+// ---------------------------------------------------------------------------
+
+/// The ranges whose styling differs between two versions of a line.
+///
+/// The `highlight` crate has a diff of its own, but it compares the
+/// *lexer's* spans. The spans that are published are not the lexer's — the
+/// command word and the paths are restyled after the lexing — so the diff
+/// has to be done here to say what actually changed on the screen.
+fn changed_ranges(old: &[HighlightSpan], new: &[HighlightSpan]) -> Vec<ChangedRange> {
+    let mut out = Vec::new();
+    let (mut i, mut j) = (0usize, 0usize);
+    let mut pos = 0u32;
+    loop {
+        let so = style_at(old, i, pos);
+        let sn = style_at(new, j, pos);
+
+        // The end of the segment over which both styles are constant: the
+        // first of "the current span ends" and "the next span starts",
+        // whichever comes first. A span that has not started yet marks the
+        // end of a gap.
+        let mut end = u32::MAX;
+        for (spans, idx) in [(old, i), (new, j)] {
+            if let Some(s) = spans.get(idx) {
+                if s.start > pos {
+                    end = end.min(s.start);
+                }
+                end = end.min(s.end);
+            }
+        }
+        if end == u32::MAX || end <= pos {
+            break;
+        }
+
+        if so != sn {
+            out.push(ChangedRange {
+                start: pos,
+                end,
+                style: sn.unwrap_or(StyleId::Argument),
+            });
+        }
+        pos = end;
+        while old.get(i).is_some_and(|s| s.end <= pos) {
+            i += 1;
+        }
+        while new.get(j).is_some_and(|s| s.end <= pos) {
+            j += 1;
+        }
+    }
+    out
+}
+
+/// The style of the span at `idx` that covers `offset`.
+fn style_at(spans: &[HighlightSpan], idx: usize, offset: u32) -> Option<StyleId> {
+    let s = spans.get(idx)?;
+    if s.start <= offset && offset < s.end {
+        Some(s.style)
+    } else {
+        None
+    }
+}
+
 /// The process-wide highlighter.
 static HIGHLIGHTER: std::sync::LazyLock<std::sync::Mutex<Highlighter>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(Highlighter::default()));
@@ -383,6 +1311,12 @@ struct Scratch {
     /// either: copying it is what made the scratch grow to the largest
     /// line the user had ever pasted.
     too_long: bool,
+    /// What the shell said about the command words of the line.
+    ///
+    /// Copied out of the argument vector rather than pointed at, so that
+    /// the keystroke path does not allocate — and so that the answers do
+    /// not outlive the call they belong to.
+    command_answers: CommandAnswers,
 }
 
 impl Scratch {
@@ -392,6 +1326,7 @@ impl Scratch {
             cursor_bytes: Vec::new(),
             line_len: 0,
             too_long: false,
+            command_answers: CommandAnswers::new(),
         }
     }
 
@@ -489,6 +1424,20 @@ impl Scratch {
             }
         }
     }
+
+    /// Read the shell's answers about the command words out of the arguments.
+    ///
+    /// The answers are copied into the scratch rather than pointed at: the
+    /// argument vector belongs to zsh, and the keystroke path must not
+    /// allocate.
+    ///
+    /// Every answer carries the word it is about. The module only applies
+    /// an answer to the word it matches exactly, so a disagreement between
+    /// the shell and the lexer cannot end with the wrong word coloured
+    /// red.
+    fn set_command_answer(&mut self, args: *mut *mut std::ffi::c_char) {
+        self.command_answers.set_from_args(args);
+    }
 }
 
 /// The capacity the scratch keeps for itself.
@@ -549,6 +1498,10 @@ unsafe extern "C" fn highlight_builtin(
             Ok(g) => g,
             Err(poisoned) => poisoned.into_inner(),
         };
+        // What the shell knows about the command words of this line. The
+        // shell is the only one that can know: its tables of aliases,
+        // functions, builtins and commands are not visible from here.
+        guard.set_command_answer(args);
         // The diagnostic modes show the user the whole line, even one that
         // is too long to highlight, so they are the only ones that pay for
         // a copy of it.
@@ -584,7 +1537,15 @@ unsafe extern "C" fn highlight_builtin(
                 Err(poisoned) => poisoned.into_inner(),
             };
             // Safety: `api` is resolved and we are inside zsh.
-            unsafe { highlighter.update(api, &guard.buffer, too_long, publish) };
+            unsafe {
+                highlighter.update(
+                    api,
+                    &guard.buffer,
+                    too_long,
+                    publish,
+                    &guard.command_answers,
+                )
+            };
         }
 
         // Write-back proof. Writing a zsh parameter is currently UNSAFE on
@@ -674,6 +1635,19 @@ const RESET_ARGUMENT: &[u8] = b"--reset";
 /// The argument vector is NUL-terminated, but a bound is kept anyway: a
 /// runaway loop inside the user's shell is not worth the risk.
 const MAX_ARGUMENTS: usize = 64;
+
+/// The most bytes the answer words may take together.
+///
+/// The answers carry the command words of the line, and the line may be
+/// long. The number of answers is bounded by [`MAX_ARGUMENTS`], but the
+/// bytes they take were not: a pasted line of a megabyte would have been
+/// copied into the module's own buffer — and kept there for the rest of
+/// the session, because the buffer's capacity is deliberately reused.
+///
+/// The bound matches the line the module is willing to highlight at all
+/// ([`MAX_LINE`]): an answer about a word of a longer line is of no use,
+/// because the line is not highlighted.
+const MAX_ANSWER_BYTES: usize = MAX_LINE;
 
 /// Whether the caller asked for the highlights to be published.
 ///
@@ -935,6 +1909,545 @@ mod tests {
             s.buffer.capacity(),
             capacity,
             "a line that fits in the retained capacity must not reallocate"
+        );
+    }
+
+    // --- the command words --------------------------------------------------
+
+    /// The tokens of a line, as the lexer sees them.
+    fn tokens_of(line: &str) -> Vec<Token> {
+        lexer::lex(line.as_bytes())
+            .expect("a scannable line")
+            .tokens
+    }
+
+    /// Run `f` with a C argument vector, the way zsh passes one to a builtin.
+    ///
+    /// The strings stay alive for the duration of the call, so the pointers
+    /// handed to `f` are valid — which is what the module relies on when
+    /// it copies the words out of them.
+    fn with_argv<R>(args: &[&[u8]], f: impl FnOnce(*mut *mut std::ffi::c_char) -> R) -> R {
+        let strings: Vec<std::ffi::CString> = args
+            .iter()
+            .map(|arg| std::ffi::CString::new(*arg).expect("an argument without a NUL"))
+            .collect();
+        let mut pointers: Vec<*mut std::ffi::c_char> = strings
+            .iter()
+            .map(|s| s.as_ptr() as *mut std::ffi::c_char)
+            .collect();
+        pointers.push(std::ptr::null_mut());
+        f(pointers.as_mut_ptr())
+    }
+
+    /// The answers the module reads out of this argument vector.
+    fn answers_from(args: &[&[u8]]) -> CommandAnswers {
+        let mut answers = CommandAnswers::new();
+        with_argv(args, |argv| answers.set_from_args(argv));
+        answers
+    }
+
+    /// The spans of a line, with no path lookups.
+    ///
+    /// The path lookup is the only part of the highlighter that needs a
+    /// shell, so it is left out here: what is under test is what the
+    /// *command* words look like.
+    fn spans_of(line: &str, answers: &CommandAnswers) -> Vec<HighlightSpan> {
+        let tokens = tokens_of(line);
+        let mut spans = Vec::new();
+        build_spans_with(
+            &mut spans,
+            line.as_bytes(),
+            &tokens,
+            answers,
+            &mut |_word| None,
+        );
+        spans
+    }
+
+    #[test]
+    fn a_command_the_shell_knows_is_the_command_style() {
+        let line = b"ls";
+        let word = &tokens_of("ls")[..1];
+        let answers = answers_from(&[b"--command-known=ls"]);
+        assert_eq!(
+            command_style(word, line, &answers, &mut |_word| None),
+            WordStyle::Styled(StyleId::Command),
+            "a command the shell knows is green"
+        );
+    }
+
+    #[test]
+    fn a_command_the_shell_does_not_know_is_the_unknown_style() {
+        let line = b"nope";
+        let word = &tokens_of("nope")[..1];
+        let answers = answers_from(&[b"--command-unknown=nope"]);
+        assert_eq!(
+            command_style(word, line, &answers, &mut |_word| None),
+            WordStyle::Styled(StyleId::UnknownCommand),
+            "a command the shell does not know is red"
+        );
+    }
+
+    #[test]
+    fn a_command_the_shell_said_nothing_about_is_left_alone() {
+        // The lexer's own style for a command word is green, and green
+        // asserts that the shell knows the command — which was never
+        // established. So a command word with no answer gets no region at
+        // all, and stays exactly as the user typed it.
+        let line = b"ls";
+        let word = &tokens_of("ls")[..1];
+        let answers = answers_from(&[]);
+        assert_eq!(
+            command_style(word, line, &answers, &mut |_word| None),
+            WordStyle::Unstyled,
+            "a command nobody said anything about must not be styled"
+        );
+    }
+
+    #[test]
+    fn an_answer_about_another_word_is_dropped() {
+        // The shell and the lexer do not always agree on where the command
+        // word is. When they do not, the answer must not be applied to the
+        // word the lexer found: colouring the wrong word red would be
+        // worse than not colouring it at all.
+        let line = b"ls";
+        let word = &tokens_of("ls")[..1];
+        let answers = answers_from(&[b"--command-unknown=other"]);
+        assert_eq!(
+            command_style(word, line, &answers, &mut |_word| None),
+            WordStyle::Unstyled,
+            "an answer about another word must be dropped"
+        );
+    }
+
+    #[test]
+    fn a_command_word_that_starts_with_a_tilde_is_a_command_word() {
+        // The scanner emits a leading `~` as a glob, because that is what
+        // it is in `~/*.txt`, and the rest of the word keeps the kind the
+        // word has. `~/bin/tool` is therefore a glob followed by a command
+        // — and it is a command word, so the shell's answer applies to it.
+        let line = b"~/bin/tool";
+        let tokens = tokens_of("~/bin/tool");
+        let word = &tokens[..];
+        assert!(
+            is_command_word(word, line),
+            "a word that starts with a tilde and holds a command is a command word"
+        );
+        let answers = answers_from(&[b"--command-known=~/bin/tool"]);
+        assert_eq!(
+            command_style(word, line, &answers, &mut |_word| None),
+            WordStyle::Styled(StyleId::Command),
+            "the answer must apply to the whole word"
+        );
+    }
+
+    #[test]
+    fn a_command_inside_a_substitution_is_not_a_command_word() {
+        // The `cmd` of `$(cmd)` is a command, but the word `$(cmd)` is a
+        // substitution: the word is not a command word, and the command
+        // inside it is styled on its own.
+        let line = b"$(cmd)";
+        let tokens = tokens_of("$(cmd)");
+        let word = &tokens[..];
+        assert!(
+            !is_command_word(word, line),
+            "a word that holds a command inside a substitution is not a command word"
+        );
+    }
+
+    #[test]
+    fn a_command_word_that_names_a_file_is_a_path_not_an_unknown_command() {
+        // `~/bin/tool` is a path, not a typo. The reference implementation
+        // looks the word up as a command first and only then checks
+        // whether it is a path
+        // (`research/upstream/fsh/fast-highlight:1265-1295`).
+        let line = b"~/bin/tool";
+        let tokens = tokens_of("~/bin/tool");
+        let answers = answers_from(&[b"--command-unknown=~/bin/tool"]);
+        assert_eq!(
+            command_style(
+                &tokens[..],
+                line,
+                &answers,
+                &mut |_word| Some(StyleId::PathToDir),
+            ),
+            WordStyle::Styled(StyleId::PathToDir),
+            "a command word that names a file is a path"
+        );
+    }
+
+    #[test]
+    fn the_published_spans_are_the_ones_the_module_publishes() {
+        // The function the benchmark and the tests use must publish what
+        // the module publishes: the command word green when the shell
+        // knows it, red when it does not, and nothing at all when the
+        // shell was not asked.
+        assert_eq!(
+            published_spans(b"ls", &[b"--command-known=ls"]),
+            vec![HighlightSpan::new(0, 2, StyleId::Command)],
+            "a command the shell knows must be published as a command"
+        );
+        assert_eq!(
+            published_spans(b"ls", &[b"--command-unknown=ls"]),
+            vec![HighlightSpan::new(0, 2, StyleId::UnknownCommand)],
+            "a command the shell does not know must be published as unknown"
+        );
+        assert!(
+            published_spans(b"ls", &[]).is_empty(),
+            "a command word nobody said anything about must get no span"
+        );
+        assert!(
+            published_spans(b"ls", &[b"--command-known=other"]).is_empty(),
+            "an answer about another word must not be applied"
+        );
+    }
+
+    #[test]
+    fn every_command_word_gets_its_own_answer() {
+        // The answers are a list, and each one is about its own word.
+        let spans = published_spans(
+            b"ls | grep x",
+            &[b"--command-known=ls", b"--command-known=grep"],
+        );
+        assert_eq!(
+            spans,
+            vec![
+                HighlightSpan::new(0, 2, StyleId::Command),
+                HighlightSpan::new(3, 4, StyleId::Operator),
+                HighlightSpan::new(5, 9, StyleId::Command),
+                HighlightSpan::new(10, 11, StyleId::Argument),
+            ],
+            "both command words must be published, and the operator and the \
+             argument must be published as what they are"
+        );
+    }
+
+    #[test]
+    fn the_answers_are_read_out_of_the_argument_vector() {
+        let answers = answers_from(&[
+            b"--command-known=ls",
+            b"--command-unknown=nosuchcmd",
+            b"--region-highlight",
+        ]);
+        assert_eq!(answers.knowledge_of(b"ls"), Some(CommandKnowledge::Known));
+        assert_eq!(
+            answers.knowledge_of(b"nosuchcmd"),
+            Some(CommandKnowledge::Unknown)
+        );
+        assert_eq!(
+            answers.knowledge_of(b"somethingelse"),
+            None,
+            "a word the shell said nothing about has no answer"
+        );
+    }
+
+    #[test]
+    fn the_old_answer_protocol_is_not_honoured() {
+        // The protocol used to be `--command-word=<word>` plus a bare
+        // `--command-known` or `--command-unknown`. Both are gone: an
+        // argument that looks like the old protocol must not be read as an
+        // answer, or a stale adapter would paint every command word red.
+        let answers = answers_from(&[b"--command-word=ls", b"--command-known"]);
+        assert_eq!(
+            answers.knowledge_of(b"ls"),
+            None,
+            "the old protocol must not be honoured"
+        );
+    }
+
+    #[test]
+    fn a_command_the_shell_knows_is_published_as_green() {
+        let answers = answers_from(&[b"--command-known=ls"]);
+        assert_eq!(
+            spans_of("ls", &answers),
+            vec![HighlightSpan::new(0, 2, StyleId::Command)],
+            "a command the shell knows must be published as a command"
+        );
+    }
+
+    #[test]
+    fn a_command_the_shell_does_not_know_is_published_as_red() {
+        let answers = answers_from(&[b"--command-unknown=nosuchcmd"]);
+        assert_eq!(
+            spans_of("nosuchcmd", &answers),
+            vec![HighlightSpan::new(0, 9, StyleId::UnknownCommand)],
+            "a command the shell does not know must be published as unknown"
+        );
+    }
+
+    #[test]
+    fn a_command_word_with_no_answer_is_not_published_at_all() {
+        // The bug this fixes: `ls | nosuchcmd` painted the second command
+        // word green, because the lexer's own style for a command word is
+        // green and the module fell back to it.
+        let answers = answers_from(&[]);
+        assert!(
+            spans_of("ls", &answers).is_empty(),
+            "a command nobody said anything about must not be published"
+        );
+        let spans = spans_of("ls | nosuchcmd", &answers);
+        assert!(
+            !spans.iter().any(|s| s.style == StyleId::Command),
+            "no command may be published without an answer: {spans:?}"
+        );
+        assert!(
+            !spans.iter().any(|s| s.style == StyleId::UnknownCommand),
+            "no command may be published without an answer: {spans:?}"
+        );
+    }
+
+    #[test]
+    fn several_answers_are_kept_apart() {
+        // A line can hold more than one command word, and the shell
+        // answers for each of them. The right answer must be applied to
+        // the right word.
+        let answers = answers_from(&[b"--command-known=ls", b"--command-unknown=nosuchcmd"]);
+        let spans = spans_of("ls | nosuchcmd", &answers);
+        assert_eq!(
+            spans,
+            vec![
+                HighlightSpan::new(0, 2, StyleId::Command),
+                HighlightSpan::new(3, 4, StyleId::Operator),
+                HighlightSpan::new(5, 14, StyleId::UnknownCommand),
+            ],
+            "each command word must get its own answer"
+        );
+    }
+
+    #[test]
+    fn an_argument_is_not_published_as_a_command() {
+        // Only the command word is a command. `ls` here is an argument, and
+        // it must not be coloured like one — even when the shell knows the
+        // word `ls`.
+        let answers = answers_from(&[b"--command-known=echo"]);
+        let spans = spans_of("echo ls", &answers);
+        assert_eq!(
+            spans,
+            vec![
+                HighlightSpan::new(0, 4, StyleId::Command),
+                HighlightSpan::new(5, 7, StyleId::Argument),
+            ],
+            "only the command word may be a command"
+        );
+        assert!(
+            !spans[1..]
+                .iter()
+                .any(|s| matches!(s.style, StyleId::Command | StyleId::UnknownCommand)),
+            "an argument must never be published as a command"
+        );
+    }
+
+    #[test]
+    fn a_command_inside_a_substitution_is_not_published_without_an_answer() {
+        // The command of a command substitution is a command in its own
+        // right, and the lexer's green for it says the same thing the
+        // green of a command word says: that the shell knows it.
+        let answers = answers_from(&[]);
+        let spans = spans_of("echo $(cmd)", &answers);
+        assert!(
+            !spans.iter().any(|s| s.style == StyleId::Command),
+            "no command may be published without an answer: {spans:?}"
+        );
+        let answers = answers_from(&[b"--command-known=cmd"]);
+        let spans = spans_of("echo $(cmd)", &answers);
+        assert!(
+            spans.iter().any(|s| s.style == StyleId::Command),
+            "a command the shell knows is published: {spans:?}"
+        );
+    }
+
+    // --- words --------------------------------------------------------------
+
+    #[test]
+    fn a_word_is_the_bytes_its_tokens_cover() {
+        let line = b"echo 'hi there'";
+        let tokens = tokens_of("echo 'hi there'");
+        let word = &tokens[1..2];
+        assert_eq!(word_text(word, line), b"'hi there'");
+    }
+
+    #[test]
+    fn only_a_literal_word_can_name_a_file() {
+        let line = b"cat /etc/passwd";
+        let tokens = tokens_of("cat /etc/passwd");
+        assert!(
+            is_literal(&tokens[1..2], line),
+            "a plain word is literal text"
+        );
+    }
+
+    #[test]
+    fn a_quoted_word_is_not_literal() {
+        // The file it names is not knowable without running the shell.
+        let line = b"cat \"/etc/passwd\"";
+        let tokens = tokens_of("cat \"/etc/passwd\"");
+        let quoted: Vec<Token> = tokens[1..].to_vec();
+        assert!(!is_literal(&quoted, line), "a quoted word is not literal");
+    }
+
+    #[test]
+    fn a_glob_is_not_literal() {
+        let line = b"cat *.txt";
+        let tokens = tokens_of("cat *.txt");
+        let glob: Vec<Token> = tokens[1..].to_vec();
+        assert!(!is_literal(&glob, line), "a glob is not literal text");
+    }
+
+    #[test]
+    fn a_tilde_is_literal_text() {
+        // `~` is a tilde expansion rather than a glob, and the rest of the
+        // word is still literal text.
+        let line = b"cat ~/notes";
+        let tokens = tokens_of("cat ~/notes");
+        let word: Vec<Token> = tokens[1..].to_vec();
+        assert!(is_literal(&word, line), "a tilde word is literal text");
+        assert_eq!(word_text(&word, line), b"~/notes");
+    }
+
+    // --- the diff -----------------------------------------------------------
+
+    #[test]
+    fn the_diff_agrees_with_the_highlighter_crates() {
+        // The module publishes spans that are not the lexer's, so it has
+        // its own diff. It must agree with the one in the `highlight`
+        // crate, which is the specification.
+        use highlight::SpanSet;
+        let lines = ["echo hi", "echo hi there", "git commit --amend", ""];
+        for a in lines {
+            for b in lines {
+                let old = SpanSet::from_tokens(&tokens_of(a));
+                let new = SpanSet::from_tokens(&tokens_of(b));
+                let old_spans: Vec<HighlightSpan> = old.spans().to_vec();
+                let new_spans: Vec<HighlightSpan> = new.spans().to_vec();
+                let mine = changed_ranges(&old_spans, &new_spans);
+                let theirs = highlight::diff(&old, &new);
+                assert_eq!(mine.len(), theirs.len(), "for {a:?} vs {b:?}");
+                for (m, t) in mine.iter().zip(theirs.iter()) {
+                    assert_eq!((m.start, m.end), (t.start, t.end), "for {a:?} vs {b:?}");
+                }
+            }
+        }
+    }
+
+    // --- the path cache -----------------------------------------------------
+
+    #[test]
+    fn the_path_cache_answers_the_same_twice() {
+        let mut cache = PathCache::default();
+        let now = Instant::now();
+        let dir = std::env::temp_dir();
+        let first = cache.lookup(dir.to_string_lossy().as_bytes(), now);
+        assert_eq!(first, Some(PathKind::Dir), "the temporary directory is a directory");
+        // The second answer comes from the cache, and must be the same.
+        assert_eq!(
+            cache.lookup(dir.to_string_lossy().as_bytes(), now),
+            first,
+            "the second answer must come from the cache"
+        );
+    }
+
+    #[test]
+    fn the_path_cache_remembers_a_path_that_does_not_exist() {
+        let mut cache = PathCache::default();
+        let now = Instant::now();
+        let missing = b"/no/such/path/for/the/test";
+        assert_eq!(cache.lookup(missing, now), None);
+        assert_eq!(cache.lookup(missing, now), None, "the answer is remembered");
+    }
+
+    /// A scratch directory that belongs to one test alone.
+    ///
+    /// The name carries the process id and the test's own name: cargo runs
+    /// the tests of a binary in parallel, and two tests that shared one
+    /// directory would delete each other's files — a failure that would
+    /// appear only when the machine was busy.
+    fn scratch_dir(label: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "shell-pulse-path-ttl-{}-{label}",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn a_fresh_answer_is_served_from_the_cache() {
+        // The answer is only trusted for the TTL: within it, the path is
+        // not looked up again — even though the file has gone.
+        let mut cache = PathCache::default();
+        let now = Instant::now();
+        let dir = scratch_dir("fresh");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("the test directory");
+        let file = dir.join("file");
+        std::fs::write(&file, b"x").expect("the test file");
+        let path = file.to_string_lossy().into_owned();
+
+        assert_eq!(cache.lookup(path.as_bytes(), now), Some(PathKind::File));
+
+        // The file is gone, but the answer is still fresh.
+        std::fs::remove_file(&file).expect("the test file");
+        assert_eq!(
+            cache.lookup(path.as_bytes(), now + PATH_TTL / 2),
+            Some(PathKind::File),
+            "a fresh answer must be served from the cache"
+        );
+    }
+
+    #[test]
+    fn an_expired_answer_is_looked_up_again() {
+        // A file that is deleted while the user is typing must stop being
+        // highlighted, and a file that is created must start being
+        // highlighted. Both need the answer to expire.
+        let mut cache = PathCache::default();
+        let now = Instant::now();
+        let dir = scratch_dir("expired");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("the test directory");
+        let file = dir.join("file");
+        let path = file.to_string_lossy().into_owned();
+
+        // The file does not exist yet.
+        assert_eq!(cache.lookup(path.as_bytes(), now), None);
+
+        // It is created, and the answer has not expired: the cache is
+        // still trusted, so the file is not picked up yet.
+        std::fs::write(&file, b"x").expect("the test file");
+        assert_eq!(
+            cache.lookup(path.as_bytes(), now + PATH_TTL / 2),
+            None,
+            "a fresh answer must be served from the cache"
+        );
+
+        // The answer has expired: the path is looked up again, and the
+        // file is there.
+        let later = now + PATH_TTL + Duration::from_millis(1);
+        assert_eq!(
+            cache.lookup(path.as_bytes(), later),
+            Some(PathKind::File),
+            "an expired answer must be looked up again"
+        );
+
+        // And the other way round: a file that is deleted stops being
+        // highlighted once the answer has expired.
+        std::fs::remove_file(&file).expect("the test file");
+        assert_eq!(
+            cache.lookup(path.as_bytes(), later + PATH_TTL + Duration::from_millis(1)),
+            None,
+            "an expired answer must be looked up again"
+        );
+    }
+
+    #[test]
+    fn the_path_cache_does_not_grow_without_bound() {
+        let mut cache = PathCache::default();
+        let now = Instant::now();
+        for i in 0..(MAX_CACHED_PATHS * 2) {
+            let path = format!("/no/such/path/{i}");
+            cache.lookup(path.as_bytes(), now);
+        }
+        assert!(
+            cache.entries.len() <= MAX_CACHED_PATHS,
+            "the cache must stay bounded: {} entries",
+            cache.entries.len()
         );
     }
 }
