@@ -53,6 +53,55 @@ use crate::LexError;
 /// With that baseline the crossover is between 86 and 169 bytes.
 pub const INCREMENTAL_MIN_LEN: usize = 128;
 
+/// The capacity the lexer keeps for itself, in bytes.
+///
+/// The same figure the module's own scratch buffer keeps
+/// (`crates/zsh-module/src/lib.rs`): a kilobyte is more than an ordinary
+/// command line needs, and the module only ever hands the lexer lines of a
+/// few kilobytes at most.
+const KEEP_BYTES: usize = 1024;
+
+/// How much bigger than the line the capacity may be before it is released.
+///
+/// Four times the line is comfortably more than a command line needs, so
+/// the buffers do not reallocate while the user is editing one.
+const KEEP_RATIO: usize = 4;
+
+/// Give back the capacity a buffer no longer needs.
+///
+/// `Vec::clear` keeps the capacity, so without this the cache would hold
+/// the largest line the user has ever pasted for the rest of the session:
+/// the token and resume-point buffers are sized by the *longest* line the
+/// user ever typed, not by the current one.
+///
+/// The rule is hysteretic — the same rule the module's own scratch buffer
+/// uses. Shrinking on every keystroke would be worse than the problem it
+/// solves: `shrink_to` reallocates, and an allocation on the interactive
+/// thread is exactly what these buffers exist to avoid. The capacity is
+/// therefore released only when it is large in absolute terms *and* much
+/// larger than what the line needs, so a line that grows and shrinks within
+/// the retained capacity never triggers a reallocation.
+///
+/// `needed` is how many elements the buffer has to hold for the current
+/// line: the yardstick the capacity is measured against. The buffer itself
+/// may be holding something else — or nothing at all.
+fn release_capacity<T>(buf: &mut Vec<T>, needed: usize) {
+    let element = core::mem::size_of::<T>();
+    // A zero-sized element has no capacity to give back.
+    if element == 0 {
+        return;
+    }
+    let capacity = buf.capacity().saturating_mul(element);
+    // Keep enough room for the line itself and for one a few times longer,
+    // so that ordinary editing never reallocates.
+    let keep = KEEP_BYTES.max(needed.saturating_mul(element).saturating_mul(KEEP_RATIO));
+    if capacity > keep {
+        // `shrink_to` never drops below the length, so a buffer that still
+        // holds something keeps exactly what it holds.
+        buf.shrink_to(KEEP_BYTES / element);
+    }
+}
+
 /// What an incremental re-lex did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RelexOutcome {
@@ -147,6 +196,9 @@ impl LexCache {
         core::mem::swap(&mut self.tokens, &mut self.scratch_tokens);
         core::mem::swap(&mut self.resumes, &mut self.scratch_resumes);
         self.final_state = final_state;
+        // The parse is complete and the buffers have been swapped, so
+        // nothing that is still in use can be touched.
+        self.release_unused_capacity();
         Ok(self.tokens.len())
     }
 
@@ -457,6 +509,53 @@ impl LexCache {
         self.merged_tokens = tokens;
         self.merged_resumes = resumes;
         self.final_state = final_state;
+        // The merge is over and the buffers have been swapped, so the
+        // capacity can be released. Doing it any earlier would shrink a
+        // buffer the merge is about to read: `shrink_to` reallocates, and
+        // the parse would be taken out from under the merge.
+        self.release_unused_capacity();
+    }
+
+    /// Give back the capacity the buffers no longer need.
+    ///
+    /// # Why
+    ///
+    /// `Vec::clear` keeps the capacity, so without this the cache would
+    /// hold the largest line the user has ever pasted for the rest of the
+    /// session: the buffers are sized by the *longest* line, not by the
+    /// current one.
+    ///
+    /// # When
+    ///
+    /// Only once a parse has finished and the buffers have been swapped, so
+    /// that no buffer which is still in use is touched. The current parse
+    /// (`text`, `tokens`, `resumes`) keeps what it holds — it is what the
+    /// caller reads. The scratch and the merge buffers are refilled from
+    /// scratch on the next keystroke, so what they hold is of no use to
+    /// anybody and is given back here.
+    fn release_unused_capacity(&mut self) {
+        // How much the current line needs: the yardstick every buffer is
+        // measured against.
+        let text = self.text.len();
+        let tokens = self.tokens.len();
+        let resumes = self.resumes.len();
+
+        // The current parse: it keeps its contents, and enough room for
+        // the line to grow into.
+        release_capacity(&mut self.text, text);
+        release_capacity(&mut self.tokens, tokens);
+        release_capacity(&mut self.resumes, resumes);
+
+        // The scratch and the merge buffers are emptied before every use,
+        // so whatever they hold is dead weight.
+        self.scratch_tokens.clear();
+        self.scratch_resumes.clear();
+        self.merged_tokens.clear();
+        self.merged_resumes.clear();
+        release_capacity(&mut self.scratch_tokens, tokens);
+        release_capacity(&mut self.scratch_resumes, resumes);
+        release_capacity(&mut self.merged_tokens, tokens);
+        release_capacity(&mut self.merged_resumes, resumes);
     }
 
     /// The parse state at the end of the last scan.
@@ -484,6 +583,23 @@ mod tests {
             "incremental result differs from a full scan for {old:?} -> {new:?}"
         );
         outcome
+    }
+
+    /// The capacity the cache is holding on to, in bytes.
+    ///
+    /// The sum of every buffer's capacity: what the shell would keep alive
+    /// for the rest of the session, whether or not the line it holds needs
+    /// it.
+    fn retained_capacity(cache: &LexCache) -> usize {
+        let token = core::mem::size_of::<Token>();
+        let resume = core::mem::size_of::<ResumePoint>();
+        cache.text.capacity()
+            + cache.tokens.capacity() * token
+            + cache.resumes.capacity() * resume
+            + cache.scratch_tokens.capacity() * token
+            + cache.scratch_resumes.capacity() * resume
+            + cache.merged_tokens.capacity() * token
+            + cache.merged_resumes.capacity() * resume
     }
 
     #[test]
@@ -620,5 +736,133 @@ mod tests {
         cache.lex(b"echo hi").expect("scannable");
         cache.relex(b"").expect("scannable");
         assert!(cache.tokens().is_empty());
+    }
+
+    // --- the retained capacity ---------------------------------------------
+
+    /// A pasted line: many words, so that the token and resume-point
+    /// buffers grow as well as the text.
+    fn pasted_line(words: usize) -> String {
+        "word ".repeat(words)
+    }
+
+    #[test]
+    fn the_cache_releases_the_capacity_of_a_line_it_no_longer_holds() {
+        // The point of the whole exercise: without this the shell would
+        // hold the biggest line the user has ever pasted for the rest of
+        // the session.
+        let mut cache = LexCache::new();
+        let big = pasted_line(16 * 1024);
+        assert_eq!(big.len(), 80 * 1024);
+        cache.lex(big.as_bytes()).expect("scannable");
+        let grown = retained_capacity(&cache);
+        assert!(
+            grown > 1024 * 1024,
+            "the pasted line must be held: {grown} bytes"
+        );
+
+        // The line goes away; the capacity must go with it.
+        cache.lex(b"ls").expect("scannable");
+        let released = retained_capacity(&cache);
+        assert!(
+            released < grown / 4,
+            "the cache kept {released} bytes of a line it no longer holds \
+             (it was holding {grown})"
+        );
+        // The line it does hold must still be there, and correct.
+        assert_eq!(cache.tokens().len(), 1);
+        let full = lex(b"ls").expect("full scan");
+        assert_eq!(cache.tokens(), full.tokens.as_slice());
+    }
+
+    #[test]
+    fn the_cache_releases_the_capacity_of_a_line_it_no_longer_holds_on_the_incremental_path() {
+        // The same, but through the incremental path: the release has to
+        // happen *after* the merge, so it cannot be left to `lex` alone.
+        let mut cache = LexCache::new();
+        let big = pasted_line(16 * 1024);
+        cache.lex(big.as_bytes()).expect("scannable");
+        let grown = retained_capacity(&cache);
+
+        // Long enough for the incremental path, short enough to be an
+        // ordinary command line.
+        let small = pasted_line(64);
+        assert!(small.len() > INCREMENTAL_MIN_LEN);
+        cache.relex(small.as_bytes()).expect("scannable");
+        let released = retained_capacity(&cache);
+        assert!(
+            released < grown / 4,
+            "the cache kept {released} bytes of a line it no longer holds \
+             (it was holding {grown})"
+        );
+        let full = lex(small.as_bytes()).expect("full scan");
+        assert_eq!(cache.tokens(), full.tokens.as_slice());
+    }
+
+    #[test]
+    fn the_cache_does_not_reallocate_for_every_keystroke() {
+        // The shrink must be rare: a reallocation on the interactive thread
+        // is exactly what these buffers exist to avoid.
+        //
+        // The line is a few hundred bytes on purpose. It is long enough
+        // that the *hysteresis* — four times the line — is what protects
+        // the buffers, rather than the absolute floor: a policy that
+        // released the capacity as soon as it was bigger than the line
+        // would keep the capacity of this line changing on every
+        // keystroke, and this test would catch it.
+        let mut cache = LexCache::new();
+        let line = "word ".repeat(120);
+        let edited = "word ".repeat(120) + "x";
+        cache.lex(line.as_bytes()).expect("scannable");
+        // Warm the buffers up: the first re-lex also grows them.
+        cache.relex(edited.as_bytes()).expect("scannable");
+        let capacity = retained_capacity(&cache);
+
+        for i in 0..1000 {
+            let line: &[u8] = if i % 2 == 0 { edited.as_bytes() } else { line.as_bytes() };
+            cache.relex(line).expect("scannable");
+        }
+        assert_eq!(
+            retained_capacity(&cache),
+            capacity,
+            "a short line must not make the cache reallocate"
+        );
+    }
+
+    #[test]
+    fn the_cache_does_not_reallocate_for_every_keystroke_of_a_short_line() {
+        // The same, for a line short enough to be re-parsed rather than
+        // edited: this is the path almost every keystroke takes.
+        let mut cache = LexCache::new();
+        let line = "word ".repeat(12);
+        let edited = "word ".repeat(12) + "x";
+        cache.lex(line.as_bytes()).expect("scannable");
+        // Warm the buffers up: the first re-lex also grows them.
+        cache.relex(edited.as_bytes()).expect("scannable");
+        let capacity = retained_capacity(&cache);
+
+        for i in 0..1000 {
+            let line: &[u8] = if i % 2 == 0 { edited.as_bytes() } else { line.as_bytes() };
+            cache.relex(line).expect("scannable");
+        }
+        assert_eq!(
+            retained_capacity(&cache),
+            capacity,
+            "a short line must not make the cache reallocate"
+        );
+    }
+
+    #[test]
+    fn the_cache_keeps_the_capacity_a_line_needs() {
+        // The line is still there, so the capacity it needs must be kept:
+        // giving it back would mean reallocating on the next keystroke.
+        let mut cache = LexCache::new();
+        let line = "word ".repeat(120);
+        cache.lex(line.as_bytes()).expect("scannable");
+        let capacity = retained_capacity(&cache);
+        // The same line again: nothing changed, so nothing may be
+        // reallocated.
+        cache.relex(line.as_bytes()).expect("scannable");
+        assert_eq!(retained_capacity(&cache), capacity);
     }
 }

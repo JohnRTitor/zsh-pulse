@@ -21,6 +21,12 @@
 //! property of the plugin, so each one is a documented skip with a printed
 //! reason rather than a failure. What must never happen is a silent pass:
 //! every skip says why it happened.
+//!
+//! Every skip prints two things on stderr: the reason in prose, and the
+//! marker `SKIP-PTY: <reason>`. The marker is what a machine can read.
+//! **A CI job that requires this test must grep the output for `SKIP-PTY`
+//! and fail when it finds one**, because a skipped end-to-end test must
+//! never be indistinguishable from a passing one.
 
 mod common;
 
@@ -31,6 +37,59 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
 use common::{adapter_path, install_module, require_zsh};
+
+/// The marker that says "this test did not run".
+///
+/// A CI job that *requires* the pty test must grep the output for
+/// `SKIP-PTY` and fail when it finds one: a skipped end-to-end test must
+/// never be indistinguishable from a passing one.
+const SKIP_MARKER: &str = "SKIP-PTY";
+
+/// Prints the machine-readable skip marker when it goes out of scope.
+///
+/// The reason is printed in prose by whoever detects the missing
+/// dependency; the marker is printed by this guard, so that the two
+/// cannot drift apart and so that a test which returns early cannot
+/// forget the marker.
+struct SkipMarker(&'static str);
+
+impl Drop for SkipMarker {
+    fn drop(&mut self) {
+        eprintln!("{SKIP_MARKER}: {}", self.0);
+    }
+}
+
+/// Print the reason a test did not run.
+///
+/// Two things go to stderr: the reason in prose, and the machine-readable
+/// marker. The marker is printed by the *test*, not only by the helpers
+/// that detect the missing dependency, so `cargo test -- --nocapture`
+/// shows it next to the test that skipped.
+fn skip(reason: &str) {
+    eprintln!("SKIPPED: {reason}");
+    eprintln!("{SKIP_MARKER}: {reason}");
+}
+
+/// Skip the calling test when there is no `zsh` to test against.
+///
+/// `zsh` is a test dependency, not a property of the plugin: without it
+/// there is no shell to load the module into, so the assertion could not
+/// be made at all (`common::zsh_available` says why skipping is the right
+/// answer rather than failing).
+///
+/// The shared `require_zsh!` macro prints the human-readable reason and
+/// returns; the guard prints the machine-readable marker as the test
+/// leaves, so that both belong to the same skip.
+macro_rules! require_zsh_pty {
+    () => {
+        if !common::zsh_available() {
+            // The marker is printed when this scope is left — that is,
+            // after `require_zsh!` has printed the reason.
+            let _marker = SkipMarker("`zsh` is not on PATH");
+            require_zsh!();
+        }
+    };
+}
 
 /// The prompt the shell under the pty draws.
 ///
@@ -296,10 +355,15 @@ fn write_child_rc(dir: &Path, load_module: bool) {
 
 /// Run one scenario under a pseudo-terminal.
 ///
-/// Returns `None` when this environment cannot provide a pseudo-terminal.
-/// That is a documented skip, not a failure: the pseudo-terminal is a test
-/// dependency, and the plugin has no say in whether the machine has one.
-fn capture(scenario: &Scenario, term: &str, label: &str) -> Option<Capture> {
+/// Returns `Err(reason)` when this environment cannot provide a
+/// pseudo-terminal. That is a documented skip, not a failure: the
+/// pseudo-terminal is a test dependency, and the plugin has no say in
+/// whether the machine has one.
+///
+/// The reason is *returned* and not printed here: the caller prints it,
+/// so that the skip markers come from the test itself and a caller
+/// cannot forget to print them.
+fn capture(scenario: &Scenario, term: &str, label: &str) -> Result<Capture, String> {
     let dir = temp_dir(label);
 
     let harness = dir.join("harness.zsh");
@@ -346,9 +410,11 @@ fn capture(scenario: &Scenario, term: &str, label: &str) -> Option<Capture> {
         pipe.read_to_string(&mut stderr).expect("read the harness diagnostics");
     }
 
+    // Exit code 3 is the harness's way of saying "this machine cannot run
+    // the pseudo-terminal". It is a skip, and the reason is the harness's
+    // own message.
     if status.code() == Some(3) {
-        eprintln!("SKIPPED: {}", stderr.trim());
-        return None;
+        return Err(stderr.trim().to_string());
     }
 
     assert!(
@@ -360,7 +426,7 @@ fn capture(scenario: &Scenario, term: &str, label: &str) -> Option<Capture> {
     // The scratch directory is not needed any more; the bytes it held are
     // in memory now.
     let _ = fs::remove_dir_all(&dir);
-    Some(Capture {
+    Ok(Capture {
         bytes,
         status: stdout.trim().to_string(),
     })
@@ -406,16 +472,16 @@ fn colour_terminal() -> Option<&'static str> {
 
 #[test]
 fn the_typed_command_is_highlighted_on_the_terminal() {
-    require_zsh!();
+    require_zsh_pty!();
     let Some(term) = colour_terminal() else {
-        eprintln!(
-            "SKIPPED: no terminal type with the standard xterm colour capabilities \
+        skip(
+            "no terminal type with the standard xterm colour capabilities \
              was found, so the bytes zsh writes for `fg=cyan,bold` cannot be known \
-             in advance and asserting on them would be a guess."
+             in advance and asserting on them would be a guess.",
         );
         return;
     };
-    let Some(capture) = capture(
+    let capture = match capture(
         &Scenario {
             typed: "echo SPARGXYZ",
             wait_for: ARGUMENT.as_bytes(),
@@ -423,9 +489,12 @@ fn the_typed_command_is_highlighted_on_the_terminal() {
         },
         term,
         "highlighted",
-    ) else {
-        // `capture` printed the reason it skipped.
-        return;
+    ) {
+        Ok(capture) => capture,
+        Err(reason) => {
+            skip(&reason);
+            return;
+        }
     };
 
     // The module really loaded: without this the whole scenario would be
@@ -482,15 +551,15 @@ fn the_typed_command_is_highlighted_on_the_terminal() {
 
 #[test]
 fn an_empty_line_is_not_highlighted() {
-    require_zsh!();
+    require_zsh_pty!();
     let Some(term) = colour_terminal() else {
-        eprintln!(
-            "SKIPPED: no terminal type with the standard xterm colour \
-             capabilities was found, so there is nothing to compare against."
+        skip(
+            "no terminal type with the standard xterm colour \
+             capabilities was found, so there is nothing to compare against.",
         );
         return;
     };
-    let Some(capture) = capture(
+    let capture = match capture(
         &Scenario {
             typed: "",
             wait_for: PROMPT.as_bytes(),
@@ -498,9 +567,12 @@ fn an_empty_line_is_not_highlighted() {
         },
         term,
         "empty",
-    ) else {
-        // `capture` printed the reason it skipped.
-        return;
+    ) {
+        Ok(capture) => capture,
+        Err(reason) => {
+            skip(&reason);
+            return;
+        }
     };
 
     // The module really loaded, so the absence of colour below is the
@@ -521,15 +593,15 @@ fn an_empty_line_is_not_highlighted() {
 
 #[test]
 fn without_the_module_nothing_is_highlighted() {
-    require_zsh!();
+    require_zsh_pty!();
     let Some(term) = colour_terminal() else {
-        eprintln!(
-            "SKIPPED: no terminal type with the standard xterm colour \
-             capabilities was found, so there is nothing to compare against."
+        skip(
+            "no terminal type with the standard xterm colour \
+             capabilities was found, so there is nothing to compare against.",
         );
         return;
     };
-    let Some(capture) = capture(
+    let capture = match capture(
         &Scenario {
             typed: "echo SPARGXYZ",
             wait_for: ARGUMENT.as_bytes(),
@@ -537,9 +609,12 @@ fn without_the_module_nothing_is_highlighted() {
         },
         term,
         "no-module",
-    ) else {
-        // `capture` printed the reason it skipped.
-        return;
+    ) {
+        Ok(capture) => capture,
+        Err(reason) => {
+            skip(&reason);
+            return;
+        }
     };
 
     // The control: zsh itself must not colour the line, or the assertion

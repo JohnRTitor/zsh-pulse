@@ -145,6 +145,12 @@ pub mod zsh {
     /// `ztrdup` is `zalloc` + `strcpy`. `dupstring`, the superficially
     /// equivalent symbol, uses `zhalloc` and is therefore unusable here.
     pub const ZTRDUP: &str = "ztrdup";
+    /// `char **getaparam(char *)` — read an array parameter
+    /// (`zsh-src/Src/params.c:3057-3070`).
+    ///
+    /// Optional: the module can work without it, by replacing the whole
+    /// `region_highlight` array instead of merging into it.
+    pub const GETAPARAM: &str = "getaparam";
 }
 
 /// `dlopen`/`dlsym`, declared locally so this crate has **no dependencies**.

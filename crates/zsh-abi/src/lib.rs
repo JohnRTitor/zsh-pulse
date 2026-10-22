@@ -21,6 +21,10 @@
 //!   (`zsh-src/Src/module.c:1774-1777`).
 //! - `getsparam()` returns `char *`, not `char **`
 //!   (`zsh-src/Src/params.c:3037-3045`). Getting this wrong segfaults zsh.
+//! - `getaparam()` returns `char **` — the elements of an *array* parameter,
+//!   and `NULL` when the parameter does not exist or is not an array
+//!   (`zsh-src/Src/params.c:3057-3070`). The array may live in zsh's *pool*
+//!   memory, so its elements must be copied before they are used.
 //! - `addbuiltins()` takes three arguments: name, array, size
 //!   (`zsh-src/Src/module.c:543`).
 //! - `zmodload` rejects absolute paths and `.so` suffixes
@@ -33,7 +37,7 @@ pub mod raw;
 
 pub use guard::{guard, is_degraded};
 pub use probe::{Capabilities, REQUIRED_SYMBOLS};
-pub use api::{Api, CappedRead};
+pub use api::{Api, CappedRead, GetAparamFn};
 pub use raw::{Builtin, CStr, HashNode, Module, Options};
 
 /// Name this module registers its builtins under.

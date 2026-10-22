@@ -33,6 +33,40 @@ use highlight::{char_offset, HighlightSpan, StyleId};
 /// The `memo=` token that identifies our entries.
 pub const MEMO: &str = "memo=shell-pulse";
 
+/// Whether an entry is one of ours.
+///
+/// The `memo=` field exists so that plugins can tell *whose* entries they
+/// are looking at (`zsh-src/Doc/Zsh/zle.yo:986-998`); this is how we find
+/// our own previous entries again, so that we replace them instead of
+/// accumulating them.
+///
+/// The match is a substring, exactly as `zsh-syntax-highlighting` does it
+/// (`research/upstream/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh:170`).
+pub fn is_our_entry(entry: &str) -> bool {
+    entry.contains(MEMO)
+}
+
+/// Merge our entries with the ones another plugin left behind.
+///
+/// `existing` is what zsh currently holds; `ours` is what we want to publish.
+/// The result is everything that is not ours, followed by ours — ours last,
+/// because zsh resolves overlapping regions in favour of the later entry
+/// (`zsh-src/Doc/Zsh/zle.yo:1019-1021`).
+///
+/// Without this the module would replace the whole array on every keystroke
+/// and another plugin's highlights would disappear. The reference
+/// implementation, `zsh-syntax-highlighting`, does exactly the same thing
+/// (`research/upstream/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh:168-175`).
+pub fn merge_entries(existing: &[String], ours: &[std::ffi::CString]) -> Vec<std::ffi::CString> {
+    let mut merged: Vec<std::ffi::CString> = existing
+        .iter()
+        .filter(|e| !is_our_entry(e))
+        .filter_map(|e| std::ffi::CString::new(e.as_str()).ok())
+        .collect();
+    merged.extend_from_slice(ours);
+    merged
+}
+
 /// The `zle_highlight` attribute for each style.
 ///
 /// `None` means "leave this alone": an ordinary argument is shown exactly as
@@ -84,6 +118,11 @@ impl Entries {
     pub fn build(&mut self, spans: &[HighlightSpan], offsets: Option<&[u32]>) -> bool {
         self.buf.clear();
         self.count = 0;
+        self.build_into(spans, offsets)
+    }
+
+    /// Write our own entries into the buffer, which must already be empty.
+    fn build_into(&mut self, spans: &[HighlightSpan], offsets: Option<&[u32]>) -> bool {
         let mut truncated = false;
         for span in spans {
             let Some(attr) = attribute(span.style) else { continue };
@@ -128,6 +167,44 @@ impl Entries {
         self.count = 0;
     }
 
+    /// Build the entries, keeping the ones another plugin published.
+    ///
+    /// `existing` is what zsh currently holds. Our own previous entries are
+    /// recognised by their `memo=` and are replaced; everything else is kept
+    /// and ours are appended, because zsh resolves overlapping regions in
+    /// favour of the later entry
+    /// (`zsh-src/Doc/Zsh/zle.yo:1019-1021`).
+    ///
+    /// The foreign entries are written into the same buffer as ours, so that
+    /// publishing still allocates nothing per region.
+    ///
+    /// Returns the rows, borrowing this buffer.
+    pub fn build_merged(
+        &mut self,
+        existing: &[String],
+        spans: &[HighlightSpan],
+        offsets: Option<&[u32]>,
+    ) -> (Vec<&std::ffi::CStr>, bool) {
+        self.buf.clear();
+        self.count = 0;
+        for entry in existing {
+            if is_our_entry(entry) {
+                // Ours from last time: replaced by the new ones below.
+                continue;
+            }
+            // An entry with an interior NUL would truncate the row, so it is
+            // dropped rather than published half-formed.
+            if entry.as_bytes().contains(&0) {
+                continue;
+            }
+            self.buf.extend_from_slice(entry.as_bytes());
+            self.buf.push(0);
+            self.count += 1;
+        }
+        let truncated = self.build_into(spans, offsets);
+        (self.rows(), truncated)
+    }
+
     /// The rows, as NUL-terminated C strings.
     ///
     /// The returned slices borrow the buffer, so the buffer must not be
@@ -159,7 +236,14 @@ impl Entries {
 /// zsh parses every region specification on every redraw
 /// (`zsh-src/Src/Zle/zle_refresh.c:513-586`), so the number of regions is
 /// the real cost — not the length of the line.
-pub const MAX_ENTRIES: usize = 256;
+///
+/// **Measured**, not guessed. `bench/bench_zpty.zsh --regions N` types a
+/// line with N regions and measures the per-keystroke latency; the marginal
+/// cost is 0.3–0.9 µs per region depending on the count. At 32 regions the
+/// added latency is about 10 µs — the budget this project set for a
+/// keystroke. The module's own share is far smaller (about 12 ns per
+/// region), but the latency the *user* waits for is zsh's.
+pub const MAX_ENTRIES: usize = 32;
 
 /// Write a decimal number into a buffer.
 ///

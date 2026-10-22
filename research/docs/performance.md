@@ -18,6 +18,8 @@ Companion documents: [architecture](architecture.md) ·
 |---|---|---|
 | End-to-end cost of one keystroke through zsh | **0.86 µs**, range 0.83–0.89 µs over 3 runs | `bench/bench_module_call.zsh 20000 28` |
 | Cost of converting spans into `region_highlight` entries | **0.36 µs** for a 188-byte line with 9 regions | `cargo run --release -p zsh-module --example bench_region` |
+| Marginal cost of one more region, end to end | **0.3–0.9 µs** per region | `bench/bench_zpty.zsh --regions N 60` |
+| Marginal cost of one more region, the module's own share | **~12 ns** per region | same, against the entry-building benchmark |
 | Target | ≤ 10 µs | [`../PLAN.md`](../PLAN.md) |
 | Headroom | **≈ 11×** | 10 µs ÷ 0.87 µs |
 | Full re-parse of a 1 389-byte line | 3.552 µs (the cost of a round: re-prime plus the parse) | `cargo run --release -p lexer --example bench_incremental 200` |
@@ -356,6 +358,29 @@ reproduce. They are in the harness now.
 the first two arms, **19.1 µs**; the cost of the plugin merely *existing* —
 the hook, and the ZLE special parameters zsh creates for every widget — is
 the difference between the last two, **8.8 µs**.
+
+**And how that scales with the number of regions.** The harness can type a
+line with N regions and measure the same thing:
+
+| regions | µs/keystroke |
+|---|---|
+| 2 | 80.0 |
+| 6 | 75.5 |
+| 21 | 80.8 |
+| 41 | 91.4 |
+| 81 | 109.1 |
+| 161 | 194.8 |
+| 256 | 294.3 |
+
+A linear fit over the whole series gives an intercept of 66.9 µs and a
+**slope of 0.835 µs per region**; over the larger counts alone the slope is
+0.974 µs. The module's own share of that is about **12 ns per region**, so
+roughly 98 % of the marginal cost is zsh's: parsing the region specification
+on every redraw, and writing the extra escape sequences.
+
+**That is what the region cap is derived from.** At 32 regions the added
+latency is about 10 µs — the budget this project set for a keystroke — so
+`region::MAX_ENTRIES` is 32. It used to be 256, which was a guess.
 
 **That 19.1 µs is *not* the module's own work.** The native call costs
 0.67 µs (§3.1), and the 8.8 µs of "the plugin existing" is zsh's. The

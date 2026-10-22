@@ -245,11 +245,6 @@ impl Highlighter {
             debug(&format!("{} range(s) restyled: {}", changes.len(), ranges.join(" ")));
         }
 
-        let truncated = region::Entries::build(&mut self.entries, self.spans.spans(), offsets);
-        if truncated && *debug_enabled() {
-            debug("too many highlighted regions; the highlighting was truncated");
-        }
-
         if started.elapsed() > BUDGET {
             // The line is too expensive to highlight right now. The cache
             // has been updated, so the next keystroke will be cheap; this
@@ -265,10 +260,30 @@ impl Highlighter {
             return;
         }
 
-        if *debug_enabled() {
-            debug(&format!("published {} regions", self.entries.len()));
+        // Merge with whatever another plugin has published.
+        //
+        // `region_highlight` is replaced wholesale by `setaparam`, so
+        // publishing only our own entries would delete everyone else's. The
+        // entries we published last time are recognised by their `memo=` and
+        // are replaced; everything else is kept.
+        let mut existing: Vec<String> = Vec::new();
+        // Safety: inside zsh.
+        let known = unsafe { api.get_param_array(cstr(b"region_highlight\0"), &mut existing) };
+        if !known {
+            // The parameter is not there, so there is nothing to merge with
+            // and nothing to publish into: writing would create a *global*
+            // parameter of that name in the user's shell.
+            self.pushed = false;
+            return;
         }
-        let rows = self.entries.rows();
+        let (rows, truncated) =
+            self.entries.build_merged(&existing, self.spans.spans(), offsets);
+        if *debug_enabled() {
+            debug(&format!("published {} regions", rows.len()));
+        }
+        if truncated && *debug_enabled() {
+            debug("too many highlighted regions; the highlighting was truncated");
+        }
         // Safety: inside zsh, and the rows are NUL-terminated.
         unsafe { api.set_param_array(cstr(b"region_highlight\0"), &rows) };
 
@@ -506,6 +521,7 @@ unsafe extern "C" fn highlight_builtin(
         // panic again on the same input, and the default panic hook would
         // print a backtrace into the user's terminal on every keystroke.
         if zsh_abi::is_degraded() {
+            report_degraded();
             return 0;
         }
 
@@ -594,6 +610,52 @@ unsafe extern "C" fn highlight_builtin(
         }
         0
     })
+}
+
+/// Install a panic hook that prints one line.
+///
+/// The default Rust hook prints a multi-line message and a note about
+/// `RUST_BACKTRACE` — straight into the user's terminal, on the first
+/// keystroke that goes wrong. One line, naming the place, is enough.
+fn install_panic_hook() {
+    static ONCE: OnceLock<()> = OnceLock::new();
+    ONCE.get_or_init(|| {
+        std::panic::set_hook(Box::new(|info| {
+            use std::io::Write as _;
+            let location = info.location().map(|l| format!("{}:{}", l.file(), l.line()));
+            let message = info
+                .payload()
+                .downcast_ref::<&str>()
+                .map(|s| (*s).to_string())
+                .or_else(|| info.payload().downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "unknown".to_string());
+            let _ = writeln!(
+                std::io::stderr(),
+                "shell-pulse: internal error at {}: {}",
+                location.as_deref().unwrap_or("?"),
+                message
+            );
+        }));
+    });
+}
+
+/// Whether the user has been told that the plugin gave up.
+static DEGRADED_REPORTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Tell the user, once, that the plugin has stopped working.
+///
+/// Without this the plugin would simply stop highlighting, with no
+/// explanation — which looks like a bug in the user's configuration rather
+/// than a bug in ours.
+fn report_degraded() {
+    use std::io::Write as _;
+    if DEGRADED_REPORTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    let _ = writeln!(
+        std::io::stderr(),
+        "shell-pulse: disabled after an internal error; the shell is unaffected"
+    );
 }
 
 /// The argument that asks the module to publish the highlights.
@@ -895,6 +957,7 @@ mod tests {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn setup_(_m: Module) -> std::ffi::c_int {
     guard(-1, || {
+        install_panic_hook();
         debug("setup_ entered");
         // Resolve the API first. If this zsh does not export what we need,
         // refuse the load so the zsh adapter can fall back to native zsh

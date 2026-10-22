@@ -476,8 +476,9 @@ fn a_changed_line_is_pushed_again() {
     );
     assert!(ok, "zsh exited badly: {out}");
     assert!(
-        out.contains("REGIONS=0 4 fg=cyan,bold memo=shell-pulse"),
-        "a changed line must be pushed again: {out}"
+        out.contains("REGIONS=SENTINEL,0 4 fg=cyan,bold memo=shell-pulse"),
+        "a changed line must be pushed again, keeping what another plugin \
+         had: {out}"
     );
 }
 
@@ -699,8 +700,9 @@ fn an_unchanged_line_is_not_written_again() {
          BUFFER='echo hi'\n\
          CURSOR=3\n\
          shell-pulse-highlight --region-highlight\n\
+         region_highlight=(SENTINEL)\n\
          shell-pulse-highlight --region-highlight\n\
-         print -r -- \"DONE\"",
+         print -r -- \"REGIONS=${(j:,:)region_highlight}\"",
         &[("SHELL_PULSE_DEBUG", "1")],
     );
     assert!(ok, "zsh exited badly: {out}");
@@ -708,6 +710,12 @@ fn an_unchanged_line_is_not_written_again() {
         out.matches("published 1 regions").count(),
         1,
         "the second, identical redraw must not write again: {out}"
+    );
+    // The second call did not write, so the array still holds exactly what
+    // the test put there.
+    assert!(
+        out.contains("REGIONS=SENTINEL"),
+        "an unchanged line must not be written again: {out}"
     );
 }
 
@@ -794,4 +802,50 @@ fn every_adapter_file_parses() {
         }
     }
     assert!(checked >= 2, "expected the adapter to be more than one file");
+}
+
+#[test]
+fn another_plugins_entries_survive_our_publish() {
+    // `region_highlight` is replaced wholesale, so publishing only our own
+    // entries would delete everyone else's. The entries we published last
+    // time are recognised by their `memo=` and replaced; everything else is
+    // kept.
+    let (ok, out) = run_zsh(
+        "typeset -ga region_highlight\n\
+         region_highlight=(SENTINEL)\n\
+         WIDGET=test-widget\n\
+         BUFFER='echo hi'\n\
+         CURSOR=3\n\
+         shell-pulse-highlight --region-highlight\n\
+         print -r -- \"REGIONS=<${(j:,:)region_highlight}>\"",
+        &[],
+    );
+    assert!(ok, "zsh exited badly: {out}");
+    assert!(
+        out.contains("REGIONS=<SENTINEL,0 4 fg=cyan,bold memo=shell-pulse>"),
+        "another plugin's entry must survive our publish: {out}"
+    );
+}
+
+#[test]
+fn our_own_previous_entries_are_replaced_not_accumulated() {
+    // The memo is what tells us which entries are ours. Without replacing
+    // them, every keystroke would add another copy.
+    let (ok, out) = run_zsh(
+        "typeset -ga region_highlight\n\
+         region_highlight=()\n\
+         WIDGET=test-widget\n\
+         for w in git gitx gitxx; do\n\
+             BUFFER=\"$w commit\"\n\
+             CURSOR=3\n\
+             shell-pulse-highlight --region-highlight\n\
+         done\n\
+         print -r -- \"REGIONS=<${(j:,:)region_highlight}>\"",
+        &[],
+    );
+    assert!(ok, "zsh exited badly: {out}");
+    assert!(
+        out.contains("REGIONS=<0 5 fg=cyan,bold memo=shell-pulse>"),
+        "only our latest entry must be published: {out}"
+    );
 }

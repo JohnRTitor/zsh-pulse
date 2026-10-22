@@ -36,6 +36,27 @@ pub type GetSparamFn = unsafe extern "C" fn(*mut c_char) -> *mut c_char;
 /// `int setaparam(char *nam, char **val)`
 pub type SetaparamFn = unsafe extern "C" fn(*mut c_char, *mut *mut c_char) -> c_int;
 
+/// `char **getaparam(char *s)` (`zsh-src/Src/params.c:3057-3070`).
+///
+/// Returns the elements of an array parameter as a NUL-terminated `char **`,
+/// or `NULL` when the parameter does not exist or is not an array.
+///
+/// The caller does **not** own the returned array, and it may live in zsh's
+/// *pool* memory — see [`Api::get_param_array`] for why that forces a copy.
+pub type GetAparamFn = unsafe extern "C" fn(*mut c_char) -> *mut *mut c_char;
+
+/// The optional zsh symbol that reads an array parameter.
+///
+/// This name belongs in `crate::raw::zsh` next to the other symbol names, but
+/// that module is outside the file scope of this change, so it is declared
+/// here instead.
+///
+/// It is deliberately **not** in [`crate::probe::REQUIRED_SYMBOLS`]: a zsh
+/// that does not export it must still be able to load the module, which then
+/// falls back to replacing the array wholesale instead of merging into it.
+/// See [`Api::get_param_array`].
+pub const GETAPARAM: &str = crate::raw::zsh::GETAPARAM;
+
 /// The outcome of a capped read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CappedRead {
@@ -95,6 +116,54 @@ fn parse_i64(bytes: &[u8]) -> Option<i64> {
     }
     Some(if negative { -acc } else { acc })
 }
+
+/// Read an array parameter through `getaparam` into `out`.
+///
+/// Split out of [`Api::get_param_array`] so the copying can be unit-tested
+/// without a live zsh.
+///
+/// Returns `false` when the symbol is unavailable, when the parameter does not
+/// exist, or when it is not an array. An array with no elements is *not* a
+/// failure: zsh returns a one-element array whose only element is `NULL`.
+///
+/// # Safety
+///
+/// `getaparam` must be zsh's real `getaparam` — or a faithful stand-in — and
+/// the call must happen inside zsh with a NUL-terminated name.
+unsafe fn read_array(
+    getaparam: Option<GetAparamFn>,
+    name: &std::ffi::CStr,
+    out: &mut Vec<String>,
+) -> bool {
+    out.clear();
+    let Some(getaparam) = getaparam else {
+        // The symbol is optional: a zsh without it must still load.
+        return false;
+    };
+    // Safety: caller guarantees zsh context and a valid name.
+    let array = unsafe { getaparam(name.as_ptr() as *mut c_char) };
+    if array.is_null() {
+        // No such parameter, or it is not an array.
+        return false;
+    }
+    let mut i = 0usize;
+    loop {
+        // Safety: `array` is a NUL-terminated `char **`; while the previous
+        // element was non-NULL, this one is readable.
+        let element = unsafe { *array.add(i) };
+        if element.is_null() {
+            break;
+        }
+        // Safety: zsh NUL-terminates every element.
+        let bytes = unsafe { std::ffi::CStr::from_ptr(element) }.to_bytes();
+        // The rows are plain ASCII, but a lossy conversion must never panic:
+        // this runs inside the user's interactive shell.
+        out.push(String::from_utf8_lossy(bytes).into_owned());
+        i += 1;
+    }
+    true
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct Api {
     /// `addbuiltins`
@@ -105,6 +174,12 @@ pub struct Api {
     pub getsparam_u: GetSparamFn,
     /// `setaparam`
     pub setaparam: SetaparamFn,
+    /// `getaparam` — read an array parameter's elements.
+    ///
+    /// **Optional**: `None` when the running zsh does not export the symbol.
+    /// The module still loads in that case; it just cannot read an array back.
+    /// See [`Api::get_param_array`].
+    pub getaparam: Option<GetAparamFn>,
     /// `zalloc` — permanent allocator.
     pub zalloc: ZAllocFn,
     /// `ztrdup` — permanent string duplication.
@@ -112,7 +187,13 @@ pub struct Api {
 }
 
 impl Api {
-    /// Resolve every entry point. Returns `None` if any symbol is absent.
+    /// Resolve every entry point. Returns `None` if a **required** symbol is
+    /// absent.
+    ///
+    /// `getaparam` is resolved *optionally*: it is deliberately not a required
+    /// symbol (see [`crate::probe::REQUIRED_SYMBOLS`]), so a zsh that does not
+    /// export it still resolves, and [`Api::get_param_array`] reports that it
+    /// cannot read arrays.
     ///
     /// # Safety
     ///
@@ -133,6 +214,9 @@ impl Api {
                 setaparam: fn_ptr(crate::raw::zsh::SETAPARAM)?,
                 zalloc: fn_ptr(crate::raw::zsh::ZALLOC)?,
                 ztrdup: fn_ptr(crate::raw::zsh::ZTRDUP)?,
+                // Optional: a missing `getaparam` must not stop the module
+                // from loading, so this one is not unwrapped with `?`.
+                getaparam: fn_ptr(GETAPARAM),
             })
         }
     }
@@ -193,6 +277,47 @@ impl Api {
         }
         // SAFETY: zsh NUL-terminates parameter values.
         Some(unsafe { std::ffi::CStr::from_ptr(p) }.to_string_lossy().into_owned())
+    }
+
+    /// Read an array parameter's elements into `out`.
+    ///
+    /// The elements are **copied**: zsh's array may live in pool memory that is
+    /// recycled at the end of the command, and the caller usually needs the
+    /// strings to outlive the call.
+    ///
+    /// Returns `false` when the parameter does not exist, or when it is not an
+    /// array.
+    ///
+    /// # Ownership — why the copy is not optional
+    ///
+    /// `getaparam` (`zsh-src/Src/params.c:3057-3070`) hands back the array
+    /// through the parameter's own getter. For the ZLE special parameter
+    /// `region_highlight` that getter is `get_region_highlight`
+    /// (`zsh-src/Src/Zle/zle_refresh.c:429-480`), which builds a **fresh**
+    /// array — and every one of its strings — with `zhalloc`, zsh's *pool*
+    /// allocator. Pool memory is rewound and recycled by `popheap()`
+    /// (`zsh-src/Src/mem.c:1425-1500`), which zsh calls around every command
+    /// (`zsh-src/Src/exec.c:1275`). A string kept past the end of the command
+    /// would therefore point at recycled memory.
+    ///
+    /// Copying into `out` is what makes the result safe to keep: from then on
+    /// the strings are owned by Rust. `out` is cleared first, so a failed
+    /// read never leaves stale rows behind.
+    ///
+    /// # The symbol is optional
+    ///
+    /// `getaparam` is resolved *optionally* — it is deliberately **not** in
+    /// [`crate::probe::REQUIRED_SYMBOLS`]. A zsh that does not export it must
+    /// still be able to load the module: the module then falls back to
+    /// replacing the array instead of merging into it. When the symbol is
+    /// missing this returns `false`.
+    ///
+    /// # Safety
+    ///
+    /// Must only be called from inside zsh with a NUL-terminated name.
+    pub unsafe fn get_param_array(&self, name: &std::ffi::CStr, out: &mut Vec<String>) -> bool {
+        // Safety: caller guarantees zsh context and a valid name.
+        unsafe { read_array(self.getaparam, name, out) }
     }
 
     /// Copy a scalar parameter's **unmetafied** bytes into a caller-owned buffer.
@@ -449,5 +574,128 @@ mod tests {
         // far worse than a slow one.
         assert_eq!(parse_i64(b"99999999999999999999"), None);
         assert_eq!(parse_i64(&b"9".repeat(18)), Some(999_999_999_999_999_999));
+    }
+
+    // The rows the fake `getaparam` returns.
+    //
+    // `None` stands for "no such parameter, or not an array" — zsh's own
+    // answer in that case is a null pointer. `Some(vec![])` is an *empty*
+    // array, which zsh answers with a one-element array whose only element is
+    // `NULL`.
+    thread_local! {
+        static FAKE_ROWS: std::cell::RefCell<Option<Vec<&'static std::ffi::CStr>>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    /// A stand-in for zsh's `getaparam`.
+    ///
+    /// The array is heap-allocated and deliberately leaked: zsh's real
+    /// `getaparam` hands back memory the caller does not own either, and the
+    /// code under test must copy out of it before returning.
+    unsafe extern "C" fn fake_getaparam(_name: *mut c_char) -> *mut *mut c_char {
+        let rows = FAKE_ROWS.with(|rows| rows.borrow().clone());
+        let Some(rows) = rows else {
+            return std::ptr::null_mut();
+        };
+        let mut array: Vec<*mut c_char> = rows
+            .iter()
+            .map(|row| row.as_ptr() as *mut c_char)
+            .collect();
+        array.push(std::ptr::null_mut());
+        Box::into_raw(array.into_boxed_slice()) as *mut *mut c_char
+    }
+
+    /// A `CStr` with bytes that are not valid UTF-8.
+    fn invalid_utf8_cstr() -> &'static std::ffi::CStr {
+        let bytes: &'static mut [u8] =
+            Box::leak(b"\xff\xfe region\0".to_vec().into_boxed_slice());
+        std::ffi::CStr::from_bytes_with_nul(bytes).expect("fixture ends with a NUL")
+    }
+
+    #[test]
+    fn get_param_array_copies_every_element() {
+        FAKE_ROWS.with(|rows| {
+            *rows.borrow_mut() = Some(vec![c"0 12 red", c"5 20 underline"]);
+        });
+        let mut out = Vec::new();
+        // Safety: the fake stands in for zsh's `getaparam`.
+        let read = unsafe { read_array(Some(fake_getaparam), c"region_highlight", &mut out) };
+        assert!(read, "an existing array must be reported as read");
+        assert_eq!(out, vec!["0 12 red".to_string(), "5 20 underline".to_string()]);
+    }
+
+    #[test]
+    fn get_param_array_clears_the_output_before_reading() {
+        FAKE_ROWS.with(|rows| {
+            *rows.borrow_mut() = Some(vec![c"0 12 red"]);
+        });
+        let mut out = vec!["stale".to_string()];
+        // Safety: the fake stands in for zsh's `getaparam`.
+        let read = unsafe { read_array(Some(fake_getaparam), c"region_highlight", &mut out) };
+        assert!(read);
+        assert_eq!(out, vec!["0 12 red".to_string()]);
+    }
+
+    #[test]
+    fn get_param_array_reports_a_parameter_that_is_not_an_array() {
+        FAKE_ROWS.with(|rows| {
+            *rows.borrow_mut() = None;
+        });
+        let mut out = vec!["stale".to_string()];
+        // Safety: the fake stands in for zsh's `getaparam`.
+        let read = unsafe { read_array(Some(fake_getaparam), c"region_highlight", &mut out) };
+        assert!(!read, "a missing parameter is not a successful read");
+        assert!(out.is_empty(), "a failed read must not leave stale rows");
+    }
+
+    #[test]
+    fn get_param_array_reports_an_empty_array_as_a_successful_read() {
+        // zsh answers an empty array with a one-element array whose only
+        // element is NULL. That is a *successful* read of zero rows, and it
+        // must be distinguishable from "not an array".
+        FAKE_ROWS.with(|rows| {
+            *rows.borrow_mut() = Some(Vec::new());
+        });
+        let mut out = Vec::new();
+        // Safety: the fake stands in for zsh's `getaparam`.
+        let read = unsafe { read_array(Some(fake_getaparam), c"region_highlight", &mut out) };
+        assert!(read);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn get_param_array_fails_when_the_symbol_is_missing() {
+        // `getaparam` is optional: a zsh without it must still load the
+        // module, and the module falls back to replacing the array.
+        let mut out = vec!["stale".to_string()];
+        // Safety: there is no zsh call to make.
+        let read = unsafe { read_array(None, c"region_highlight", &mut out) };
+        assert!(!read);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn get_param_array_never_panics_on_invalid_utf8() {
+        let bad = invalid_utf8_cstr();
+        FAKE_ROWS.with(|rows| {
+            *rows.borrow_mut() = Some(vec![bad]);
+        });
+        let mut out = Vec::new();
+        // Safety: the fake stands in for zsh's `getaparam`.
+        let read = unsafe { read_array(Some(fake_getaparam), c"region_highlight", &mut out) };
+        assert!(read);
+        assert_eq!(out.len(), 1);
+        assert!(
+            out[0].contains('\u{fffd}'),
+            "invalid bytes must become the replacement character, not a panic"
+        );
+    }
+
+    #[test]
+    fn getaparam_is_not_a_required_symbol() {
+        // The module must load on a zsh that does not export `getaparam`;
+        // it only loses the ability to read an array back.
+        assert!(!crate::probe::REQUIRED_SYMBOLS.contains(&GETAPARAM));
+        assert_eq!(GETAPARAM, "getaparam");
     }
 }

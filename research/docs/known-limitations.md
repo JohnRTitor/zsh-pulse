@@ -101,6 +101,13 @@ only the computation differs.
 
 ### 1.3 `region_highlight` is replaced wholesale, so clearing it also clears another plugin's entries
 
+*(Fixed: the module now merges. It reads the entries zsh holds, drops the ones
+carrying its own `memo=shell-pulse`, keeps everyone else's, and appends its
+own — exactly what `zsh-syntax-highlighting` does
+(`research/upstream/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh:168-175`).
+The residual is that a *clear* still replaces the whole array, so another
+plugin's entries are lost when the plugin bails out to unstyled.)*
+
 **What.** `region_highlight` is a single array, and zsh's setter replaces the
 whole user-settable part of it
 ([`zsh-src/Src/Zle/zle_refresh.c:488-586`](../upstream/zsh-src/Src/Zle/zle_refresh.c#L488)).

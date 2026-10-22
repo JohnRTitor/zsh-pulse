@@ -288,6 +288,30 @@ the incremental result is byte-for-byte the same as a full parse.
    replacing it. zsh allows one widget per name, and other plugins use that
    hook too.
 
+### What the interop and the budget cost
+
+Three things were measured rather than guessed, and the numbers changed the
+design:
+
+- **Another plugin's highlights now survive.** The module reads the entries
+  zsh holds, drops the ones carrying its own `memo=shell-pulse`, keeps
+  everyone else's, and appends its own — what
+  `zsh-syntax-highlighting` does
+  (`research/upstream/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh:168-175`).
+  Before this the module replaced the whole array on every keystroke, so
+  running it alongside another highlighter deleted that highlighter's work.
+- **The region cap is now derived from a measurement.** The pty harness can
+  type a line with N regions; the marginal cost is 0.3–0.9 µs per region
+  end to end, of which the module's own share is about 12 ns. At 32 regions
+  the added latency is about 10 µs — the budget this project set for a
+  keystroke — so `region::MAX_ENTRIES` is 32. It used to be 256, which was a
+  guess, and at that count the added latency was over 200 µs.
+- **The lexer no longer holds on to the largest line ever pasted.** The
+  scratch buffer's hysteretic release policy was applied to the lexer's own
+  buffers: capacity is given back only when it is large in absolute terms
+  *and* much larger than the current line, so ordinary editing never
+  reallocates.
+
 ### Known limitations
 
 - The end-to-end cost of a keystroke is linear in the length of the line,
