@@ -3,9 +3,20 @@
 version = 4
 
 [[package]]
+name = "completion"
+version = "0.1.0"
+dependencies = [
+ "history",
+ "ranking",
+]
+
+[[package]]
 name = "engine"
 version = "0.1.0"
 dependencies = [
+ "completion",
+ "history",
+ "ranking",
  "zsh-abi",
 ]
 
@@ -17,7 +28,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "history"
+version = "0.1.0"
+dependencies = [
+ "ranking",
+]
+
+[[package]]
 name = "lexer"
+version = "0.1.0"
+
+[[package]]
+name = "ranking"
 version = "0.1.0"
 
 [[package]]
@@ -28,8 +50,10 @@ version = "0.1.0"
 name = "zsh-module"
 version = "0.1.0"
 dependencies = [
+ "completion",
  "engine",
  "highlight",
+ "history",
  "lexer",
  "zsh-abi",
 ]

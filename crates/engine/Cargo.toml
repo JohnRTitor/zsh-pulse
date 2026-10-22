@@ -7,6 +7,9 @@ rust-version.workspace = true
 
 [dependencies]
 zsh-abi.workspace = true
+history.workspace = true
+completion.workspace = true
+ranking.workspace = true
 
 [lints.rust]
 missing_debug_implementations = "warn"

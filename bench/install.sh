@@ -21,7 +21,7 @@ cp "$repo/target/$profile/libshellpulse_highlight.so" "$dest/highlight.so"
 echo "installed -> $dest/highlight.so"
 
 # Fail loudly here rather than mid-benchmark.
-if ! zsh -f -c "module_path=('$repo/bench/mp' \$module_path); zmodload shellpulse/highlight; whence -w shell-pulse-highlight"; then
+if ! zsh -f -c "module_path=('$repo/bench/mp' \$module_path); zmodload shellpulse/highlight; whence -w shell-pulse-highlight shell-pulse-complete"; then
   echo "ERROR: module built but zsh refused to load it" >&2
   exit 1
 fi

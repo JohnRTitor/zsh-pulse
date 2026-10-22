@@ -33,3 +33,4 @@ fi
 # The hooks themselves live in their own file, so that they can be read (and
 # changed) without touching the loading.
 source "${${(%):-%x}:A:h}/widgets.zsh"
+source "${${(%):-%x}:A:h}/completion.zsh"

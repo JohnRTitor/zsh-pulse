@@ -17,6 +17,8 @@ zsh-abi.workspace = true
 engine.workspace = true
 lexer.workspace = true
 highlight.workspace = true
+completion.workspace = true
+history.workspace = true
 
 [lints.rust]
 missing_debug_implementations = "warn"

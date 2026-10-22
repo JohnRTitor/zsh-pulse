@@ -1,5 +1,14 @@
 [workspace]
-members = ["crates/zsh-abi", "crates/zsh-module", "crates/engine", "crates/lexer", "crates/highlight"]
+members = [
+    "crates/zsh-abi",
+    "crates/zsh-module",
+    "crates/engine",
+    "crates/lexer",
+    "crates/highlight",
+    "crates/ranking",
+    "crates/history",
+    "crates/completion",
+]
 resolver = "3"
 
 [workspace.package]
@@ -13,6 +22,9 @@ zsh-abi = { path = "crates/zsh-abi" }
 engine = { path = "crates/engine" }
 lexer = { path = "crates/lexer" }
 highlight = { path = "crates/highlight" }
+ranking = { path = "crates/ranking" }
+history = { path = "crates/history" }
+completion = { path = "crates/completion" }
 
 [profile.release]
 opt-level = 3

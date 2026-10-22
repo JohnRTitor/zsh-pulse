@@ -1570,6 +1570,24 @@ unsafe extern "C" fn highlight_builtin(
             };
         }
 
+        if wants_autosuggest(args) {
+            let cwd = unsafe { api.get_param_string(cstr(b"PWD\0")) }
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/")));
+            let home = unsafe { api.get_param_string(cstr(b"HOME\0")) }
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| std::path::PathBuf::from("/home"));
+            let cursor_idx = usize::try_from(cursor.unwrap_or(0).max(0)).unwrap_or(0).min(guard.buffer.len());
+            let ghost = engine().autosuggest(&guard.buffer, cursor_idx, cwd, home);
+            let ghost_cstr = match ghost {
+                Some(ref s) => std::ffi::CString::new(s.as_bytes()).unwrap_or_default(),
+                None => std::ffi::CString::default(),
+            };
+            unsafe {
+                api.set_param_string(cstr(b"_shell_pulse_autosuggestion\0"), &ghost_cstr);
+            }
+        }
+
         // Write-back proof. Writing a zsh parameter is currently UNSAFE on
         // repeat: `set_param_string` allocates with zsh's allocator (required,
         // since `assignaparam` frees the array it is given), but a second
@@ -1727,11 +1745,133 @@ fn debug(msg: &str) {
 
 
 /// The builtin table handed to `addbuiltins`.
-///
-/// Terminator: `nam == NULL`, as zsh's `addbuiltins()` loop requires
-/// (`zsh-src/Src/module.c:543`).
+const AUTOSUGGEST_ARGUMENT: &[u8] = b"--autosuggest";
+
+fn wants_autosuggest(args: *mut *mut std::ffi::c_char) -> bool {
+    has_argument(args, AUTOSUGGEST_ARGUMENT)
+}
+
 /// The full builtin name as zsh will register it: `shell-pulse-highlight`.
 static BUILTIN_FULL: CStr = CStr::new(c"shell-pulse-highlight");
+
+/// The completion builtin name: `shell-pulse-complete`.
+static BUILTIN_COMPLETE: CStr = CStr::new(c"shell-pulse-complete");
+
+/// `shell-pulse-complete` — computes completion candidates and ghost text.
+///
+/// It reads live `BUFFER` and `CURSOR` from ZLE, queries the engine,
+/// and writes the results to Zsh parameters:
+/// - `_shell_pulse_matches`: candidate values to insert
+/// - `_shell_pulse_descriptions`: candidate formatted descriptions for menus
+/// - `_shell_pulse_autosuggestion`: inline ghost text suffix
+unsafe extern "C" fn complete_builtin(
+    _nam: *mut std::ffi::c_char,
+    args: *mut *mut std::ffi::c_char,
+    _ops: zsh_abi::Options,
+    _len: std::ffi::c_int,
+) -> std::ffi::c_int {
+    guard(0, || {
+        if zsh_abi::is_degraded() {
+            return 0;
+        }
+
+        let Some(api) = zsh() else {
+            return 0;
+        };
+
+        // Parse optional arguments
+        let mut max_candidates = 16usize;
+        let mut histfile_arg: Option<std::path::PathBuf> = None;
+        let mut autosuggest_only = false;
+
+        if !args.is_null() {
+            for i in 0..16 {
+                let p = unsafe { *args.add(i) };
+                if p.is_null() {
+                    break;
+                }
+                let bytes = unsafe { std::ffi::CStr::from_ptr(p) }.to_bytes();
+                if let Some(num) = bytes.strip_prefix(b"--max=") {
+                    if let Ok(s) = std::str::from_utf8(num) {
+                        if let Ok(n) = s.parse::<usize>() {
+                            max_candidates = n.clamp(1, 128);
+                        }
+                    }
+                } else if let Some(path) = bytes.strip_prefix(b"--histfile=") {
+                    if let Ok(s) = std::str::from_utf8(path) {
+                        histfile_arg = Some(std::path::PathBuf::from(s));
+                    }
+                } else if bytes == b"--autosuggest" {
+                    autosuggest_only = true;
+                }
+            }
+        }
+
+        let mut buffer = Vec::new();
+        let _ = unsafe { api.read_param_bytes(cstr(b"BUFFER\0"), &mut buffer) };
+
+        let mut scratch = Vec::new();
+        let cursor = unsafe { api.read_param_i64(cstr(b"CURSOR\0"), &mut scratch) }.unwrap_or(0);
+        let cursor_idx = usize::try_from(cursor.max(0)).unwrap_or(0).min(buffer.len());
+
+        let cwd = unsafe { api.get_param_string(cstr(b"PWD\0")) }
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/")));
+        let home = unsafe { api.get_param_string(cstr(b"HOME\0")) }
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from("/home"));
+
+        if let Some(hf) = histfile_arg {
+            engine().ensure_history_loaded(&hf);
+        } else if let Some(hf_str) = unsafe { api.get_param_string(cstr(b"HISTFILE\0")) } {
+            engine().ensure_history_loaded(std::path::Path::new(&hf_str));
+        }
+
+        if autosuggest_only {
+            let ghost = engine().autosuggest(&buffer, cursor_idx, cwd, home);
+            let ghost_cstr = match ghost {
+                Some(ref s) => std::ffi::CString::new(s.as_bytes()).unwrap_or_default(),
+                None => std::ffi::CString::default(),
+            };
+            unsafe {
+                api.set_param_string(cstr(b"_shell_pulse_autosuggestion\0"), &ghost_cstr);
+            }
+            return 0;
+        }
+
+        let outcome = engine().complete(&buffer, cursor_idx, cwd, home, max_candidates);
+
+        let mut match_cstrs = Vec::with_capacity(outcome.candidates.len());
+        let mut desc_cstrs = Vec::with_capacity(outcome.candidates.len());
+
+        for c in &outcome.candidates {
+            if let Ok(m) = std::ffi::CString::new(c.value.as_bytes()) {
+                let desc_fmt = format!("{:<20} -- {}", c.display, c.description);
+                let d = std::ffi::CString::new(desc_fmt.as_bytes()).unwrap_or_default();
+                match_cstrs.push(m);
+                desc_cstrs.push(d);
+            }
+        }
+
+        let match_refs: Vec<&std::ffi::CStr> = match_cstrs.iter().map(|c| c.as_c_str()).collect();
+        let desc_refs: Vec<&std::ffi::CStr> = desc_cstrs.iter().map(|c| c.as_c_str()).collect();
+
+        unsafe {
+            api.set_param_array(cstr(b"_shell_pulse_matches\0"), &match_refs);
+            api.set_param_array(cstr(b"_shell_pulse_descriptions\0"), &desc_refs);
+        }
+
+        let ghost_cstr = match outcome.autosuggestion {
+            Some(ref s) => std::ffi::CString::new(s.as_bytes()).unwrap_or_default(),
+            None => std::ffi::CString::default(),
+        };
+        unsafe {
+            api.set_param_string(cstr(b"_shell_pulse_autosuggestion\0"), &ghost_cstr);
+        }
+
+        0
+    })
+}
 
 /// The builtin table handed to `addbuiltins`.
 ///
@@ -1739,7 +1879,7 @@ static BUILTIN_FULL: CStr = CStr::new(c"shell-pulse-highlight");
 /// (`zsh-src/Src/module.c:408-417`) does **not** prepend the name passed to
 /// `addbuiltins()`; that argument is only used in diagnostics. Both the name and
 /// the strings it points at must therefore be NUL-terminated (`c"…"` literals).
-static mut PULSE_BUILTINS: [Builtin; 2] = [
+static mut PULSE_BUILTINS: [Builtin; 3] = [
     Builtin {
         node: zsh_abi::raw::HashNode {
             next: std::ptr::null_mut(),
@@ -1747,6 +1887,19 @@ static mut PULSE_BUILTINS: [Builtin; 2] = [
             flags: 0,
         },
         handlerfunc: highlight_builtin,
+        minargs: 0,
+        maxargs: -1,
+        funcid: 0,
+        optstr: std::ptr::null_mut(),
+        defopts: std::ptr::null_mut(),
+    },
+    Builtin {
+        node: zsh_abi::raw::HashNode {
+            next: std::ptr::null_mut(),
+            nam: BUILTIN_COMPLETE.as_ptr() as *mut _,
+            flags: 0,
+        },
+        handlerfunc: complete_builtin,
         minargs: 0,
         maxargs: -1,
         funcid: 0,
@@ -1778,15 +1931,18 @@ mod tests {
         // (`zsh-src/Src/module.c:543`). A missing terminator would run off the
         // end of the array inside zsh.
         let t = unsafe { &*addr_of_mut!(PULSE_BUILTINS) };
-        assert!(t[1].node.nam.is_null(), "builtin table must be NULL-terminated");
+        assert!(t[2].node.nam.is_null(), "builtin table must be NULL-terminated");
         assert!(!t[0].node.nam.is_null());
+        assert!(!t[1].node.nam.is_null());
     }
 
     #[test]
     fn builtin_name_matches_the_declared_prefix() {
         let t = unsafe { &*addr_of_mut!(PULSE_BUILTINS) };
-        let name = unsafe { std::ffi::CStr::from_ptr(t[0].node.nam) };
-        assert_eq!(name.to_bytes_with_nul(), b"shell-pulse-highlight\0");
+        let name0 = unsafe { std::ffi::CStr::from_ptr(t[0].node.nam) };
+        assert_eq!(name0.to_bytes_with_nul(), b"shell-pulse-highlight\0");
+        let name1 = unsafe { std::ffi::CStr::from_ptr(t[1].node.nam) };
+        assert_eq!(name1.to_bytes_with_nul(), b"shell-pulse-complete\0");
     }
 
     #[test]
@@ -2509,7 +2665,7 @@ pub unsafe extern "C" fn setup_(_m: Module) -> std::ffi::c_int {
             (api.addbuiltins)(
                 BUILTIN_FULL.as_ptr(),
                 addr_of_mut!(PULSE_BUILTINS).cast::<Builtin>(),
-                1,
+                2,
             );
         }
         debug("setup_ registered builtins");

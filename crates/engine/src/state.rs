@@ -47,6 +47,12 @@ pub enum EngineStatus {
 
 /// The engine's shared state.
 ///
+use std::path::{Path, PathBuf};
+use std::sync::RwLock;
+
+use completion::{CompletionContext, CompletionOutcome};
+use history::HistoryIndex;
+
 /// Deliberately tiny in Stage B. It exists to prove the boundary works before
 /// the lexer and completion engines are attached.
 #[derive(Debug)]
@@ -55,6 +61,10 @@ pub struct EngineState {
     line: LineSnapshot,
     /// How many times the highlight entry point has been invoked.
     highlight_calls: AtomicU64,
+    /// How many times the completion entry point has been invoked.
+    completion_calls: AtomicU64,
+    /// In-memory history index.
+    history: RwLock<HistoryIndex>,
 }
 
 impl Default for EngineState {
@@ -70,6 +80,8 @@ impl EngineState {
             status: EngineStatus::Idle,
             line: LineSnapshot::new(),
             highlight_calls: AtomicU64::new(0),
+            completion_calls: AtomicU64::new(0),
+            history: RwLock::new(HistoryIndex::new()),
         }
     }
 
@@ -102,6 +114,52 @@ impl EngineState {
     /// Total highlight invocations.
     pub fn highlight_calls(&self) -> u64 {
         self.highlight_calls.load(Ordering::Relaxed)
+    }
+
+    /// Total completion invocations.
+    pub fn completion_calls(&self) -> u64 {
+        self.completion_calls.load(Ordering::Relaxed)
+    }
+
+    /// Lazily load or refresh history index from a file path.
+    pub fn ensure_history_loaded(&self, path: &Path) {
+        let mut hist = self.history.write().unwrap_or_else(|e| e.into_inner());
+        if hist.is_empty() {
+            if let Ok(loaded) = HistoryIndex::load_from_file(path) {
+                *hist = loaded;
+            }
+        } else {
+            let _ = hist.refresh();
+        }
+    }
+
+    /// Compute ghost text extension for the given line and cursor.
+    pub fn autosuggest(
+        &self,
+        line: &[u8],
+        cursor: usize,
+        cwd: PathBuf,
+        home: PathBuf,
+    ) -> Option<String> {
+        let hist_guard = self.history.read().unwrap_or_else(|e| e.into_inner());
+        let ctx = CompletionContext::new(line, cursor, cwd, home);
+        let outcome = completion::complete(&ctx, Some(&*hist_guard), 5);
+        outcome.autosuggestion
+    }
+
+    /// Compute ranked completion candidates for the given line and cursor.
+    pub fn complete(
+        &self,
+        line: &[u8],
+        cursor: usize,
+        cwd: PathBuf,
+        home: PathBuf,
+        max_candidates: usize,
+    ) -> CompletionOutcome {
+        self.completion_calls.fetch_add(1, Ordering::Relaxed);
+        let hist_guard = self.history.read().unwrap_or_else(|e| e.into_inner());
+        let ctx = CompletionContext::new(line, cursor, cwd, home);
+        completion::complete(&ctx, Some(&*hist_guard), max_candidates)
     }
 }
 

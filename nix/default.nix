@@ -48,6 +48,7 @@ rustPlatform.buildRustPackage {
     # which installs the `zle-line-pre-redraw` hook.
     install -Dm644 zsh/init.zsh "$out/share/shell-pulse/zsh/init.zsh"
     install -Dm644 zsh/widgets.zsh "$out/share/shell-pulse/zsh/widgets.zsh"
+    install -Dm644 zsh/completion.zsh "$out/share/shell-pulse/zsh/completion.zsh"
 
     # A one-liner for a `.zshrc`: it points the adapter at the module that
     # was just built, because the adapter's own default path is relative to

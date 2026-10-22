@@ -1,0 +1,13 @@
+[package]
+name = "ranking"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+# Deliberately dependency-free: pure Rust with no unsafe,
+# benchmarkable and unit-testable on its own.
+[dependencies]
+
+[lints.rust]
+missing_debug_implementations = "warn"

@@ -49,10 +49,11 @@ fn no_garbage_names_appear_in_the_builtin_table() {
     // Regression guard for the NUL-termination bug.
     let (ok, out) = run_zsh("print -rl -- ${(k)builtins} | grep -i shell-pulse", &[]);
     assert!(ok, "zsh exited badly: {out}");
-    let lines: Vec<&str> = out.lines().filter(|l| l.contains("shell-pulse")).collect();
+    let mut lines: Vec<&str> = out.lines().filter(|l| l.contains("shell-pulse")).collect();
+    lines.sort_unstable();
     assert_eq!(
         lines,
-        vec!["shell-pulse-highlight"],
+        vec!["shell-pulse-complete", "shell-pulse-highlight"],
         "unexpected entries in the builtin table: {lines:?}"
     );
 }
@@ -1345,5 +1346,43 @@ fn an_append_assignment_does_not_hide_the_command() {
     assert!(
         out.contains("9 11 fg=green memo=shell-pulse"),
         "an append assignment must not hide the command word: {out}"
+    );
+}
+
+#[test]
+fn complete_builtin_populates_matches_for_files() {
+    require_zsh!();
+    let (ok, out) = run_zsh(
+        "BUFFER='ls Cargo' CURSOR=8 shell-pulse-complete; print -rl -- \"${_shell_pulse_matches[@]}\"",
+        &[],
+    );
+    assert!(ok, "zsh exited badly: {out}");
+    assert!(
+        out.contains("Cargo.toml"),
+        "expected Cargo.toml in matches: {out}"
+    );
+}
+
+#[test]
+fn complete_builtin_on_large_dir_does_not_hang() {
+    require_zsh!();
+    let store = std::path::Path::new("/nix/store");
+    if !store.is_dir() {
+        return;
+    }
+    let start = std::time::Instant::now();
+    let (ok, out) = run_zsh(
+        "BUFFER='ls /nix/store/m3y7' CURSOR=18 shell-pulse-complete; print -rl -- \"${_shell_pulse_matches[@]}\"",
+        &[],
+    );
+    let elapsed = start.elapsed();
+    assert!(ok, "zsh exited badly: {out}");
+    assert!(
+        elapsed < std::time::Duration::from_millis(500),
+        "completion took too long: {elapsed:?}"
+    );
+    assert!(
+        out.contains("m3y7"),
+        "expected /nix/store match: {out}"
     );
 }

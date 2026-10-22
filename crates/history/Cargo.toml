@@ -1,0 +1,13 @@
+[package]
+name = "history"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+# Pure Rust, zero external dependencies.
+[dependencies]
+ranking = { workspace = true }
+
+[lints.rust]
+missing_debug_implementations = "warn"
