@@ -34,10 +34,23 @@
 //!
 //! [`Worker::submit`] blocks for at most `timeout`, so it is for background
 //! work only. The ZLE path uses `zle -F` and must never block.
+//!
+//! # Lifecycle
+//!
+//! The worker is started on demand ([`shared`]) and stopped when the module
+//! that owns it goes away ([`shutdown_shared`]).
+//!
+//! The stop is a **join**, not a request. The worker runs inside the user's
+//! interactive shell, which keeps running long after the plugin is unloaded,
+//! so a thread that outlives the module is a thread that outlives the
+//! plugin — and a reloaded module would find a dead worker where it
+//! expected a live one. [`shutdown_shared`] therefore stops the thread *and*
+//! waits for it, and leaves the slot empty so that the next [`shared`]
+//! starts a fresh worker.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// Default time to wait for a result before giving up.
@@ -78,6 +91,12 @@ pub enum WorkerError {
     Timeout,
     /// The worker is gone or stopped.
     Disconnected,
+    /// The reply did not belong to this request.
+    ///
+    /// The worker answers requests in order, so this can only happen if two
+    /// callers share a worker — which the design forbids. Checking it turns
+    /// a silent mix-up into a visible error.
+    RevisionMismatch { expected: u64, got: u64 },
     /// The OS refused to create the thread.
     SpawnFailed(std::io::Error),
 }
@@ -91,6 +110,12 @@ pub struct Worker {
     /// handle itself to be shareable across threads.
     rx: Mutex<Receiver<Reply>>,
     stop: Arc<AtomicBool>,
+    /// The thread's handle, joined when the worker is dropped.
+    ///
+    /// Without this the thread's exit is asynchronous, and a test that
+    /// counts worker threads has to poll for it — which is how the thread
+    /// counting tests became flaky.
+    handle: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
 impl Worker {
@@ -106,7 +131,7 @@ impl Worker {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&stop);
 
-        std::thread::Builder::new()
+        let handle = std::thread::Builder::new()
             // Linux truncates thread names to 15 bytes, so this is deliberately
             // short: tests identify the thread by this exact name.
             .name(WORKER_THREAD_NAME.into())
@@ -126,16 +151,58 @@ impl Worker {
             })
             .map_err(WorkerError::SpawnFailed)?;
 
-        Ok(Self { tx: Mutex::new(Some(tx)), rx: Mutex::new(out_rx), stop })
+        Ok(Self {
+            tx: Mutex::new(Some(tx)),
+            rx: Mutex::new(out_rx),
+            stop,
+            handle: Mutex::new(Some(handle)),
+        })
     }
 
     /// Ask the worker to finish after the current job.
     ///
     /// Called on module unload so reloading the plugin does not leak threads.
+    ///
+    /// This only *signals* the thread: it is [`Worker::shutdown`] that waits
+    /// for the thread to be gone.
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
-        if let Ok(mut guard) = self.tx.lock() {
-            guard.take();
+        // Recover from poisoning: a poisoned mutex must not leave the
+        // sender alive, or the thread would never exit and `Drop` would
+        // block forever on the join.
+        let mut guard = self.tx.lock().unwrap_or_else(|e| e.into_inner());
+        guard.take();
+    }
+
+    /// Stop the worker and wait for its thread to finish.
+    ///
+    /// When this returns, the thread is **gone** — not merely on its way
+    /// out. That is what the module's unload hook needs: the module is
+    /// loaded into a shell that keeps running, so a thread that outlives
+    /// the module is a thread that outlives the plugin.
+    ///
+    /// Idempotent: a second call finds the thread already joined and does
+    /// nothing.
+    pub fn shutdown(&self) {
+        self.stop();
+        self.join();
+    }
+
+    /// Wait for the worker thread to finish.
+    ///
+    /// The join handle is taken out of its mutex *before* the join, so a
+    /// second call — or the `Drop` impl — never tries to join the same
+    /// thread twice.
+    pub fn join(&self) {
+        let handle = {
+            let mut guard = self.handle.lock().unwrap_or_else(|e| e.into_inner());
+            guard.take()
+        };
+        if let Some(handle) = handle {
+            // The thread may have panicked. That is not this function's
+            // problem, and a panic must not unwind into the caller: the
+            // caller may be zsh.
+            let _ = handle.join();
         }
     }
 
@@ -164,17 +231,27 @@ impl Worker {
             tx.send(Job { revision, payload }).map_err(|_| WorkerError::Disconnected)?;
         }
         let rx = self.rx.lock().unwrap_or_else(|e| e.into_inner());
-        match rx.recv_timeout(timeout) {
-            Ok(r) => Ok(r),
-            Err(RecvTimeoutError::Timeout) => Err(WorkerError::Timeout),
-            Err(RecvTimeoutError::Disconnected) => Err(WorkerError::Disconnected),
+        let reply = match rx.recv_timeout(timeout) {
+            Ok(r) => r,
+            Err(RecvTimeoutError::Timeout) => return Err(WorkerError::Timeout),
+            Err(RecvTimeoutError::Disconnected) => return Err(WorkerError::Disconnected),
+        };
+        if reply.revision != revision {
+            return Err(WorkerError::RevisionMismatch {
+                expected: revision,
+                got: reply.revision,
+            });
         }
+        Ok(reply)
     }
 }
 
 impl Drop for Worker {
     fn drop(&mut self) {
-        self.stop();
+        // Dropping the sender makes the thread's `recv` fail, so it exits
+        // promptly; joining it here means the thread is *gone* when `drop`
+        // returns, not merely on its way out.
+        self.shutdown();
     }
 }
 
@@ -195,20 +272,55 @@ pub fn checksum(bytes: &[u8]) -> u64 {
 ///
 /// Lazy because spawning a thread during `.zshrc` costs startup time for a
 /// feature the user may never invoke.
-static WORKER: OnceLock<Option<Worker>> = OnceLock::new();
+///
+/// The slot can be emptied and refilled: [`shutdown_shared`] takes the
+/// worker out of it and joins its thread, so a module that is unloaded and
+/// loaded again gets a *fresh* worker instead of a dead one. That is why
+/// this is a `Mutex` and not a `OnceLock` — a `OnceLock` can only ever be
+/// initialised once, and a worker that has been stopped can never be
+/// replaced.
+static WORKER: Mutex<Option<Arc<Worker>>> = Mutex::new(None);
 
 /// Get the shared worker, starting it on first use.
 ///
 /// Returns `None` if the thread could not be created, which is a supported
 /// outcome: the engine must work with zero workers running.
-pub fn shared() -> Option<&'static Worker> {
-    WORKER.get_or_init(|| Worker::spawn().ok()).as_ref()
+///
+/// The handle is a clone of the shared worker, so the caller may hold on to
+/// it without keeping the slot busy. After [`shutdown_shared`] the worker is
+/// gone, and this starts a new one.
+pub fn shared() -> Option<Arc<Worker>> {
+    let mut slot = WORKER.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(worker) = slot.as_ref() {
+        return Some(Arc::clone(worker));
+    }
+    let worker = Arc::new(Worker::spawn().ok()?);
+    *slot = Some(Arc::clone(&worker));
+    Some(worker)
 }
 
 /// Stop the shared worker, if one was ever started.
+///
+/// The thread is **joined**, not merely asked to stop: when this returns,
+/// the thread is gone. The worker lives inside the user's interactive shell,
+/// which keeps running long after the module is unloaded, so a thread that
+/// outlives the module is a thread that outlives the plugin.
+///
+/// The slot is emptied as well, so that a later [`shared`] starts a fresh
+/// worker. That is what makes `zmodload -u` followed by `zmodload` work: the
+/// unload must not leave a thread behind, and the reload must not find a
+/// dead worker.
+///
+/// Idempotent: calling it twice, or on a worker that was never started, does
+/// nothing.
 pub fn shutdown_shared() {
-    if let Some(w) = WORKER.get().and_then(Option::as_ref) {
-        w.stop();
+    // The lock is held across the join, so a concurrent `shared()` cannot
+    // start a new worker while the old one is still running.
+    let mut slot = WORKER.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(worker) = slot.take() {
+        worker.shutdown();
+        // `worker` is dropped here. If this was the last reference, `Drop`
+        // runs and finds the thread already joined, so it does nothing.
     }
 }
 
@@ -251,6 +363,17 @@ mod tests {
     }
 
     #[test]
+    fn a_reply_for_another_request_is_refused() {
+        // The worker answers in order, so this can only happen if two
+        // callers share one. The check turns that into a visible error
+        // rather than a silently wrong answer.
+        let _g = serialise_threads();
+        let w = Worker::spawn().expect("spawn");
+        let r = w.submit(3, b"x".to_vec(), Duration::from_secs(2)).expect("reply");
+        assert_eq!(r.revision, 3);
+    }
+
+    #[test]
     fn revisions_are_echoed_not_conflated() {
         let _g = serialise_threads();
         let w = Worker::spawn().expect("spawn");
@@ -272,7 +395,7 @@ mod tests {
         // Asserting on *our own thread by name* rather than a global count, so
         // parallel tests cannot perturb the result.
         assert_eq!(
-            worker_thread_count(),
+            wait_for_worker_threads(before + 1),
             before + 1,
             "spawning a Worker must create one thread named {WORKER_THREAD_NAME}"
         );
@@ -317,8 +440,11 @@ mod tests {
         let before = worker_thread_count();
         {
             let _w = Worker::spawn().expect("spawn");
-            assert_eq!(worker_thread_count(), before + 1);
+            assert_eq!(wait_for_worker_threads(before + 1), before + 1);
         }
+        // `Worker::drop` joins the thread, so it has finished by the time
+        // the handle is dropped. The kernel may still list it for a moment,
+        // so the count is polled rather than asserted once.
         for _ in 0..200 {
             if worker_thread_count() <= before {
                 return;
@@ -326,6 +452,186 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         panic!("worker thread outlived its Worker handle");
+    }
+
+    #[test]
+    fn shutdown_shared_stops_the_shared_worker_thread() {
+        let _g = serialise_threads();
+        let before = settled_worker_thread_count();
+        let worker = shared().expect("shared worker");
+        assert!(
+            worker.submit(1, b"x".to_vec(), Duration::from_secs(2)).is_ok(),
+            "the shared worker must answer before it is shut down"
+        );
+        assert_eq!(
+            wait_for_worker_threads(before + 1),
+            before + 1,
+            "the shared worker must run on its own thread"
+        );
+
+        shutdown_shared();
+
+        assert!(
+            wait_for_no_worker_threads(before),
+            "the shared worker thread outlived shutdown_shared"
+        );
+        assert!(
+            !has_live_handle(&worker),
+            "shutdown_shared must join the thread, not merely ask it to stop"
+        );
+        assert!(
+            matches!(
+                worker.submit(2, b"y".to_vec(), Duration::from_millis(50)),
+                Err(WorkerError::Disconnected)
+            ),
+            "a worker that has been shut down must refuse work, not block"
+        );
+    }
+
+    #[test]
+    fn shutdown_shared_waits_for_a_busy_worker_thread() {
+        let _g = serialise_threads();
+        let worker = shared().expect("shared worker");
+
+        // A payload big enough that the checksum takes milliseconds, so
+        // the thread is certainly still working when the shutdown starts.
+        submit_without_waiting(&worker, 1, vec![7u8; 4 * 1024 * 1024]);
+
+        shutdown_shared();
+
+        // The job was finished before the shutdown returned. A shutdown
+        // that only *signalled* the thread would have returned while the
+        // thread was still working on it, and no reply would be waiting.
+        assert!(
+            reply_is_pending(&worker),
+            "shutdown_shared must wait for the worker thread to finish its job"
+        );
+    }
+
+    #[test]
+    fn a_worker_can_be_started_again_after_shutdown_shared() {
+        let _g = serialise_threads();
+        let before = settled_worker_thread_count();
+        let first = shared().expect("first shared worker");
+        assert_eq!(wait_for_worker_threads(before + 1), before + 1);
+
+        shutdown_shared();
+
+        // A reload (`zmodload -u` then `zmodload`) must find a *live* worker,
+        // not the corpse of the one that was shut down.
+        let second = shared().expect("a worker after the shutdown");
+        assert!(
+            !Arc::ptr_eq(&first, &second),
+            "the worker must be started afresh, not handed out dead"
+        );
+        let reply = second
+            .submit(2, b"y".to_vec(), Duration::from_secs(2))
+            .expect("the new worker must answer");
+        assert_eq!(reply.revision, 2);
+        assert_eq!(reply.checksum, checksum(b"y"));
+
+        shutdown_shared();
+        assert!(
+            wait_for_no_worker_threads(before),
+            "the restarted worker thread outlived the second shutdown"
+        );
+    }
+
+    #[test]
+    fn shutdown_shared_is_idempotent() {
+        let _g = serialise_threads();
+        let before = settled_worker_thread_count();
+        // The module's unload hook and its finalisation hook both stop the
+        // worker, and either may run without the other. The second call
+        // must be harmless.
+        shutdown_shared();
+        let _worker = shared().expect("shared worker");
+        shutdown_shared();
+        shutdown_shared();
+        assert!(
+            wait_for_no_worker_threads(before),
+            "the worker thread outlived the shutdown"
+        );
+    }
+
+    /// Whether the worker still holds its thread's join handle.
+    ///
+    /// The handle is taken when the thread is joined, so this is false
+    /// exactly when the thread is known to have finished.
+    fn has_live_handle(w: &Worker) -> bool {
+        w.handle.lock().unwrap_or_else(|e| e.into_inner()).is_some()
+    }
+
+    /// Whether a reply is waiting to be collected.
+    ///
+    /// Used to tell a *joined* shutdown from one that merely signalled the
+    /// thread: the reply is sent when the job is finished, so a reply that
+    /// is already waiting means the thread got to the end of its work.
+    fn reply_is_pending(w: &Worker) -> bool {
+        let rx = w.rx.lock().unwrap_or_else(|e| e.into_inner());
+        rx.try_recv().is_ok()
+    }
+
+    /// Hand a job to the worker without waiting for its reply.
+    ///
+    /// Used to keep the worker busy while the shutdown happens, so that a
+    /// test can tell a *joined* shutdown from one that merely signalled the
+    /// thread.
+    fn submit_without_waiting(w: &Worker, revision: u64, payload: Vec<u8>) {
+        let guard = w.tx.lock().unwrap_or_else(|e| e.into_inner());
+        let tx = guard.as_ref().expect("the worker has a sender");
+        tx.send(Job { revision, payload }).expect("send");
+    }
+
+    /// Wait for the number of worker threads to reach `want`.
+    ///
+    /// `std::thread::Builder::spawn` returns as soon as the thread exists,
+    /// but the kernel only shows its name once the thread has started
+    /// running, so the count can lag by a moment. Polling removes the race
+    /// that made these tests flaky.
+    fn wait_for_worker_threads(want: usize) -> usize {
+        for _ in 0..200 {
+            let n = worker_thread_count();
+            if n >= want {
+                return n;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        worker_thread_count()
+    }
+
+    /// Wait until no more than `want` worker threads are left.
+    ///
+    /// The kernel can list a thread that has already been joined for a
+    /// moment: it wakes the joiner before it removes the thread's entry
+    /// from `/proc`. The count is therefore polled rather than asserted
+    /// once.
+    fn wait_for_no_worker_threads(want: usize) -> bool {
+        for _ in 0..200 {
+            if worker_thread_count() <= want {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        worker_thread_count() <= want
+    }
+
+    /// The number of worker threads, once it has stopped changing.
+    ///
+    /// A baseline taken while the kernel is still listing a thread that has
+    /// already been joined would be one too high, and every later
+    /// comparison against it would be wrong.
+    fn settled_worker_thread_count() -> usize {
+        let mut last = worker_thread_count();
+        for _ in 0..100 {
+            std::thread::sleep(Duration::from_millis(1));
+            let now = worker_thread_count();
+            if now == last {
+                return now;
+            }
+            last = now;
+        }
+        last
     }
 
     /// Number of live threads named { WORKER_THREAD_NAME}.
