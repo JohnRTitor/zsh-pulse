@@ -98,6 +98,23 @@ fn breaks_word(b: u8) -> bool {
     matches!(b, b';' | b')' | b'|' | b'&' | b'>' | b'<')
 }
 
+/// Whether `b` ends the run of ordinary characters at the start of a word.
+///
+/// These are the characters that either end the word or make the scanner
+/// emit a token of their own kind (a quote, an escape, an expansion, a
+/// glob). The text between two of them is the word's *plain* text: the part
+/// that is emitted with the word's own kind.
+///
+/// `~` is deliberately not listed: it is only special at the very start of a
+/// word, and a word that starts with `~` is never the one this is used for.
+fn ends_plain_text(b: u8) -> bool {
+    breaks_word(b)
+        || matches!(
+            b,
+            b' ' | b'\t' | b'\n' | b'\'' | b'"' | b'`' | b'\\' | b'$' | b'*' | b'?' | b'['
+        )
+}
+
 /// Whether `c` can start a parameter name.
 fn is_name_start(c: u8) -> bool {
     c.is_ascii_alphabetic() || c == b'_'
@@ -773,14 +790,58 @@ impl<'a> Scanner<'a> {
             // The inside of `${...}` is part of the expansion, not a word.
             return TokenKind::ParamExpansion;
         }
-        if !self.state.expect_command() || self.state.after_redirect() {
+        if self.state.after_redirect() {
+            // The target of a redirection names a file, not an option:
+            // `cmd > -l` writes to a file called `-l`. This is zsh's own
+            // `inredir` (`zsh-src/Src/lex.c:362-367`).
             return TokenKind::Word;
+        }
+        if !self.state.expect_command() {
+            // Argument position: the word may be an option.
+            return if self.looks_like_option(start) {
+                TokenKind::Option
+            } else {
+                TokenKind::Word
+            };
         }
         if self.looks_like_assignment(start) {
             TokenKind::Assignment
         } else {
             TokenKind::Command
         }
+    }
+
+    /// Whether the word at `start` is a command-line option.
+    ///
+    /// An option is a word that starts with `-`, is longer than one
+    /// character, and is not exactly `--`:
+    ///
+    /// - `-l` and `--amend` are options;
+    /// - `-` is the word "standard input", not an option;
+    /// - `--` is the end-of-options marker, not an option.
+    ///
+    /// The reference implementation styles every word that starts with a
+    /// hyphen as an option
+    /// (`research/upstream/fsh/fast-highlight:869-881`); the exceptions
+    /// above are the ones that make a difference to the user.
+    ///
+    /// Only the *plain* text of the word is looked at. A word that starts
+    /// with a quote (`"-l"`) is a literal string rather than an option, and
+    /// a word whose plain text is only `-` (`-*`) is a glob.
+    ///
+    /// This is only ever asked of a word in argument position: the command
+    /// word is a command whatever it looks like, and the target of a
+    /// redirection names a file.
+    fn looks_like_option(&self, start: usize) -> bool {
+        if self.text.get(start).copied() != Some(b'-') {
+            return false;
+        }
+        let mut end = start + 1;
+        while self.text.get(end).is_some_and(|&b| !ends_plain_text(b)) {
+            end += 1;
+        }
+        let plain = &self.text[start..end];
+        plain.len() > 1 && plain != b"--"
     }
 
     /// Whether the word at `start` is a `NAME=value` assignment.

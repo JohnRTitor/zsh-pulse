@@ -71,9 +71,39 @@ pub fn merge_entries(existing: &[String], ours: &[std::ffi::CString]) -> Vec<std
 ///
 /// `None` means "leave this alone": an ordinary argument is shown exactly as
 /// the user typed it, which is also what zsh would do without us.
+///
+/// The colours are the ones the reference implementation uses
+/// (`research/upstream/fsh/fast-highlight:58-93`):
+///
+/// | style | reference | attribute |
+/// |---|---|---|
+/// | a command the shell knows | `command` | `fg=green` |
+/// | a command the shell does not know | `unknown-token` | `fg=red,bold` |
+/// | an option | `double-hyphen-option` | `fg=cyan` |
+/// | a path | `path` | `fg=magenta` |
+/// | a directory | `path-to-dir` | `fg=magenta,underline` |
+///
+/// zsh's attribute parser accepts all of them: `match_highlight`
+/// (`research/upstream/zsh-src/Src/prompt.c:2031`) reads the colour after
+/// `fg=`, skips the `,` and then reads the attributes — `bold`,
+/// `underline` and the rest — from the `highlights[]` table
+/// (`research/upstream/zsh-src/Src/prompt.c:1896`).
 pub fn attribute(style: StyleId) -> Option<&'static str> {
     match style {
-        StyleId::Command => Some("fg=cyan,bold"),
+        // The shell knows this command: it is an alias, a function, a
+        // builtin, a command on `$PATH` or a reserved word. The reference
+        // colours all of those green.
+        StyleId::Command => Some("fg=green"),
+        // The shell does not know this command. The reference calls this
+        // `unknown-token` and makes it bold, so that it stands out.
+        StyleId::UnknownCommand => Some("fg=red,bold"),
+        // The reference has one style for a single hyphen and one for a
+        // double hyphen; both are cyan.
+        StyleId::Option => Some("fg=cyan"),
+        // A path is magenta; a directory is underlined as well, so that the
+        // two can be told apart at a glance.
+        StyleId::Path => Some("fg=magenta"),
+        StyleId::PathToDir => Some("fg=magenta,underline"),
         StyleId::Assignment => Some("fg=yellow"),
         StyleId::SingleQuoted => Some("fg=green"),
         StyleId::DoubleQuoted => Some("fg=green"),
@@ -274,6 +304,71 @@ mod tests {
     }
 
     #[test]
+    fn the_new_styles_have_the_attributes_the_reference_uses() {
+        // The exact strings matter: they are what zsh parses, and the
+        // reference implementation is what the user is comparing against
+        // (`research/upstream/fsh/fast-highlight:58-93`).
+        assert_eq!(attribute(StyleId::Command), Some("fg=green"));
+        assert_eq!(attribute(StyleId::UnknownCommand), Some("fg=red,bold"));
+        assert_eq!(attribute(StyleId::Option), Some("fg=cyan"));
+        assert_eq!(attribute(StyleId::Path), Some("fg=magenta"));
+        assert_eq!(attribute(StyleId::PathToDir), Some("fg=magenta,underline"));
+    }
+
+    #[test]
+    fn every_attribute_is_one_zsh_can_parse() {
+        // zsh's attribute parser (`match_highlight`,
+        // `research/upstream/zsh-src/Src/prompt.c:2031`) reads `fg=`, then
+        // the colour, then — after a comma — the attributes from the
+        // `highlights[]` table (`research/upstream/zsh-src/Src/prompt.c:1896`).
+        //
+        // The check here is the shape of that grammar: a colour, or a
+        // colour and a comma and an attribute. A style that does not fit
+        // would be rejected by zsh, and the region would silently do
+        // nothing.
+        const COLOURS: [&str; 8] = [
+            "black", "red", "green", "yellow", "blue", "magenta", "cyan", "white",
+        ];
+        // The `highlights[]` table of `research/upstream/zsh-src/Src/prompt.c:1896`.
+        const ATTRIBUTES: [&str; 6] = [
+            "reset", "bold", "faint", "standout", "underline", "italic",
+        ];
+        for style in [
+            StyleId::Command,
+            StyleId::UnknownCommand,
+            StyleId::Option,
+            StyleId::Path,
+            StyleId::PathToDir,
+            StyleId::Assignment,
+            StyleId::SingleQuoted,
+            StyleId::DoubleQuoted,
+            StyleId::Escape,
+            StyleId::Comment,
+            StyleId::Operator,
+            StyleId::Redirect,
+            StyleId::Substitution,
+            StyleId::ParamExpansion,
+            StyleId::Glob,
+            StyleId::Heredoc,
+        ] {
+            let Some(attr) = attribute(style) else { continue };
+            let mut parts = attr.split(',');
+            let colour = parts.next().expect("at least one part");
+            let fg = colour.strip_prefix("fg=").unwrap_or(colour);
+            assert!(
+                COLOURS.contains(&fg),
+                "{style:?} has the colour {fg:?}, which zsh does not know"
+            );
+            for extra in parts {
+                assert!(
+                    ATTRIBUTES.contains(&extra),
+                    "{style:?} has the attribute {extra:?}, which zsh does not know"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn entries_use_character_offsets() {
         let text = "echo 'héllo'".as_bytes();
         let offsets = highlight::char_offsets(text);
@@ -291,7 +386,7 @@ mod tests {
         let spans = [HighlightSpan::new(0, 4, StyleId::Command)];
         let mut entries = Entries::new();
         entries.build(&spans, None);
-        assert_eq!(entries.rows()[0].to_bytes(), b"0 4 fg=cyan,bold memo=shell-pulse");
+        assert_eq!(entries.rows()[0].to_bytes(), b"0 4 fg=green memo=shell-pulse");
     }
 
     #[test]
@@ -304,7 +399,7 @@ mod tests {
         let mut entries = Entries::new();
         entries.build(&spans, Some(&offsets));
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries.rows()[0].to_bytes(), b"0 4 fg=cyan,bold memo=shell-pulse");
+        assert_eq!(entries.rows()[0].to_bytes(), b"0 4 fg=green memo=shell-pulse");
     }
 
     #[test]

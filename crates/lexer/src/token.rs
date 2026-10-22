@@ -19,6 +19,16 @@ pub enum TokenKind {
     /// Distinguished from [`TokenKind::Word`] because a highlighter usually
     /// wants the command to stand out from its arguments.
     Command,
+    /// A command-line option word: `-l`, `--amend`.
+    ///
+    /// Distinguished from [`TokenKind::Word`] because a highlighter usually
+    /// wants an option to stand out from an ordinary argument, the way
+    /// `fast-syntax-highlighting` does
+    /// (`research/upstream/fsh/fast-highlight:76-77`).
+    ///
+    /// This is a *lexical* fact, not a semantic one: the lexer knows that the
+    /// word looks like an option, not whether the command understands it.
+    Option,
     /// `name=value` in command position.
     Assignment,
     /// A single-quoted string, including its quotes.
@@ -58,6 +68,7 @@ impl TokenKind {
             self,
             TokenKind::Word
                 | TokenKind::Command
+                | TokenKind::Option
                 | TokenKind::Assignment
                 | TokenKind::SingleQuoted
                 | TokenKind::DoubleQuoted

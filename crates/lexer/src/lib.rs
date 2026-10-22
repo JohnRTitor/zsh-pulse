@@ -140,6 +140,228 @@ mod tests {
             .collect()
     }
 
+    /// The byte range every token of `text` covers.
+    fn spans(text: &str) -> Vec<(u32, u32)> {
+        lex(text.as_bytes())
+            .unwrap_or_else(|e| panic!("{text:?} failed to lex: {e}"))
+            .tokens
+            .iter()
+            .map(|t| (t.start, t.end))
+            .collect()
+    }
+
+    #[test]
+    fn an_option_in_argument_position_is_an_option() {
+        // An option is a word that starts with a hyphen, is longer than one
+        // character and is not exactly `--`. The reference implementation
+        // styles every such word as an option
+        // (`research/upstream/fsh/fast-highlight:869-881`).
+        assert_eq!(
+            kinds("cmd -l"),
+            vec![TokenKind::Command, TokenKind::Option]
+        );
+        assert_eq!(words("cmd -l"), vec!["cmd", "-l"]);
+    }
+
+    #[test]
+    fn a_long_option_in_argument_position_is_an_option() {
+        // The long form is not just "a word that starts with a hyphen": it
+        // is a word that starts with two of them.
+        assert_eq!(
+            kinds("cmd --amend"),
+            vec![TokenKind::Command, TokenKind::Option]
+        );
+        assert_eq!(words("cmd --amend"), vec!["cmd", "--amend"]);
+    }
+
+    #[test]
+    fn a_bundle_of_short_options_is_one_option() {
+        // `-abc` is three options to the program that reads it, but it is
+        // one word, and the lexer spells words, not options.
+        assert_eq!(
+            kinds("cmd -abc"),
+            vec![TokenKind::Command, TokenKind::Option]
+        );
+        assert_eq!(words("cmd -abc"), vec!["cmd", "-abc"]);
+    }
+
+    #[test]
+    fn an_option_with_a_value_is_one_option() {
+        // The value belongs to the option: `--amend=1` is one word.
+        assert_eq!(
+            kinds("cmd --amend=1"),
+            vec![TokenKind::Command, TokenKind::Option]
+        );
+        assert_eq!(words("cmd --amend=1"), vec!["cmd", "--amend=1"]);
+    }
+
+    #[test]
+    fn a_lone_hyphen_is_the_name_of_standard_input_not_an_option() {
+        // `-` is the word "standard input". It is not an option, and
+        // painting it like one would be wrong.
+        assert_eq!(
+            kinds("cmd -"),
+            vec![TokenKind::Command, TokenKind::Word]
+        );
+        assert_eq!(words("cmd -"), vec!["cmd", "-"]);
+    }
+
+    #[test]
+    fn a_lone_double_hyphen_is_the_end_of_options_marker_not_an_option() {
+        // `--` ends the options: everything after it is an operand, not an
+        // option. The reference implementation gives it a style of its own;
+        // this one does not, because there is no style for "the end of the
+        // options" in the palette it copies.
+        assert_eq!(
+            kinds("cmd --"),
+            vec![TokenKind::Command, TokenKind::Word]
+        );
+        assert_eq!(words("cmd --"), vec!["cmd", "--"]);
+    }
+
+    #[test]
+    fn a_command_word_is_a_command_even_when_it_looks_like_an_option() {
+        // The first word of the line is a command whatever it looks like:
+        // the shell runs it, and it is the shell's own tables that say
+        // whether it exists.
+        assert_eq!(kinds("-l"), vec![TokenKind::Command]);
+        assert_eq!(
+            kinds("cmd | -l"),
+            vec![
+                TokenKind::Command,
+                TokenKind::Operator,
+                TokenKind::Command
+            ]
+        );
+    }
+
+    #[test]
+    fn the_target_of_a_redirection_is_a_file_name_not_an_option() {
+        // `cmd > -l` writes to a file called `-l`. This is zsh's own rule:
+        // the target of a redirection is never an option
+        // (`zsh-src/Src/lex.c:362-367`, `inredir`).
+        assert_eq!(
+            kinds("cmd > -l"),
+            vec![TokenKind::Command, TokenKind::Redirect, TokenKind::Word]
+        );
+        assert_eq!(words("cmd > -l"), vec!["cmd", ">", "-l"]);
+    }
+
+    #[test]
+    fn a_quoted_option_is_a_quoted_string_not_an_option() {
+        // `"-l"` is a string that happens to look like an option. The
+        // program that reads it gets the three characters `-`, `"` and `l`.
+        assert_eq!(
+            kinds("cmd \"-l\""),
+            vec![
+                TokenKind::Command,
+                TokenKind::DoubleQuoted,
+                TokenKind::DoubleQuoted,
+                TokenKind::DoubleQuoted
+            ]
+        );
+        assert_eq!(
+            kinds("cmd '-l'"),
+            vec![TokenKind::Command, TokenKind::SingleQuoted]
+        );
+    }
+
+    #[test]
+    fn a_hyphen_before_a_glob_is_a_glob_not_an_option() {
+        // `-*` is a glob that matches every file whose name starts with a
+        // hyphen. The plain text of the word is only `-`, which is not an
+        // option.
+        assert_eq!(
+            kinds("cmd -*"),
+            vec![TokenKind::Command, TokenKind::Word, TokenKind::Glob]
+        );
+        assert_eq!(words("cmd -*"), vec!["cmd", "-", "*"]);
+    }
+
+    #[test]
+    fn an_assignment_whose_value_looks_like_an_option_is_an_assignment() {
+        // `FOO=-x cmd` sets `FOO` and runs `cmd`. An assignment does not
+        // end the command position either: the command is still the command.
+        assert_eq!(
+            kinds("FOO=-x cmd"),
+            vec![TokenKind::Assignment, TokenKind::Command]
+        );
+    }
+
+    #[test]
+    fn an_option_after_the_end_of_options_marker_is_still_an_option() {
+        // The lexer is lexical: it does not know that `--` changes the
+        // meaning of the words that follow. The shell, not the lexer, is
+        // what turns `-- -l` into an operand.
+        assert_eq!(
+            kinds("cmd -- -l"),
+            vec![TokenKind::Command, TokenKind::Word, TokenKind::Option]
+        );
+    }
+
+    #[test]
+    fn an_option_token_covers_only_the_option_word() {
+        // The byte range of the token matters: a highlighter that coloured
+        // one character too many would paint the space after the option.
+        assert_eq!(spans("cmd -l"), vec![(0, 3), (4, 6)]);
+        assert_eq!(spans("cmd --amend=1"), vec![(0, 3), (4, 13)]);
+        assert_eq!(spans("cmd -*"), vec![(0, 3), (4, 5), (5, 6)]);
+    }
+
+    #[test]
+    fn an_option_is_part_of_a_word() {
+        // The highlighter merges the tokens of a word into one styled run,
+        // so an option has to count as part of a word.
+        assert!(TokenKind::Option.is_word_part());
+        assert!(!TokenKind::Option.is_syntax());
+    }
+
+    #[test]
+    fn only_the_plain_text_of_a_word_decides_whether_it_is_an_option() {
+        // The plain text is the part of the word that is not quoted. A word
+        // that starts with a quote is a string, and a word whose plain text
+        // is only `-` is a glob.
+        assert_eq!(
+            kinds("cmd -l\"x\""),
+            vec![
+                TokenKind::Command,
+                TokenKind::Option,
+                TokenKind::DoubleQuoted,
+                TokenKind::DoubleQuoted,
+                TokenKind::DoubleQuoted
+            ]
+        );
+        assert_eq!(words("cmd -l\"x\""), vec!["cmd", "-l", "\"", "x", "\""]);
+    }
+
+    #[test]
+    fn an_option_inside_a_command_substitution_is_an_option() {
+        // The substitution holds a command line of its own, and the option
+        // in it is an option like any other.
+        assert_eq!(
+            kinds("cmd $(ls -l)"),
+            vec![
+                TokenKind::Command,
+                TokenKind::Substitution,
+                TokenKind::Command,
+                TokenKind::Option,
+                TokenKind::Operator
+            ]
+        );
+        // An expansion is not a word at all: the whole of `${-l}` is the
+        // expansion, and nothing inside it is an option.
+        assert_eq!(
+            kinds("cmd ${-l}"),
+            vec![
+                TokenKind::Command,
+                TokenKind::ParamExpansion,
+                TokenKind::ParamExpansion,
+                TokenKind::ParamExpansion
+            ]
+        );
+        assert_eq!(words("cmd ${-l}"), vec!["cmd", "${", "-l", "}"]);
+    }
+
     #[test]
     fn a_simple_command_is_a_command_and_a_word() {
         assert_eq!(kinds("echo hi"), vec![TokenKind::Command, TokenKind::Word]);

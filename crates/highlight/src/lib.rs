@@ -31,12 +31,26 @@ use lexer::{Token, TokenKind};
 /// The set is deliberately small and lexical: it says what a piece of the
 /// line *is*, never how it should look. Mapping a style onto a terminal
 /// attribute is the shell adapter's job.
+///
+/// Some styles are *not* produced by the lexer, because deciding them needs
+/// something the lexer does not have: [`StyleId::Path`] and
+/// [`StyleId::PathToDir`] need the filesystem, and [`StyleId::UnknownCommand`]
+/// needs the shell's own tables of commands. The caller sets those on the
+/// span itself; [`StyleId::of`] only maps the kinds the lexer produces.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum StyleId {
     /// The command name itself.
     Command,
     /// An ordinary argument.
     Argument,
+    /// A command-line option: `-l`, `--amend`.
+    Option,
+    /// A word that names an existing file.
+    Path,
+    /// A word that names an existing directory.
+    PathToDir,
+    /// A command the shell does not know.
+    UnknownCommand,
     /// A `NAME=value` assignment.
     Assignment,
     /// A single-quoted string.
@@ -67,6 +81,7 @@ impl StyleId {
         match kind {
             TokenKind::Command => StyleId::Command,
             TokenKind::Word => StyleId::Argument,
+            TokenKind::Option => StyleId::Option,
             TokenKind::Assignment => StyleId::Assignment,
             TokenKind::SingleQuoted => StyleId::SingleQuoted,
             TokenKind::DoubleQuoted => StyleId::DoubleQuoted,
@@ -333,6 +348,32 @@ mod tests {
         assert_eq!(
             spans_of("echo hi"),
             vec![(0, 4, StyleId::Command), (5, 7, StyleId::Argument)]
+        );
+    }
+
+    #[test]
+    fn an_option_gets_its_own_style() {
+        // The option is not an ordinary argument: the reference
+        // implementation colours it in its own colour
+        // (`research/upstream/fsh/fast-highlight:76-77`).
+        assert_eq!(
+            spans_of("ls -la"),
+            vec![(0, 2, StyleId::Command), (3, 6, StyleId::Option)]
+        );
+        assert_eq!(StyleId::of(TokenKind::Option), StyleId::Option);
+    }
+
+    #[test]
+    fn the_styles_the_lexer_cannot_decide_are_left_to_the_caller() {
+        // Whether a word names an existing file needs the filesystem, and
+        // whether the shell knows a command needs the shell's own tables, so
+        // the lexer styles both as ordinary text and the caller replaces the
+        // style on the span.
+        assert_eq!(StyleId::of(TokenKind::Word), StyleId::Argument);
+        assert_eq!(StyleId::of(TokenKind::Command), StyleId::Command);
+        assert_eq!(
+            spans_of("cat Cargo.toml"),
+            vec![(0, 3, StyleId::Command), (4, 14, StyleId::Argument)]
         );
     }
 
