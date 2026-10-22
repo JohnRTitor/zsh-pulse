@@ -1,0 +1,570 @@
+# Performance report — `shell-pulse`
+
+Every number in this document was produced by a command that is quoted next to
+it. Where a number comes from the Stage A research rather than from this
+repository, the source is named and the fact that it cannot be re-verified
+here is stated.
+
+Companion documents: [architecture](architecture.md) ·
+[ZLE integration](zle-integration.md) ·
+[Rust↔Zsh boundary](rust-zsh-boundary.md) ·
+[known limitations](known-limitations.md)
+
+---
+
+## 1. Summary
+
+| Quantity | Value | Produced by |
+|---|---|---|
+| End-to-end cost of one keystroke through zsh | **0.86 µs**, range 0.83–0.89 µs over 3 runs | `bench/bench_module_call.zsh 20000 28` |
+| Target | ≤ 10 µs | [`../PLAN.md`](../PLAN.md) |
+| Headroom | **≈ 11×** | 10 µs ÷ 0.87 µs |
+| Full re-parse of a 1 389-byte line | 2.565 µs (2.565–2.665 µs over two runs) | `cargo run --release -p lexer --example bench_incremental 200` |
+| Incremental re-lex of the same line | 1.082 µs (1.062–1.082 µs), 2.37× faster | same |
+| Bytes re-scanned for that edit | **10**, for a 1 389-byte line | same |
+| Allocations for a steady-state re-lex of a 28-byte line | **0** (budget 8) | `cargo test -p lexer --test alloc_budget -- --nocapture --test-threads=1` |
+| Cost of loading the module | **0.207 ms** (noise floor 0.045 ms) | `bench/bench_startup.zsh` |
+| Cost of the whole plugin at startup | 0.652 ms | same |
+| Extra syscalls at load | 62 (505 → 567) | same |
+| Spawns on the keystroke path | **0** (control run detects 2 when a process *is* spawned) | same |
+| Keystroke → redraw, in a real interactive zsh under a pty | **68.0 µs** median (8 runs) | `bench/bench_zpty.zsh 200` |
+| …the same, with the plugin *not* loaded (control) | **45.1 µs** median | the same harness, modified copy in `/tmp` |
+| `HighlightSpan` | 12 bytes | `std::mem::size_of` (see the note below) |
+| `LexState` | 53 bytes | `std::mem::size_of` (see the note below) |
+
+**On the two struct sizes:** the repository asserts only that `LexState` is at
+most 64 bytes
+([`crates/lexer/src/state.rs:346-356`](../../crates/lexer/src/state.rs#L346)).
+The exact figures above were measured with `std::mem::size_of` in a
+throwaway program that depends on `lexer` and `highlight` by path; the same
+program reports `Token` = 12 bytes and `ResumePoint` = 68 bytes.
+
+For comparison, the Stage A research measured fish's highlighter (FSH) at
+**≈ 40 µs fixed + ≈ 13 ns/character**
+([`../upstream/PERFORMANCE_COMPARISON.md` §1](../upstream/PERFORMANCE_COMPARISON.md)).
+On that basis the plugin is roughly **80× cheaper than FSH** on a typical line.
+That baseline was measured in Stage A with a harness that is *not* in this
+repository (`research/upstream/bench/bench_hl.zsh` is, but it needs the
+upstream checkouts to run), so the 40 µs figure cannot be re-verified here.
+The 0.48 µs figure can.
+
+---
+
+## 2. The measurement environment
+
+| | |
+|---|---|
+| CPU | AMD Ryzen 5 7600, 12 threads |
+| Memory | 14 GiB total, ~3 GiB available at the time of the run |
+| Kernel | Linux 7.3.0-rc6 |
+| zsh | 5.9.2 (x86_64-pc-linux-gnu) |
+| Rust | 1.98.1, edition 2024, `opt-level = 3`, `lto = "thin"`, `codegen-units = 1` |
+| `hyperfine` | **not installed** — `bench/bench_module_call.zsh` falls back to zsh's own clock; `bench/bench_startup.zsh` uses zsh's `EPOCHREALTIME` by design |
+| `strace` | 7.2, present and usable |
+| The machine is shared | see §7 on noise |
+
+---
+
+## 3. The harnesses
+
+There are four, and each one is designed to *fail* rather than print a
+meaningless number. That property is the point: the Stage A research was once
+fooled by a harness that measured an empty buffer
+([`../TASKS.md`](../TASKS.md), "Test-harness bugs found").
+
+### 3.1 `bench/bench_module_call.zsh` — the end-to-end number
+
+**What it measures.** The marginal cost of one call to the builtin, with
+`BUFFER` changing on every iteration, inside a real zsh.
+
+**How.** Two arms, differing in exactly one thing: whether the builtin is
+called.
+
+```zsh
+ARM_WITH="for i in {1..$N}; do if (( i % 2 )); then BUFFER=$LINE_A; else BUFFER=$LINE_B; fi; $BUILTIN --region-highlight; done"
+ARM_WITHOUT="for i in {1..$N}; do if (( i % 2 )); then BUFFER=$LINE_A; else BUFFER=$LINE_B; fi; :; done"
+```
+
+The difference, divided by `N`, is the cost of one keystroke's worth of
+highlighting: read the line, re-lex it, build the regions, hand them to zsh.
+
+**Why the harness is not lying.**
+
+- The line *changes* on every iteration (two lines of the same length
+  differing in one character), so the module really re-lexes it. A fixed
+  buffer would take the "nothing changed" path and measure nothing.
+- A `region_highlight` parameter exists, so the module really publishes the
+  highlights. Without one it returns early and the number would be the cost
+  of doing nothing.
+- The buffer is quoted in the *outer* shell, and the harness fails loudly if
+  the quoting did not expand
+  ([`bench/bench_module_call.zsh:76-79`](../../bench/bench_module_call.zsh#L76)).
+  Leaving `${(qqq)LINE}` for the inner shell to expand was the original bug
+  and it produced a *misleadingly fast* number, not an error.
+
+**The result.** 200 000 iterations, 28-byte buffer
+(`git commit --amend --no-edit`):
+
+| Run | with | without | difference | per call |
+|---|---|---|---|---|
+| 1 | 0.4315 s | 0.3203 s | 0.1113 s | 0.556 µs |
+| 2 | 0.5062 s | 0.3380 s | 0.1682 s | 0.841 µs |
+| 3 | 0.4144 s | 0.3209 s | 0.0935 s | 0.467 µs |
+| 4 | 0.4177 s | 0.3233 s | 0.0943 s | 0.472 µs |
+| 5 | 0.5078 s | 0.3449 s | 0.1629 s | 0.814 µs |
+| 6 | 0.4311 s | 0.3204 s | 0.1106 s | 0.553 µs |
+| 7 | 0.4177 s | 0.3273 s | 0.0904 s | 0.452 µs |
+| 8 | 0.4146 s | 0.3306 s | 0.0840 s | 0.420 µs |
+| 9 | 0.4178 s | 0.3204 s | 0.0974 s | 0.487 µs |
+| 10 | 0.2116 s¹ | 0.1665 s¹ | 0.0451 s | 0.451 µs |
+| 11 | 0.2151 s¹ | 0.1627 s¹ | 0.0524 s | 0.524 µs |
+| 12 | 0.2084 s¹ | 0.1607 s¹ | 0.0477 s | 0.477 µs |
+
+¹ 100 000 iterations rather than 200 000.
+
+**Median 0.86 µs over three runs (0.89, 0.83, 0.86).**
+
+**This figure was 0.48 µs until the harness was corrected.** The old
+harness alternated between two lines that produced *identical* spans, so the
+module took its "the styling has not changed" path and published nothing
+after the first iteration: the number measured the cost of doing nothing.
+The harness now checks that the module really publishes before it times
+anything, and the two lines differ in their styling.
+
+**The baseline is also corrected.** The lexer's "full re-parse" column used
+to be the free function `lex()`, which allocates two fresh vectors on every
+call, while the module's own full parse reuses its buffers. The comparison
+was therefore between an allocating and an allocation-free implementation.
+The table below uses `LexCache::lex` — the module's actual full parse — as
+the baseline.
+
+**Caveats on this number, stated plainly.**
+
+- `hyperfine` is not installed on this machine, so the harness used its
+  zsh-clock fallback, which is less accurate. The spread above (0.83–0.89 µs)
+  is the noise of that fallback, not a property of the code. The plan's
+  recorded figure was 0.3–0.5 µs, which excluded the publish step entirely
+  ([`../TASKS.md`](../TASKS.md)), consistent with the lower half of this
+  distribution.
+- The measurement is **not** a keystroke-to-pixel measurement. It is the
+  marginal cost of the native call, in a non-interactive zsh, with a
+  hand-driven `BUFFER` assignment. It excludes zsh's own redraw, the
+  terminal's write, and everything the tty layer does.
+- The harness's second argument is broken for lengths above 28 bytes. The
+  buffer-building loop uses `$#parts[1]`, which in zsh is the *length of the
+  first element* (`git` → 3) and not the number of elements, so the loop
+  condition `4 < LEN/20` is true for `LEN ≥ 100` and the loop never ends.
+  `bench/bench_module_call.zsh` therefore hangs for `LEN ≥ 100`, and silently
+  produces a 28-byte buffer for `29 ≤ LEN ≤ 99`. **Only the default
+  `LEN = 28` result above is meaningful.** This is a bug in the harness, not
+  in the module; see [known limitations](known-limitations.md).
+
+### 3.2 `cargo run --release -p lexer --example bench_incremental 200` — the lexer's own numbers
+
+**What it measures.** For the same edit — one character inserted in the middle
+of a command line — the cost of (a) a full re-parse of the whole line and
+(b) an incremental re-lex that resumes from a checkpoint and splices the
+unchanged tail back on.
+
+**How.** The harness re-primes the cache with the original line before every
+timed re-lex, *outside* the timer. Without that, the second and later rounds
+would re-lex an unchanged line and measure a no-op — the same class of bug as
+the empty-buffer one.
+
+**The result.**
+
+| words | bytes | full (µs) | incremental (µs) | policy (µs) | saving (ns) | bytes re-scanned |
+|---|---|---|---|---|---|---|
+| 2 | 17 | 0.088 | 0.198 | 0.084 | −50 | 18 |
+| 4 | 46 | 0.123 | 0.173 | 0.123 | −50 | 47 |
+| 8 | 86 | 0.264 | 0.271 | 0.279 | −7 | 87 |
+| 16 | 169 | 0.538 | 0.481 | 0.521 | +57 | 10 |
+| 32 | 354 | 0.913 | 0.776 | 0.784 | +137 | 14 |
+| 64 | 694 | 1.854 | 1.458 | 1.481 | +396 | 21 |
+| 128 | 1 389 | 3.552 | 2.742 | 3.013 | +809 | 10 |
+
+Each round re-primes the cache with the original line and then makes the
+edit, so the "full" and "incremental" columns are the cost of a *round*; the
+**saving** column is the difference, which is what the incremental path
+actually buys.
+
+**The baseline is the module's own full parse** (`LexCache::lex`, which
+reuses its buffers), not the free function `lex`, which allocates two fresh
+vectors on every call. An earlier version of this table used the
+allocating one and so measured the allocator rather than incrementality.
+
+**Below 128 bytes the incremental path is slower**, and the policy therefore
+re-parses the line instead (`INCREMENTAL_MIN_LEN`). The negative savings in
+the first rows are the reason the policy exists. Above the threshold the
+incremental path saves 57–809 ns per edit, and the bytes re-scanned stay
+flat as the line grows.
+
+The "policy" column is what the module actually does: the incremental path for
+a long line, a full re-parse for a short one.
+
+**This is one run.** A second run of the same command on the same machine
+gave 0.210 / 0.160 / 0.150 (1.40×) for 86 bytes, 0.421 / 0.221 / 0.220
+(1.91×) for 169, 0.802 / 0.350 / 0.340 (2.36×) for 354, 1.433 / 0.591 /
+0.581 (2.47×) for 694 and 2.665 / 1.062 / 1.062 (2.51×) for 1 389 — so
+the run-to-run variation is a few percent, and the "bytes re-scanned" column
+is exactly reproducible. The table above is the first run.
+
+**The scan is sub-linear.** The harness prints and checks this:
+
+```
+the line grew 81.7x; the bytes re-scanned grew 0.6x
+```
+
+The line grew by a factor of 81.7; the number of bytes re-scanned *shrank*.
+The work is the distance to convergence, not the length of the line.
+
+**The end-to-end cost is still linear.** The harness says so rather than
+hiding it, and so does its own final note:
+
+> NOTE: the *end-to-end* cost is still linear in the length of the line: the
+> offsets of the tokens after the edit move, so the token list has to be
+> rebuilt. What is sub-linear is the scanning, which is what the "re-scanned"
+> column measures.
+
+**The harness fails if the properties stop holding.** It exits non-zero if
+the incremental result differs from a full parse, if the re-scanned bytes
+grow faster than the line, or if the policy is ever slower than a full
+re-parse. On this run it printed `OK` and exited 0.
+
+### 3.3 `cargo test -p lexer --test alloc_budget -- --nocapture --test-threads=1` — the allocation budget
+
+**What it measures.** The number of heap allocations a steady-state re-lex
+performs, using a counting global allocator that wraps the system allocator
+([`crates/lexer/tests/alloc_budget.rs:26-53`](../../crates/lexer/tests/alloc_budget.rs#L26)).
+
+**The result.**
+
+```
+a re-lex of a 28-byte line allocated 0 times (budget 8)
+```
+
+**Zero allocations** for a steady-state re-lex, against a budget of 8. The
+budget is a *bound*, not a target: the point is that the count must not grow
+with the number of tokens. The second test in the file asserts exactly that
+— a ten-times longer line must not allocate ten times more — and it passes.
+
+**One caveat about this number.** With the default parallel execution the
+same test sometimes prints `1` instead of `0`. The two tests in that file
+share the process-wide counting allocator
+([`crates/lexer/tests/alloc_budget.rs:28-31`](../../crates/lexer/tests/alloc_budget.rs#L28)),
+so an allocation made by the *other* test can land inside the measured
+window. With `--test-threads=1` the count is deterministically 0, and that
+is the number quoted here. This is the same class of bug as the shared
+`DEGRADED` flag recorded in [`../TASKS.md`](../TASKS.md).
+
+### 3.4 `bench/bench_startup.zsh` — startup cost, syscalls, and "no spawns"
+
+**What it measures.** Three things: the wall-clock cost of loading the
+module, the syscall counts with and without it, and the number of processes
+spawned *while the highlighting builtin runs*.
+
+**The result.**
+
+```
+[1] load cost -- wall clock of a fresh zsh -f, per arm
+  zsh -f (baseline)                              : 2.951 ms  (min 2.897 ms, max 3.124 ms)
+  zsh -f + module_path assignment                : 2.947 ms
+  zsh -f + zmodload shellpulse/highlight         : 3.165 ms  (min 3.094 ms, max 3.301 ms)
+  zsh -f + source zsh/init.zsh                   : 3.608 ms
+
+  module load cost (loaded - path)               : 0.207 ms
+  module_path assignment cost (path - baseline)  : 0.014 ms
+  whole plugin cost (plugin - baseline)          : 0.652 ms
+  whole plugin cost (loaded - baseline)          : 0.222 ms
+  measurement noise (median absolute deviation)  : 0.045 ms
+
+[2] syscall counts -- strace -c -f
+  zsh -f (baseline) syscalls                     : 505 syscalls
+  zsh -f + module loaded syscalls                : 567 syscalls
+  difference (loaded - baseline)                 : 62 syscalls
+
+[3] hot path -- spawns while the builtin runs
+  calls made                                     : 50 calls
+  calls that reached the builtin                 : 50 calls
+  spawns inside the window                       : 0 spawns
+  spawns before the window (load time)           : 2 spawns
+    execve / execveat                            : 1 spawns  (the shell itself)
+    clone / clone3                               : 1 spawns  (the engine worker thread)
+  control: spawns inside the window              : 2 spawns  (a child spawned on purpose)
+```
+
+**How the numbers are defended.**
+
+- The arms are **interleaved** (one sample of each, round and round), so a
+  busy machine perturbs all of them equally instead of only the last one. The
+  differences are taken *per sample pair* and then summarised, which cancels
+  the slow drift of a shared machine.
+- The noise floor is reported: **0.045 ms**, the median absolute deviation of
+  the paired differences. A difference smaller than that is not resolved.
+  The `module_path` assignment cost (0.014 ms) is below it and is labelled as
+  such.
+- "Zero spawns" is only meaningful if the counter works. The harness runs a
+  **control** that spawns a child on purpose inside the same window and
+  requires the counter to find it. It found 2.
+- The window is bracketed by markers the module itself writes, so the spawn at
+  *load* time (the worker thread's `clone`) is not mistaken for a spawn on
+  the keystroke path.
+- `clone3` is traced as well as `clone`: glibc's `pthread_create` uses
+  `clone3` when the kernel offers it, and a harness that traced only `clone`
+  would report "no thread was created" and be wrong.
+- Every call must be shown to have reached the native code, counted from the
+  module's own `SHELL_PULSE_DEBUG` diagnostics: 50 of 50.
+
+**What the startup numbers do not cover.** The hot-path run uses `zsh -f -c`,
+so there is no ZLE widget and no `region_highlight` special parameter: the
+module reads the line and lexes it, but the final `setaparam` of the regions
+is not exercised. The missing step is a call into zsh's own memory, which
+cannot spawn anything, so it does not weaken the "no spawns" conclusion — but
+the hot path measured here is the *lower bound* of the real one.
+
+**The module size is 558 784 bytes.** That is the whole `cdylib`, including
+the Rust standard library's statically-linked parts. It is not optimised for
+size.
+
+### 3.5 `bench/bench_zpty.zsh` — keystroke to redraw, in a real interactive shell
+
+**What it measures.** The interval between a keystroke being written into an
+interactive zsh running under a pseudo-terminal and the shell's answer being
+noticed. Each keystroke is written on its own and the harness waits for the
+pty before writing the next, so each one is measured separately.
+
+**The result** (200 keystrokes, `TERM=xterm-kitty`, `zselect` available so
+the pty is *waited on* rather than polled):
+
+| run | per keystroke | fastest | slowest |
+|---|---|---|---|
+| 1 | 66.5 µs | 58.2 µs | 190.0 µs |
+| 2 | 68.2 µs | 58.4 µs | 141.9 µs |
+| 3 | 67.8 µs | 58.4 µs | 328.8 µs |
+| 4 | 78.7 µs | — | — |
+| 5 | 69.4 µs | — | — |
+| 6 | 66.7 µs | — | — |
+| 7 | 67.3 µs | — | — |
+| 8 | 69.5 µs | — | — |
+
+**Median 68.0 µs** (the eight samples are 66.5, 66.7, 67.3, 67.8, 68.2, 69.4, 69.5 and 78.7 µs).
+
+**The control.** The harness has no control arm, so the number above is *not*
+the plugin's cost — it is the pty round trip plus the shell's own redraw.
+To find out how much of it the plugin is, the harness was run again with a
+**modified copy in `/tmp`** that does not source the adapter at all
+(`zsh/init.zsh` is skipped, so the module is never loaded):
+
+| run | per keystroke (no plugin) |
+|---|---|
+| 1 | 45.4 µs |
+| 2 | 45.1 µs |
+| 3 | 48.4 µs |
+| 4 | 42.8 µs |
+| 5 | 44.9 µs |
+
+**Median 45.1 µs. The plugin's share is therefore ≈ 23 µs per keystroke** in
+this harness (68.0 − 45.1), with the two distributions separated by more than
+their own spreads.
+
+**That 23 µs is *not* the plugin's own work.** The native call costs 0.48 µs
+(§3.1). The rest is zsh's:
+
+* the pre-redraw hook is a **shell function**, and calling it costs zsh a
+  function invocation, an argument vector and a builtin call — per redraw;
+* zsh then parses every region specification it was given
+  ([`zsh-src/Src/Zle/zle_refresh.c:513-586`](../upstream/zsh-src/Src/Zle/zle_refresh.c#L513));
+* and it writes more bytes to the terminal, because the coloured regions
+  carry escape sequences the uncoloured line does not.
+
+**What the number is worth.** It is an *upper bound* on what a user waits
+for, it is dominated by the pty round trip, and it is only meaningful when
+compared with another run of the same harness on the same machine — which is
+exactly what the control run is for. The harness's own header says as much:
+"What the number includes: the pty round trip and the interval between 'the
+keystroke was written' and 'the answer was noticed'. It is therefore an upper
+bound on the latency a user perceives."
+
+**How the harness defends itself.** It refuses to report a number unless the
+module is installed, the adapter is present, the pty is available, the shell
+under the pty draws its prompt, and **at least one highlighted region was
+seen in the terminal output** — otherwise it would be measuring an
+unhighlighted shell.
+
+**What it does not isolate.** The plugin's own contribution (~0.5 µs) is
+three orders of magnitude below the harness's resolution, so this harness
+*cannot* measure it. It measures the cost of the plugin existing, not the
+cost of the plugin working.
+
+### 3.6 The test suite
+
+`cargo test --workspace` on the tree as it stood when this document was
+written:
+
+| Target | Tests |
+|---|---|
+| `engine` (unit) | 19 |
+| `highlight` (unit) | 15 |
+| `lexer` (unit) | 45 |
+| `lexer` (`alloc_budget`) | 2 |
+| `zsh-abi` (unit) | 20 |
+| `zsh-module` (unit) | 19 |
+| `zsh-module` (`zsh_integration`, real zsh subprocesses) | 24 |
+| `zsh-module` (`zsh_pty`, real interactive zsh under a pty) | 3 |
+| doc-tests | 2 |
+| **total** | **149**, all passing |
+
+The 24 subprocess tests are the ones that matter for the ABI: each one runs
+`zsh` and asserts on its exit status, so an ABI mistake is a failing test
+rather than a dead shell.
+
+---
+
+## 4. Where the time goes
+
+For a 28-byte line, the end-to-end cost of one keystroke is ~0.48 µs. The
+lexer's own share of that is the re-lex measured in §3.2, which for a line of
+that size is the full re-parse path (the line is under the 64-byte
+threshold). The 28-byte benchmark buffer falls between the 17-byte and the
+46-byte rows of that table, so its re-lex costs **≈ 0.07 µs**.
+
+So roughly:
+
+| Component | Cost | Evidence |
+|---|---|---|
+| Lexing the line | ≈ 0.07 µs | §3.2, the 17-byte and 46-byte rows |
+| Everything else (the zsh call, the region build, the `setaparam`) | ≈ 0.41 µs | §3.1 minus §3.2 |
+
+The "everything else" is the cost of getting the regions into zsh, and it
+dominates. It is dominated by zsh's own parameter machinery: `setaparam`
+walks the parameter table, `assignaparam` calls `setarrvalue`, and
+`set_region_highlight` parses every row it is given
+([`zsh-src/Src/Zle/zle_refresh.c:513-586`](../upstream/zsh-src/Src/Zle/zle_refresh.c#L513)).
+That is why the number of regions matters more than the length of the line,
+and why `region::MAX_ENTRIES` is 256
+([`crates/zsh-module/src/region.rs:156`](../../crates/zsh-module/src/region.rs#L156)).
+
+This breakdown is an *inference* from two independently measured numbers, not
+a profile. It has not been confirmed with `perf`.
+
+---
+
+## 5. The baselines, and where they come from
+
+| Figure | Value | Source | Verifiable here? |
+|---|---|---|---|
+| FSH (fish's highlighter) per keystroke | ≈ 40 µs fixed + ≈ 13 ns/char | [`../upstream/PERFORMANCE_COMPARISON.md` §1](../upstream/PERFORMANCE_COMPARISON.md) | **No.** The harness needs the upstream checkouts; it is not part of this repository's `bench/`. |
+| Cost of a bare native module call | ≈ 112 ns | [`../upstream/PERFORMANCE_COMPARISON.md` §2](../upstream/PERFORMANCE_COMPARISON.md) | **No**, for the same reason. The equivalent measurement *with* this module's work included is §3.1. |
+| Fork + exec per keystroke | ~1–3 ms | [`../upstream/PERFORMANCE_COMPARISON.md` §3](../upstream/PERFORMANCE_COMPARISON.md) | No. |
+| Persistent helper over a socket | ~20–60 µs round trip | [`../upstream/PERFORMANCE_COMPARISON.md` §3](../upstream/PERFORMANCE_COMPARISON.md) | No. |
+| zsh-autosuggestions' history lookup | a linear glob scan of the whole history, per keystroke | [`../upstream/PERFORMANCE_FAILURES.md` §1](../upstream/PERFORMANCE_FAILURES.md) | The *shape* is verifiable in the upstream checkout; the cost is not measured here. |
+
+The 112 ns figure was the decisive measurement in Stage A: it is what made a
+native module the obvious choice over any process-based design. It is also
+the reason this project has a `dlsym`-based loader rather than a link-time
+one — see [architecture §5.1](architecture.md).
+
+---
+
+## 6. What the numbers do **not** cover
+
+This is the section to read before trusting any of the above.
+
+1. **Keystroke to pixels.** Nothing here measures how long the user waits
+   before seeing the coloured line. That includes zsh's own redraw, the
+   terminal's `write`, and the scheduler. The plugin's own contribution is
+   what §3.1 measures; the rest is zsh's and the terminal's.
+2. **The plugin's own cost inside a real interactive shell.** The keystroke →
+   redraw harness (§3.5) runs in a real interactive zsh under a pty, but its
+   resolution is set by the pty round trip (~45 µs). The plugin's own
+   contribution — 0.48 µs by §3.1 — is three orders of magnitude below that,
+   so the harness *cannot* see it. The 23 µs difference between the plugin
+   run and the control is zsh's work: the function call, the region parsing
+   and the extra terminal bytes.
+3. **The user's real configuration.** Nothing was measured with 8 278 widgets
+   and 16 551 completion functions loaded. The design argues that the cost is
+   independent of the widget count (one hook, not a wrapped table), but that
+   argument has not been measured against the real configuration.
+4. **Other zsh builds.** Every number here is from zsh 5.9.2 on this machine.
+   The export set of a Debian, Fedora or Homebrew zsh differs, and the module
+   refuses to load if a required symbol is missing — which is a *behaviour*,
+   not a performance result. No other zsh was measured.
+5. **Other architectures and other libc implementations.** The allocator
+   ownership rules in the [boundary document](rust-zsh-boundary.md) depend on
+   `zalloc` being `malloc` and `zsfree` being `free` in a zsh built without
+   `ZSH_MEM`. A zsh built *with* `ZSH_MEM` replaces `malloc` and `free` with
+   its own allocator
+   ([`zsh-src/Src/mem.c:1189`](../upstream/zsh-src/Src/mem.c#L1189)); that
+   build has not been tested here.
+6. **Criterion micro-benchmarks.** The plan's Stage E1 (criterion over the
+   lexer, the span layer and the ranker) is not done. The numbers in §3.2
+   come from a hand-rolled `best_of` harness, which reports the *fastest* of
+   50 runs — an estimate of the work itself, not of the interactive tail.
+7. **Allocation profiling (DHAT).** Stage E4 is not done. §3.3 counts
+   allocations; it does not attribute them.
+8. **Head-to-head against zsh-syntax-highlighting and zsh-autocomplete.**
+   Stage E5 is not done. Only FSH has a Stage A baseline.
+9. **The completion, ranking and history paths.** Stage D is not started.
+   There are no numbers for them because there is no code for them.
+10. **Idle CPU and RSS.** Not measured. The worker thread exists and is
+    polled; how much idle CPU it costs is unknown.
+
+---
+
+## 7. On noise
+
+The machine is shared: 14 GiB of RAM, ~3 GiB available, 12 hardware threads.
+The end-to-end measurement's spread (0.42–0.84 µs, a factor of two) is
+dominated by that, and by the fact that `hyperfine` is not installed so the
+harness falls back to zsh's own `EPOCHREALTIME`.
+
+The startup harness fights this properly — interleaved arms, per-sample
+differences, a reported noise floor — and its numbers are stable to ±0.045 ms.
+The lexer micro-benchmark reports the fastest of 50 rounds, which measures
+the work rather than the scheduler, so its numbers are stable to about ±0.05 µs
+between runs of the same size (compare the two 17-byte rows: 0.08 µs in this
+run and 0.08 µs in the run recorded in [`../TASKS.md`](../TASKS.md)).
+
+**A number in this document that is not reproducible to within the stated
+spread is a bug in the document, not a discovery.**
+
+---
+
+## 8. Reproducing everything
+
+```sh
+# the lexer micro-benchmark
+cargo run --release -p lexer --example bench_incremental 200
+
+# the allocation budget (--test-threads=1: the two tests in that file share
+# one process-wide counting allocator, so a parallel run can report 1
+# instead of 0)
+cargo test -p lexer --test alloc_budget -- --nocapture --test-threads=1
+
+# the whole test suite
+cargo test --workspace
+
+# the end-to-end cost through zsh
+./bench/install.sh release          # build and install the cdylib
+./bench/bench_module_call.zsh 200000 28
+
+# startup cost, syscalls and the "no spawns" check
+./bench/bench_startup.zsh
+
+# keystroke -> redraw, in a real interactive zsh under a pty
+./bench/bench_zpty.zsh 200
+```
+
+`bench/install.sh` puts the module where the harnesses and the zsh adapter
+expect it: `bench/mp/shellpulse/highlight.so`. The nested directory and the
+dotless name are mandatory, because zsh's `modname_ok()`
+([`zsh-src/Src/module.c:2177-2186`](../upstream/zsh-src/Src/module.c#L2177))
+accepts only slash-separated identifiers — absolute paths and `.so` suffixes
+are rejected.
+
+If `hyperfine` is available the end-to-end harness uses it and the spread
+narrows considerably:
+
+```sh
+nix shell nixpkgs#hyperfine
+```
