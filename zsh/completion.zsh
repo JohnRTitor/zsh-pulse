@@ -26,11 +26,23 @@ unsetopt list_beep 2>/dev/null
 zmodload zsh/complist 2>/dev/null
 
 # Configure completion menu styling and group headings.
-zstyle ':completion:*' menu select
+# automenu allows Tab to insert unambiguous prefix first, then enter menu select.
+zstyle ':completion:*' menu select automenu
 zstyle ':completion:*' group-name ''
 zstyle ':completion:*:descriptions' format '%B%F{yellow}[%d]%f%b'
 zstyle ':completion:*:messages' format '%F{red}%d%f'
 zstyle ':completion:*:warnings' format '%F{red}No matches for: %d%f'
+
+# Real-time type-ahead completion widget (lists choices below prompt without inserting).
+_shell_pulse_typeahead_widget() {
+  emulate -L zsh
+  setopt extendedglob noglob
+  compstate[insert]=''
+  compstate[list]='list force'
+  _main_complete
+}
+
+zle -C shell-pulse-typeahead list-choices _shell_pulse_typeahead_widget
 
 # -----------------------------------------------------------------------------
 # 1. Hybrid Completer Integration

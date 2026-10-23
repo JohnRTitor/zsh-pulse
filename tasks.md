@@ -12,8 +12,8 @@ Roadmap for achieving complete feature parity with `fish-shell` and `zsh-autocom
 - [x] Implement `down-line-or-select` widget for `↓` and `Ctrl-N` (enter menu selection immediately)
 - [x] Implement `up-line-or-search` widget for `↑` and `Ctrl-P` (open interactive multi-line history search menu)
 - [x] Tab & Shift-Tab bindings (`expand-or-complete`, `reverse-menu-complete`)
-- [ ] Real-time Type-Ahead Auto-Listing: debounced hook in `line-pre-redraw` that displays up to 16 lines of completions below the prompt without requiring Tab
-- [ ] Tab unambiguous common prefix insertion during type-ahead
+- [x] Real-time Type-Ahead Auto-Listing: debounced hook in `line-pre-redraw` that displays up to 16 lines of completions below the prompt without requiring Tab
+- [x] Tab unambiguous common prefix insertion during type-ahead
 
 ## Phase 3: Fish-Style Autosuggestions
 - [x] Full-line autosuggestion acceptance (`Right-Arrow`, `End`, `Ctrl-F`, `Ctrl-E`)
