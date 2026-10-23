@@ -271,6 +271,53 @@ pub fn diff(old: &SpanSet, new: &SpanSet) -> Vec<ChangedRange> {
     out
 }
 
+/// Apply overlay spans (such as paired brackets and errors) onto an existing run of spans.
+///
+/// Ensures the resulting spans are strictly sorted by start offset, non-overlapping,
+/// and adjacent spans with identical style are run-merged.
+pub fn apply_overlays(spans: &mut Vec<HighlightSpan>, overlays: &[HighlightSpan]) {
+    if overlays.is_empty() {
+        return;
+    }
+
+    for overlay in overlays {
+        if overlay.end <= overlay.start {
+            continue;
+        }
+        let mut new_spans = Vec::with_capacity(spans.len() + 2);
+        for s in spans.drain(..) {
+            if s.end <= overlay.start || s.start >= overlay.end {
+                new_spans.push(s);
+            } else {
+                if s.start < overlay.start {
+                    new_spans.push(HighlightSpan::new(s.start, overlay.start, s.style));
+                }
+                if s.end > overlay.end {
+                    new_spans.push(HighlightSpan::new(overlay.end, s.end, s.style));
+                }
+            }
+        }
+        new_spans.push(*overlay);
+        *spans = new_spans;
+    }
+
+    spans.sort_unstable_by_key(|s| s.start);
+
+    let mut merged: Vec<HighlightSpan> = Vec::with_capacity(spans.len());
+    for s in spans.drain(..) {
+        if s.end <= s.start {
+            continue;
+        }
+        match merged.last_mut() {
+            Some(last) if last.style == s.style && last.end == s.start => {
+                last.end = s.end;
+            }
+            _ => merged.push(s),
+        }
+    }
+    *spans = merged;
+}
+
 /// The style of the span at index `idx` that covers `offset`.
 fn style_at(spans: &[HighlightSpan], idx: usize, offset: u32) -> Option<StyleId> {
     let s = spans.get(idx)?;
@@ -593,5 +640,27 @@ mod tests {
         assert_eq!(s.style_at(4), None, "the space is not styled");
         assert_eq!(s.style_at(6), Some(StyleId::Argument));
         assert_eq!(s.style_at(100), None);
+    }
+
+    #[test]
+    fn apply_overlays_slices_and_merges_properly() {
+        let mut spans = vec![
+            HighlightSpan::new(0, 4, StyleId::Command),
+            HighlightSpan::new(5, 12, StyleId::Argument),
+        ];
+        let overlays = vec![
+            HighlightSpan::new(5, 6, StyleId::PairedBracket),
+            HighlightSpan::new(11, 12, StyleId::PairedBracket),
+        ];
+        apply_overlays(&mut spans, &overlays);
+        assert_eq!(
+            spans,
+            vec![
+                HighlightSpan::new(0, 4, StyleId::Command),
+                HighlightSpan::new(5, 6, StyleId::PairedBracket),
+                HighlightSpan::new(6, 11, StyleId::Argument),
+                HighlightSpan::new(11, 12, StyleId::PairedBracket),
+            ]
+        );
     }
 }

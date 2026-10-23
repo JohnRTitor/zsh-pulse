@@ -1456,3 +1456,45 @@ fn paired_brackets_highlighted_when_cursor_touches() {
         "close bracket must be paired blue: {out}"
     );
 }
+
+#[test]
+fn comments_with_brackets_do_not_produce_bracket_error_on_zsh() {
+    require_zsh!();
+    let out = regions_for("echo hello # (this is comment");
+    assert!(
+        !out.contains("fg=red,bold"),
+        "comment with bracket must not have red bracket error: {out}"
+    );
+    let out_quote = regions_for("echo hello # don't error");
+    assert!(
+        !out_quote.contains("fg=red,bold"),
+        "comment with single quote must not have red quote error: {out_quote}"
+    );
+}
+
+#[test]
+fn brackets_inside_double_quotes_do_not_break_outer_brackets_on_zsh() {
+    require_zsh!();
+    let out = regions_for("echo ( \"foo ) bar\" )");
+    assert!(
+        !out.contains("fg=red,bold"),
+        "parens enclosing double quote with paren must not error: {out}"
+    );
+}
+
+#[test]
+fn complete_builtin_tilde_expansion_preserves_tilde_slash() {
+    require_zsh!();
+    let (ok, out) = run_zsh(
+        "BUFFER='ls ~'\n\
+         CURSOR=4\n\
+         shell-pulse-complete --paths-only --max=5\n\
+         print -r -- \"MATCHES=<${(j:,:)_shell_pulse_matches}>\"",
+        &[],
+    );
+    assert!(ok, "zsh exited badly: {out}");
+    assert!(
+        out.contains("MATCHES=<~/"),
+        "expected tilde slash prefix preserved in matches: {out}"
+    );
+}

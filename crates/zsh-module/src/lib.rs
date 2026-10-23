@@ -243,23 +243,25 @@ impl Highlighter {
         // Safety: inside zsh.
         unsafe { build_spans(spans, paths, scratch, api, buffer, tokens, answers) };
 
-        // Append bracket and quote spans (paired bracket touches and unclosed errors)
+        // Overlay bracket and quote spans (paired bracket touches and unclosed errors)
         let cursor_byte = match cursor {
-            Some(c) if c > 0 => {
+            Some(c) if c >= 0 => {
                 let c = c as usize;
                 if buffer.is_ascii() {
-                    c.min(buffer.len())
+                    Some(c.min(buffer.len()))
                 } else {
                     char_offsets_into(&mut self.offsets, buffer);
-                    self.offsets
-                        .partition_point(|&chars| (chars as usize) < c)
-                        .min(buffer.len())
+                    Some(
+                        self.offsets
+                            .partition_point(|&chars| (chars as usize) < c)
+                            .min(buffer.len()),
+                    )
                 }
             }
-            _ => 0,
+            _ => None,
         };
         let brackets = highlight::bracket_spans(buffer, cursor_byte);
-        self.spans.extend(brackets);
+        highlight::apply_overlays(&mut self.spans, &brackets);
 
         if self.spans == self.pushed_spans && self.pushed {
             // The styling has not changed, so the regions zsh holds are
@@ -1618,7 +1620,16 @@ unsafe extern "C" fn highlight_builtin(
             let home = unsafe { api.get_param_string(cstr(b"HOME\0")) }
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(|| std::path::PathBuf::from("/home"));
-            let cursor_idx = usize::try_from(cursor.unwrap_or(0).max(0)).unwrap_or(0).min(guard.buffer.len());
+            let c_val = cursor.unwrap_or(0).max(0);
+            let cursor_idx = if guard.buffer.is_ascii() {
+                usize::try_from(c_val).unwrap_or(0).min(guard.buffer.len())
+            } else {
+                let mut offsets = Vec::new();
+                highlight::char_offsets_into(&mut offsets, &guard.buffer);
+                offsets
+                    .partition_point(|&chars| (chars as i64) < c_val)
+                    .min(guard.buffer.len())
+            };
             let ghost = engine().autosuggest(&guard.buffer, cursor_idx, cwd, home);
             let ghost_cstr = match ghost {
                 Some(ref s) => std::ffi::CString::new(s.as_bytes()).unwrap_or_default(),
@@ -1859,7 +1870,16 @@ unsafe extern "C" fn complete_builtin(
 
         let mut scratch = Vec::new();
         let cursor = unsafe { api.read_param_i64(cstr(b"CURSOR\0"), &mut scratch) }.unwrap_or(0);
-        let cursor_idx = usize::try_from(cursor.max(0)).unwrap_or(0).min(buffer.len());
+        let c_val = cursor.max(0);
+        let cursor_idx = if buffer.is_ascii() {
+            usize::try_from(c_val).unwrap_or(0).min(buffer.len())
+        } else {
+            let mut offsets = Vec::new();
+            highlight::char_offsets_into(&mut offsets, &buffer);
+            offsets
+                .partition_point(|&chars| (chars as i64) < c_val)
+                .min(buffer.len())
+        };
 
         let cwd = unsafe { api.get_param_string(cstr(b"PWD\0")) }
             .map(std::path::PathBuf::from)

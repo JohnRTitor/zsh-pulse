@@ -20,135 +20,172 @@ pub struct BracketAnalysis {
     pub errors: Vec<u32>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Delimiter {
+    Paren(u32),
+    Brace(u32),
+    Bracket(u32),
+    CmdSubst(u32),
+    ParamExp(u32),
+    DoubleQuote(u32),
+    SingleQuote(u32),
+    Backtick(u32),
+}
+
 /// Analyze brackets and quotes in `buffer`.
 pub fn analyze_brackets(buffer: &[u8]) -> BracketAnalysis {
     let mut pairs = Vec::new();
     let mut errors = Vec::new();
+    let mut stack: Vec<Delimiter> = Vec::new();
 
-    // Stack holds (bracket_char, byte_offset)
-    let mut bracket_stack: Vec<(u8, u32)> = Vec::new();
-
-    let mut in_single_quote = false;
-    let mut single_quote_start = 0u32;
-
-    let mut in_double_quote = false;
-    let mut double_quote_start = 0u32;
-
-    let mut in_backtick = false;
-    let mut backtick_start = 0u32;
-
-    let mut escaped = false;
     let mut i = 0usize;
+    let mut at_word_start = true;
 
     while i < buffer.len() {
         let b = buffer[i];
         let pos = i as u32;
 
-        if escaped {
-            escaped = false;
-            i += 1;
-            continue;
-        }
-
-        if b == b'\\' && !in_single_quote {
-            escaped = true;
-            i += 1;
-            continue;
-        }
-
-        // Single quote handling
-        if b == b'\'' && !in_double_quote && !in_backtick {
-            if in_single_quote {
-                pairs.push(BracketPair {
-                    open: single_quote_start,
-                    close: pos,
-                });
-                in_single_quote = false;
-            } else {
-                in_single_quote = true;
-                single_quote_start = pos;
-            }
-            i += 1;
-            continue;
-        }
-
-        // Inside single quotes, all other characters are literal text.
-        if in_single_quote {
-            i += 1;
-            continue;
-        }
-
-        // Double quote handling
-        if b == b'"' && !in_backtick {
-            if in_double_quote {
-                pairs.push(BracketPair {
-                    open: double_quote_start,
-                    close: pos,
-                });
-                in_double_quote = false;
-            } else {
-                in_double_quote = true;
-                double_quote_start = pos;
-            }
-            i += 1;
-            continue;
-        }
-
-        // Backtick handling
-        if b == b'`' {
-            if in_backtick {
-                pairs.push(BracketPair {
-                    open: backtick_start,
-                    close: pos,
-                });
-                in_backtick = false;
-            } else {
-                in_backtick = true;
-                backtick_start = pos;
-            }
-            i += 1;
-            continue;
-        }
-
-        // Inside double quotes, handle nested command substitutions $(...)
-        if in_double_quote {
-            if b == b'$' && i + 1 < buffer.len() && buffer[i + 1] == b'(' {
-                bracket_stack.push((b'(', pos + 1));
-                i += 2;
+        // Context-specific handling for quotes
+        match stack.last().copied() {
+            Some(Delimiter::SingleQuote(start)) => {
+                if b == b'\'' {
+                    stack.pop();
+                    pairs.push(BracketPair {
+                        open: start,
+                        close: pos,
+                    });
+                }
+                // In single quotes, every other byte is literal.
+                i += 1;
                 continue;
             }
-            if b == b')' && !bracket_stack.is_empty() {
-                if let Some((top_b, top_pos)) = bracket_stack.last().copied() {
-                    if top_b == b'(' {
-                        bracket_stack.pop();
-                        pairs.push(BracketPair {
-                            open: top_pos,
-                            close: pos,
-                        });
-                        i += 1;
+            Some(Delimiter::DoubleQuote(start)) => {
+                if b == b'\\' {
+                    // Backslash escapes in double quotes
+                    i += 2;
+                    continue;
+                }
+                if b == b'"' {
+                    stack.pop();
+                    pairs.push(BracketPair {
+                        open: start,
+                        close: pos,
+                    });
+                    i += 1;
+                    continue;
+                }
+                if b == b'`' {
+                    stack.push(Delimiter::Backtick(pos));
+                    i += 1;
+                    continue;
+                }
+                if b == b'$' && i + 1 < buffer.len() {
+                    if buffer[i + 1] == b'(' {
+                        stack.push(Delimiter::CmdSubst(pos + 1));
+                        i += 2;
+                        continue;
+                    } else if buffer[i + 1] == b'{' {
+                        stack.push(Delimiter::ParamExp(pos + 1));
+                        i += 2;
                         continue;
                     }
                 }
+                // Plain literal characters inside double quotes (including literal brackets)
+                i += 1;
+                continue;
             }
-            i += 1;
+            Some(Delimiter::Backtick(start)) => {
+                if b == b'\\' {
+                    i += 2;
+                    continue;
+                }
+                if b == b'`' {
+                    stack.pop();
+                    pairs.push(BracketPair {
+                        open: start,
+                        close: pos,
+                    });
+                    i += 1;
+                    continue;
+                }
+                // Backtick allows shell commands inside, falling through to general parsing
+            }
+            _ => {}
+        }
+
+        // Outside single/double quotes
+        if b == b'\\' {
+            at_word_start = false;
+            i += 2;
             continue;
         }
 
-        // Check opening and closing brackets
+        // Shell comment: '#' at start of word
+        if b == b'#' && at_word_start {
+            while i < buffer.len() && buffer[i] != b'\n' {
+                i += 1;
+            }
+            at_word_start = true;
+            continue;
+        }
+
+        at_word_start = matches!(b, b' ' | b'\t' | b'\n' | b';' | b'|' | b'&');
+
+        // Quotes and substitutions
+        if b == b'\'' {
+            stack.push(Delimiter::SingleQuote(pos));
+            i += 1;
+            continue;
+        }
+        if b == b'"' {
+            stack.push(Delimiter::DoubleQuote(pos));
+            i += 1;
+            continue;
+        }
+        if b == b'`' {
+            stack.push(Delimiter::Backtick(pos));
+            i += 1;
+            continue;
+        }
+        if b == b'$' && i + 1 < buffer.len() {
+            if buffer[i + 1] == b'(' {
+                stack.push(Delimiter::CmdSubst(pos + 1));
+                i += 2;
+                continue;
+            } else if buffer[i + 1] == b'{' {
+                stack.push(Delimiter::ParamExp(pos + 1));
+                i += 2;
+                continue;
+            }
+        }
+
+        // Brackets
         match b {
-            b'(' | b'{' | b'[' => {
-                bracket_stack.push((b, pos));
+            b'(' => {
+                stack.push(Delimiter::Paren(pos));
+            }
+            b'{' => {
+                stack.push(Delimiter::Brace(pos));
+            }
+            b'[' => {
+                stack.push(Delimiter::Bracket(pos));
             }
             b')' => {
-                match bracket_stack.pop() {
-                    Some((b'(', open_pos)) => {
-                        pairs.push(BracketPair {
-                            open: open_pos,
-                            close: pos,
-                        });
+                match stack.pop() {
+                    Some(Delimiter::Paren(open)) | Some(Delimiter::CmdSubst(open)) => {
+                        pairs.push(BracketPair { open, close: pos });
                     }
-                    Some((_, unclosed_pos)) => {
-                        errors.push(unclosed_pos);
+                    Some(other) => {
+                        let open = match other {
+                            Delimiter::Brace(p)
+                            | Delimiter::Bracket(p)
+                            | Delimiter::ParamExp(p)
+                            | Delimiter::DoubleQuote(p)
+                            | Delimiter::SingleQuote(p)
+                            | Delimiter::Backtick(p) => p,
+                            _ => pos,
+                        };
+                        errors.push(open);
                         errors.push(pos);
                     }
                     None => {
@@ -157,15 +194,21 @@ pub fn analyze_brackets(buffer: &[u8]) -> BracketAnalysis {
                 }
             }
             b'}' => {
-                match bracket_stack.pop() {
-                    Some((b'{', open_pos)) => {
-                        pairs.push(BracketPair {
-                            open: open_pos,
-                            close: pos,
-                        });
+                match stack.pop() {
+                    Some(Delimiter::Brace(open)) | Some(Delimiter::ParamExp(open)) => {
+                        pairs.push(BracketPair { open, close: pos });
                     }
-                    Some((_, unclosed_pos)) => {
-                        errors.push(unclosed_pos);
+                    Some(other) => {
+                        let open = match other {
+                            Delimiter::Paren(p)
+                            | Delimiter::Bracket(p)
+                            | Delimiter::CmdSubst(p)
+                            | Delimiter::DoubleQuote(p)
+                            | Delimiter::SingleQuote(p)
+                            | Delimiter::Backtick(p) => p,
+                            _ => pos,
+                        };
+                        errors.push(open);
                         errors.push(pos);
                     }
                     None => {
@@ -174,15 +217,22 @@ pub fn analyze_brackets(buffer: &[u8]) -> BracketAnalysis {
                 }
             }
             b']' => {
-                match bracket_stack.pop() {
-                    Some((b'[', open_pos)) => {
-                        pairs.push(BracketPair {
-                            open: open_pos,
-                            close: pos,
-                        });
+                match stack.pop() {
+                    Some(Delimiter::Bracket(open)) => {
+                        pairs.push(BracketPair { open, close: pos });
                     }
-                    Some((_, unclosed_pos)) => {
-                        errors.push(unclosed_pos);
+                    Some(other) => {
+                        let open = match other {
+                            Delimiter::Paren(p)
+                            | Delimiter::Brace(p)
+                            | Delimiter::CmdSubst(p)
+                            | Delimiter::ParamExp(p)
+                            | Delimiter::DoubleQuote(p)
+                            | Delimiter::SingleQuote(p)
+                            | Delimiter::Backtick(p) => p,
+                            _ => pos,
+                        };
+                        errors.push(open);
                         errors.push(pos);
                     }
                     None => {
@@ -196,25 +246,26 @@ pub fn analyze_brackets(buffer: &[u8]) -> BracketAnalysis {
         i += 1;
     }
 
-    // Any remaining unclosed quotes or brackets are syntax errors
-    if in_single_quote {
-        errors.push(single_quote_start);
-    }
-    if in_double_quote {
-        errors.push(double_quote_start);
-    }
-    if in_backtick {
-        errors.push(backtick_start);
-    }
-    for (_b, pos) in bracket_stack {
-        errors.push(pos);
+    // Any remaining delimiters on stack are unclosed errors
+    for delim in stack {
+        let open = match delim {
+            Delimiter::Paren(p)
+            | Delimiter::Brace(p)
+            | Delimiter::Bracket(p)
+            | Delimiter::CmdSubst(p)
+            | Delimiter::ParamExp(p)
+            | Delimiter::DoubleQuote(p)
+            | Delimiter::SingleQuote(p)
+            | Delimiter::Backtick(p) => p,
+        };
+        errors.push(open);
     }
 
     BracketAnalysis { pairs, errors }
 }
 
 /// Compute highlight spans for paired bracket touching and bracket errors.
-pub fn bracket_spans(buffer: &[u8], cursor_byte: usize) -> Vec<HighlightSpan> {
+pub fn bracket_spans(buffer: &[u8], cursor_byte: Option<usize>) -> Vec<HighlightSpan> {
     let analysis = analyze_brackets(buffer);
     let mut spans = Vec::new();
 
@@ -223,16 +274,29 @@ pub fn bracket_spans(buffer: &[u8], cursor_byte: usize) -> Vec<HighlightSpan> {
         spans.push(HighlightSpan::new(err_pos, err_pos + 1, StyleId::BracketError));
     }
 
-    // 2. Cursor touch: cursor touching either opening or closing of a pair
-    let cur = cursor_byte as u32;
-    for pair in analysis.pairs {
-        let touches_open = cur == pair.open || cur == pair.open + 1;
-        let touches_close = cur == pair.close || cur == pair.close + 1;
+    // 2. Cursor touch: cursor touching either opening or closing of a pair.
+    // If multiple pairs touch (e.g. nested brackets `((...))`), pick the innermost pair (smallest span).
+    if let Some(cur_idx) = cursor_byte {
+        let cur = cur_idx as u32;
+        let mut best_pair: Option<BracketPair> = None;
+        let mut best_span_len = u32::MAX;
 
-        if touches_open || touches_close {
+        for pair in analysis.pairs {
+            let touches_open = cur == pair.open || cur == pair.open + 1;
+            let touches_close = cur == pair.close || cur == pair.close + 1;
+
+            if touches_open || touches_close {
+                let span_len = pair.close.saturating_sub(pair.open);
+                if span_len < best_span_len {
+                    best_span_len = span_len;
+                    best_pair = Some(pair);
+                }
+            }
+        }
+
+        if let Some(pair) = best_pair {
             spans.push(HighlightSpan::new(pair.open, pair.open + 1, StyleId::PairedBracket));
             spans.push(HighlightSpan::new(pair.close, pair.close + 1, StyleId::PairedBracket));
-            break;
         }
     }
 
@@ -247,10 +311,10 @@ mod tests {
     fn matched_parentheses_paired_on_cursor_touch() {
         let line = b"echo (hello)";
         // Open is at 5, close is at 11
-        let spans_not_touching = bracket_spans(line, 0);
+        let spans_not_touching = bracket_spans(line, Some(0));
         assert!(spans_not_touching.is_empty());
 
-        let spans_touch_open = bracket_spans(line, 5);
+        let spans_touch_open = bracket_spans(line, Some(5));
         assert_eq!(
             spans_touch_open,
             vec![
@@ -259,7 +323,7 @@ mod tests {
             ]
         );
 
-        let spans_touch_close = bracket_spans(line, 12);
+        let spans_touch_close = bracket_spans(line, Some(12));
         assert_eq!(
             spans_touch_close,
             vec![
@@ -272,7 +336,7 @@ mod tests {
     #[test]
     fn unclosed_bracket_is_error() {
         let line = b"echo (hello";
-        let spans = bracket_spans(line, 0);
+        let spans = bracket_spans(line, None);
         assert_eq!(
             spans,
             vec![HighlightSpan::new(5, 6, StyleId::BracketError)]
@@ -282,7 +346,7 @@ mod tests {
     #[test]
     fn unclosed_quote_is_error() {
         let line = b"echo \"hello";
-        let spans = bracket_spans(line, 0);
+        let spans = bracket_spans(line, None);
         assert_eq!(
             spans,
             vec![HighlightSpan::new(5, 6, StyleId::BracketError)]
@@ -292,8 +356,39 @@ mod tests {
     #[test]
     fn mismatched_bracket_is_error() {
         let line = b"echo (hello]";
-        let spans = bracket_spans(line, 0);
+        let spans = bracket_spans(line, None);
         assert!(spans.iter().any(|s| s.start == 5 && s.style == StyleId::BracketError));
         assert!(spans.iter().any(|s| s.start == 11 && s.style == StyleId::BracketError));
+    }
+
+    #[test]
+    fn comments_with_brackets_and_quotes_do_not_error() {
+        let line1 = b"echo hello # (this is in a comment";
+        let analysis1 = analyze_brackets(line1);
+        assert!(analysis1.errors.is_empty());
+
+        let line2 = b"echo hello # don't report quote errors here";
+        let analysis2 = analyze_brackets(line2);
+        assert!(analysis2.errors.is_empty());
+    }
+
+    #[test]
+    fn brackets_inside_double_quotes_do_not_interfere() {
+        let line = b"echo ( \"foo ) bar\" )";
+        let analysis = analyze_brackets(line);
+        assert!(analysis.errors.is_empty(), "expected 0 errors, got: {:?}", analysis.errors);
+        assert_eq!(analysis.pairs.len(), 2);
+        // Outer parens: ( at 5, ) at 19
+        assert!(analysis.pairs.contains(&BracketPair { open: 5, close: 19 }));
+        // Double quotes: " at 7, " at 17
+        assert!(analysis.pairs.contains(&BracketPair { open: 7, close: 17 }));
+    }
+
+    #[test]
+    fn nested_command_substitution_quotes() {
+        let line = b"echo \"$(echo 'hello')\"";
+        let analysis = analyze_brackets(line);
+        assert!(analysis.errors.is_empty(), "expected 0 errors, got: {:?}", analysis.errors);
+        assert_eq!(analysis.pairs.len(), 3);
     }
 }
