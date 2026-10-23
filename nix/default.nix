@@ -11,10 +11,13 @@
 # `shellpulse/highlight.so` inside a directory on `$module_path`.
 { lib
 , rustPlatform
+, zsh
 }:
 rustPlatform.buildRustPackage {
   pname = "shell-pulse";
   version = "0.1.0";
+
+  nativeBuildInputs = [ zsh ];
 
   # Only the sources: the checkout also holds `target/`, the research
   # material and the benchmarks, none of which belong in the build.
@@ -54,6 +57,14 @@ rustPlatform.buildRustPackage {
     # was just built, because the adapter's own default path is relative to
     # the checkout it came from.
     sed "s|@out@|$out|g" zsh/nix-init.zsh > "$out/share/shell-pulse/init.zsh"
+
+    # Pre-compile all installed zsh scripts into wordcode (.zwc) using zcompile.
+    # This strips comment overhead, eliminates parsing latency on shell startup,
+    # and allows zsh to memory-map (mmap) the compiled bytecode directly.
+    zsh -c "zcompile '$out/share/shell-pulse/init.zsh'"
+    zsh -c "zcompile '$out/share/shell-pulse/zsh/init.zsh'"
+    zsh -c "zcompile '$out/share/shell-pulse/zsh/widgets.zsh'"
+    zsh -c "zcompile '$out/share/shell-pulse/zsh/completion.zsh'"
   '';
 
   meta = {

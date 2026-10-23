@@ -55,3 +55,9 @@ Roadmap for achieving complete feature parity with `fish-shell` and `zsh-autocom
 - [x] Tab toggle widget (`_shell_pulse_tab`): pressing Tab hides/clears the completion menu when visible, expands completions when hidden
 - [x] Pressing Tab inside menu selection (`menuselect`) immediately dismisses and hides the menu (`send-break`)
 - [x] Down-Arrow (`_shell_pulse_down_line_or_select`) enters visible typeahead menu or performs prefix history search
+
+## Phase 9: Zsh Wordcode (`zcompile`) Compilation & Zero Parse Overhead
+- [x] Configure `nix/default.nix` with `nativeBuildInputs = [ zsh ]` and `zcompile` all installed scripts (`init.zsh`, `widgets.zsh`, `completion.zsh`)
+- [x] Pre-compile `.zwc` wordcode in `bench/install.sh` for development and benchmark workflows
+- [x] Add `*.zwc` to `.gitignore` to keep repository clean
+

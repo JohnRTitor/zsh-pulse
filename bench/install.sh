@@ -25,3 +25,8 @@ if ! zsh -f -c "module_path=('$repo/bench/mp' \$module_path); zmodload shellpuls
   echo "ERROR: module built but zsh refused to load it" >&2
   exit 1
 fi
+
+# Pre-compile zsh scripts into wordcode (.zwc)
+for script in "$repo"/zsh/*.zsh; do
+  zsh -c "zcompile '$script'" 2>/dev/null || true
+done
