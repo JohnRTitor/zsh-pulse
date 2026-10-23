@@ -393,6 +393,20 @@ shell-pulse-highlight-redraw() {
   # user's configuration an unquoted expansion would be matched against
   # the filesystem, and a word with no match would abort the call.
   shell-pulse-highlight "${args[@]}"
+
+  # Real-time ghost autosuggestion from shell-pulse (sub-10us latency)
+  if (( ! PENDING && ! KEYS_QUEUED_COUNT )); then
+    if [[ $CURSOR -ge $#BUFFER && -n $BUFFER ]]; then
+      shell-pulse-complete --autosuggest
+      if [[ -n $_shell_pulse_autosuggestion ]]; then
+        POSTDISPLAY="$_shell_pulse_autosuggestion"
+      else
+        unset POSTDISPLAY
+      fi
+    elif [[ -z $BUFFER ]]; then
+      unset POSTDISPLAY
+    fi
+  fi
 }
 
 # The start-of-line hook.

@@ -42,6 +42,18 @@ pub enum CandidateKind {
     Command,
 }
 
+impl CandidateKind {
+    /// Returns the lowercase string identifier for this candidate category.
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::File => "file",
+            Self::Directory => "directory",
+            Self::History => "history",
+            Self::Command => "command",
+        }
+    }
+}
+
 /// A completion candidate for menu rendering and insertion.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Candidate {
@@ -354,6 +366,77 @@ pub fn complete(
     }
 }
 
+/// Compute history-only candidates for interactive history search.
+pub fn complete_history(
+    ctx: &CompletionContext,
+    history: Option<&HistoryIndex>,
+    max_candidates: usize,
+) -> CompletionOutcome {
+    let mut candidates = Vec::new();
+    if let Some(hist) = history {
+        let hist_cmds = if ctx.line.is_empty() {
+            hist.search_fuzzy(b"", max_candidates)
+        } else {
+            let prefix_matches = hist.search_prefix(&ctx.line, max_candidates);
+            if prefix_matches.len() < max_candidates {
+                let fuzzy_matches = hist.search_fuzzy(&ctx.line, max_candidates);
+                let mut merged = prefix_matches;
+                for f in fuzzy_matches {
+                    if !merged.contains(&f) {
+                        merged.push(f);
+                    }
+                }
+                merged
+            } else {
+                prefix_matches
+            }
+        };
+        for h in hist_cmds.iter().take(max_candidates) {
+            if let Ok(s) = std::str::from_utf8(h) {
+                candidates.push(Candidate {
+                    value: s.to_string(),
+                    display: s.to_string(),
+                    description: "history".to_string(),
+                    kind: CandidateKind::History,
+                    score: 100,
+                });
+            }
+        }
+    }
+
+    CompletionOutcome {
+        candidates,
+        autosuggestion: None,
+        word_start: 0,
+        word_end: ctx.line.len(),
+    }
+}
+
+/// Compute bounded filesystem path candidates only.
+pub fn complete_paths(
+    ctx: &CompletionContext,
+    max_candidates: usize,
+) -> CompletionOutcome {
+    let mut candidates = complete_filesystem(ctx);
+    let target_k = max_candidates.min(candidates.len());
+    let ranked = if candidates.len() > target_k && target_k > 0 {
+        candidates.select_nth_unstable_by(target_k - 1, |a, b| b.score.cmp(&a.score));
+        candidates.truncate(target_k);
+        candidates.sort_unstable_by_key(|c| std::cmp::Reverse(c.score));
+        candidates
+    } else {
+        candidates.sort_unstable_by_key(|c| std::cmp::Reverse(c.score));
+        candidates
+    };
+
+    CompletionOutcome {
+        candidates: ranked,
+        autosuggestion: None,
+        word_start: ctx.word_start,
+        word_end: ctx.word_end,
+    }
+}
+
 /// Calculate the ghost text suffix to display after cursor.
 fn compute_autosuggestion(
     ctx: &CompletionContext,
@@ -500,5 +583,33 @@ mod tests {
             elapsed
         );
         assert!(!candidates.is_empty(), "expected match for /nix/store/m3y7");
+    }
+
+    #[test]
+    fn complete_history_only_returns_history_candidates() {
+        let history_data = b"git checkout main\ngit checkout -b feature\ngit status\n";
+        let history = HistoryIndex::from_bytes(history_data);
+        let cwd = PathBuf::from("/tmp");
+        let home = PathBuf::from("/home");
+        let line = b"git check";
+        let ctx = CompletionContext::new(line, line.len(), cwd, home);
+        let outcome = complete_history(&ctx, Some(&history), 5);
+        assert!(!outcome.candidates.is_empty());
+        for c in &outcome.candidates {
+            assert_eq!(c.kind, CandidateKind::History);
+            assert!(c.value.starts_with("git check"));
+        }
+    }
+
+    #[test]
+    fn complete_paths_only_returns_path_candidates() {
+        let cwd = PathBuf::from("/tmp");
+        let home = PathBuf::from("/home");
+        let line = b"ls Cargo";
+        let ctx = CompletionContext::new(line, line.len(), cwd, home);
+        let outcome = complete_paths(&ctx, 10);
+        for c in &outcome.candidates {
+            assert!(matches!(c.kind, CandidateKind::File | CandidateKind::Directory));
+        }
     }
 }

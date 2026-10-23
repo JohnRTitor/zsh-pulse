@@ -161,6 +161,35 @@ impl EngineState {
         let ctx = CompletionContext::new(line, cursor, cwd, home);
         completion::complete(&ctx, Some(&*hist_guard), max_candidates)
     }
+
+    /// Compute history-only candidates for interactive history search.
+    pub fn complete_history(
+        &self,
+        line: &[u8],
+        cursor: usize,
+        cwd: PathBuf,
+        home: PathBuf,
+        max_candidates: usize,
+    ) -> CompletionOutcome {
+        self.completion_calls.fetch_add(1, Ordering::Relaxed);
+        let hist_guard = self.history.read().unwrap_or_else(|e| e.into_inner());
+        let ctx = CompletionContext::new(line, cursor, cwd, home);
+        completion::complete_history(&ctx, Some(&*hist_guard), max_candidates)
+    }
+
+    /// Compute bounded path candidates only.
+    pub fn complete_paths(
+        &self,
+        line: &[u8],
+        cursor: usize,
+        cwd: PathBuf,
+        home: PathBuf,
+        max_candidates: usize,
+    ) -> CompletionOutcome {
+        self.completion_calls.fetch_add(1, Ordering::Relaxed);
+        let ctx = CompletionContext::new(line, cursor, cwd, home);
+        completion::complete_paths(&ctx, max_candidates)
+    }
 }
 
 #[cfg(test)]

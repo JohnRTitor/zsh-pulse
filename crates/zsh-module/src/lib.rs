@@ -1783,6 +1783,8 @@ unsafe extern "C" fn complete_builtin(
         let mut max_candidates = 16usize;
         let mut histfile_arg: Option<std::path::PathBuf> = None;
         let mut autosuggest_only = false;
+        let mut history_only = false;
+        let mut paths_only = false;
 
         if !args.is_null() {
             for i in 0..16 {
@@ -1803,6 +1805,10 @@ unsafe extern "C" fn complete_builtin(
                     }
                 } else if bytes == b"--autosuggest" {
                     autosuggest_only = true;
+                } else if bytes == b"--history-only" {
+                    history_only = true;
+                } else if bytes == b"--paths-only" {
+                    paths_only = true;
                 }
             }
         }
@@ -1839,26 +1845,37 @@ unsafe extern "C" fn complete_builtin(
             return 0;
         }
 
-        let outcome = engine().complete(&buffer, cursor_idx, cwd, home, max_candidates);
+        let outcome = if history_only {
+            engine().complete_history(&buffer, cursor_idx, cwd, home, max_candidates)
+        } else if paths_only {
+            engine().complete_paths(&buffer, cursor_idx, cwd, home, max_candidates)
+        } else {
+            engine().complete(&buffer, cursor_idx, cwd, home, max_candidates)
+        };
 
         let mut match_cstrs = Vec::with_capacity(outcome.candidates.len());
         let mut desc_cstrs = Vec::with_capacity(outcome.candidates.len());
+        let mut kind_cstrs = Vec::with_capacity(outcome.candidates.len());
 
         for c in &outcome.candidates {
             if let Ok(m) = std::ffi::CString::new(c.value.as_bytes()) {
                 let desc_fmt = format!("{:<20} -- {}", c.display, c.description);
                 let d = std::ffi::CString::new(desc_fmt.as_bytes()).unwrap_or_default();
+                let k = std::ffi::CString::new(c.kind.as_str()).unwrap_or_default();
                 match_cstrs.push(m);
                 desc_cstrs.push(d);
+                kind_cstrs.push(k);
             }
         }
 
         let match_refs: Vec<&std::ffi::CStr> = match_cstrs.iter().map(|c| c.as_c_str()).collect();
         let desc_refs: Vec<&std::ffi::CStr> = desc_cstrs.iter().map(|c| c.as_c_str()).collect();
+        let kind_refs: Vec<&std::ffi::CStr> = kind_cstrs.iter().map(|c| c.as_c_str()).collect();
 
         unsafe {
             api.set_param_array(cstr(b"_shell_pulse_matches\0"), &match_refs);
             api.set_param_array(cstr(b"_shell_pulse_descriptions\0"), &desc_refs);
+            api.set_param_array(cstr(b"_shell_pulse_kinds\0"), &kind_refs);
         }
 
         let ghost_cstr = match outcome.autosuggestion {
