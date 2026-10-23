@@ -120,6 +120,8 @@ pub fn attribute(style: StyleId) -> Option<&'static str> {
         StyleId::ParamExpansion => Some("fg=cyan"),
         StyleId::Glob => Some("fg=blue,bold"),
         StyleId::Heredoc => Some("fg=green"),
+        StyleId::PairedBracket => Some("bg=blue"),
+        StyleId::BracketError => Some("fg=red,bold"),
         StyleId::Argument => None,
     }
 }
@@ -357,6 +359,8 @@ mod tests {
             StyleId::ParamExpansion,
             StyleId::Glob,
             StyleId::Heredoc,
+            StyleId::PairedBracket,
+            StyleId::BracketError,
         ] {
             let Some(attr) = attribute(style) else { continue };
             let mut parts = attr.split(',');

@@ -23,10 +23,10 @@ Roadmap for achieving complete feature parity with `fish-shell` and `zsh-autocom
 ## Phase 4: Fish & FSH Syntax Highlighting Parity
 - [x] Option highlighting semantics: recognize `--` as end-of-options delimiter (tokens following `--` starting with `-` are treated as words/arguments, not options)
 - [x] Live filesystem path validation: valid directories highlighted and underlined (`fg=magenta,underline`), valid files highlighted (`fg=magenta`)
-- [ ] Bracket and quote matching:
-  - [ ] Recognize matching pairs of `()`, `{}`, `[]`, and quotes `""`, `''`
-  - [ ] Highlight paired bracket/quote when cursor touches it (`bg=blue` / `bold`)
-  - [ ] Highlight unclosed or mismatched brackets/quotes in red error (`fg=red,bold`)
+- [x] Bracket and quote matching:
+  - [x] Recognize matching pairs of `()`, `{}`, `[]`, and quotes `""`, `''`
+  - [x] Highlight paired bracket/quote when cursor touches it (`bg=blue` / `bold`)
+  - [x] Highlight unclosed or mismatched brackets/quotes in red error (`fg=red,bold`)
 
 ## Phase 5: Verification & Microbenchmarks
 - [ ] Keystroke latency verification (sub-10µs microbenchmark)

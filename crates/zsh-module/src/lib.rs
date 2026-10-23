@@ -159,6 +159,8 @@ struct Highlighter {
     paths: PathCache,
     /// The scratch the path lookups need.
     scratch: PathScratch,
+    /// The cursor offset from the last redraw.
+    last_cursor: Option<i64>,
 }
 
 impl Highlighter {
@@ -187,6 +189,7 @@ impl Highlighter {
         &mut self,
         api: &Api,
         buffer: &[u8],
+        cursor: Option<i64>,
         too_long: bool,
         publish: bool,
         answers: &CommandAnswers,
@@ -213,11 +216,12 @@ impl Highlighter {
                 return;
             }
         };
-        if outcome.unchanged && self.pushed {
-            // The line has not changed since the last redraw, and zsh
+        if outcome.unchanged && self.last_cursor == cursor && self.pushed {
+            // Neither buffer nor cursor has changed since the last redraw, and zsh
             // already has the highlights. Nothing to do.
             return;
         }
+        self.last_cursor = cursor;
 
         // The spans that are published are not the lexer's spans: two of the
         // styles cannot be decided by the lexer. They are built here.
@@ -238,6 +242,25 @@ impl Highlighter {
         scratch.now = started;
         // Safety: inside zsh.
         unsafe { build_spans(spans, paths, scratch, api, buffer, tokens, answers) };
+
+        // Append bracket and quote spans (paired bracket touches and unclosed errors)
+        let cursor_byte = match cursor {
+            Some(c) if c > 0 => {
+                let c = c as usize;
+                if buffer.is_ascii() {
+                    c.min(buffer.len())
+                } else {
+                    char_offsets_into(&mut self.offsets, buffer);
+                    self.offsets
+                        .partition_point(|&chars| (chars as usize) < c)
+                        .min(buffer.len())
+                }
+            }
+            _ => 0,
+        };
+        let brackets = highlight::bracket_spans(buffer, cursor_byte);
+        self.spans.extend(brackets);
+
         if self.spans == self.pushed_spans && self.pushed {
             // The styling has not changed, so the regions zsh holds are
             // still correct. Leaving them alone is the whole point of the
@@ -360,6 +383,7 @@ impl Highlighter {
         self.pushed = false;
         self.spans.clear();
         self.pushed_spans.clear();
+        self.last_cursor = None;
         // A new line has a new parameter scope, so the cached answer about
         // `region_highlight` no longer applies.
         self.region_highlight_exists = None;
@@ -377,6 +401,7 @@ impl Highlighter {
         self.spans.clear();
         self.pushed_spans.clear();
         self.entries.clear();
+        self.last_cursor = None;
         if !self.pushed {
             // Nothing was ever published, so there is nothing to clear.
             return;
@@ -1578,6 +1603,7 @@ unsafe extern "C" fn highlight_builtin(
                 highlighter.update(
                     api,
                     &guard.buffer,
+                    cursor,
                     too_long,
                     publish,
                     &guard.command_answers,

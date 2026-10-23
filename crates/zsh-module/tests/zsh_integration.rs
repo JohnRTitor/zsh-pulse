@@ -765,6 +765,28 @@ fn regions_for(buffer: &str) -> String {
     out
 }
 
+fn regions_for_with_cursor(buffer: &str, cursor: usize) -> String {
+    let widgets = widgets_path();
+    let (ok, out) = run_zsh(
+        &format!(
+            "source {widgets}\n\
+             typeset -ga region_highlight\n\
+             region_highlight=()\n\
+             WIDGET=test-widget\n\
+             BUFFER={buffer}\n\
+             CURSOR={cursor}\n\
+             shell-pulse-highlight-redraw\n\
+             print -r -- \"REGIONS=<${{(j:,:)region_highlight}}>\"",
+            widgets = widgets.display(),
+            buffer = zsh_quote(buffer),
+            cursor = cursor,
+        ),
+        &[],
+    );
+    assert!(ok, "zsh exited badly: {out}");
+    out
+}
+
 /// The regions the module publishes for `buffer`, with the shell in `dir`.
 ///
 /// A relative path is resolved against the shell's own `$PWD`, so a test
@@ -1398,5 +1420,39 @@ fn complete_builtin_on_large_dir_does_not_hang() {
     assert!(
         out.contains("m3y7"),
         "expected /nix/store match: {out}"
+    );
+}
+
+#[test]
+fn unclosed_parenthesis_is_highlighted_as_error() {
+    require_zsh!();
+    let out = regions_for("echo (foo");
+    assert!(
+        out.contains("5 6 fg=red,bold memo=shell-pulse"),
+        "unclosed parenthesis must be red,bold error: {out}"
+    );
+}
+
+#[test]
+fn unclosed_quote_is_highlighted_as_error() {
+    require_zsh!();
+    let out = regions_for("echo \"unclosed");
+    assert!(
+        out.contains("5 6 fg=red,bold memo=shell-pulse"),
+        "unclosed double quote must be red,bold error: {out}"
+    );
+}
+
+#[test]
+fn paired_brackets_highlighted_when_cursor_touches() {
+    require_zsh!();
+    let out = regions_for_with_cursor("echo (foo)", 10);
+    assert!(
+        out.contains("5 6 bg=blue memo=shell-pulse"),
+        "open bracket must be paired blue: {out}"
+    );
+    assert!(
+        out.contains("9 10 bg=blue memo=shell-pulse"),
+        "close bracket must be paired blue: {out}"
     );
 }

@@ -77,7 +77,14 @@ pub enum StyleId {
     Glob,
     /// A here-document body.
     Heredoc,
+    /// A paired bracket or quote when cursor touches it.
+    PairedBracket,
+    /// An unclosed bracket or quote, or a mismatched closing bracket.
+    BracketError,
 }
+
+pub mod bracket;
+pub use bracket::{analyze_brackets, bracket_spans, BracketAnalysis, BracketPair};
 
 impl StyleId {
     /// The style a token of this kind is given.
