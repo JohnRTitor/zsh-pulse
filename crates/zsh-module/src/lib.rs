@@ -702,9 +702,14 @@ fn build_spans_with<F>(
     spans.clear();
 
     let mut i = 0;
+    let mut after_double_dash = false;
     while i < tokens.len() {
         let token = tokens[i];
         if !token.kind.is_word_part() {
+            // A command separator or pipe starts a new command context.
+            if token.kind == TokenKind::Operator {
+                after_double_dash = false;
+            }
             // Not a word: an operator, a redirection, a comment or a
             // here-document. It keeps the style the lexer gave it.
             push_span(spans, token.start, token.end, StyleId::of(token.kind));
@@ -723,15 +728,25 @@ fn build_spans_with<F>(
             end += 1;
         }
         let word = &tokens[start..end];
+        let text = word_text(word, buffer);
+
+        let is_cmd = is_command_word(word, buffer);
+        if is_cmd {
+            after_double_dash = false;
+        } else if text == b"--" {
+            after_double_dash = true;
+        }
 
         // A command word is styled from the shell's answers; every other
         // word is an argument, and may name a file that exists.
-        //
-        // There is more than one command word in a line — `ls | wc -l`
-        // has two — and the shell answers for each of them, so every
-        // command word is looked up.
-        let style = if is_command_word(word, buffer) {
+        // Words after `--` are treated as operands rather than options.
+        let style = if is_cmd {
             command_style(word, buffer, answers, path_style)
+        } else if after_double_dash && text != b"--" {
+            match path_style(word) {
+                Some(style) => WordStyle::Styled(style),
+                None => WordStyle::Styled(StyleId::Argument),
+            }
         } else {
             match path_style(word) {
                 Some(style) => WordStyle::Styled(style),

@@ -1168,6 +1168,20 @@ fn an_option_is_cyan() {
     );
 }
 
+#[test]
+fn words_after_double_dash_are_not_options_on_zsh() {
+    require_zsh!();
+    let out = regions_for("echo -n -- -n");
+    assert!(
+        out.contains("5 7 fg=cyan memo=shell-pulse"),
+        "first -n must be cyan: {out}"
+    );
+    assert!(
+        !out.contains("11 13 fg=cyan"),
+        "second -n after -- must not be cyan: {out}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Paths
 // ---------------------------------------------------------------------------

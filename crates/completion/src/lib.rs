@@ -172,7 +172,6 @@ pub fn complete_filesystem(ctx: &CompletionContext) -> Vec<Candidate> {
     };
 
     let mut matches = Vec::new();
-    let file_prefix_lower = file_prefix.to_ascii_lowercase();
     let max_scan = if file_prefix.is_empty() {
         MAX_UNFILTERED_DIR_SCAN
     } else {
@@ -202,8 +201,10 @@ pub fn complete_filesystem(ctx: &CompletionContext) -> Vec<Candidate> {
 
         let is_match = if file_prefix.is_empty() {
             true
+        } else if name_str.len() >= file_prefix.len() {
+            name_str.as_bytes()[..file_prefix.len()].eq_ignore_ascii_case(file_prefix.as_bytes())
         } else {
-            name_str.to_ascii_lowercase().starts_with(&file_prefix_lower)
+            false
         };
 
         if !is_match {
