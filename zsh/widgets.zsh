@@ -385,6 +385,26 @@ shell-pulse-highlight-known() {
 # shell and the lexer cannot end with the wrong word coloured red. A command
 # word the shell was not asked about is left alone entirely.
 shell-pulse-highlight-redraw() {
+  # Real-time type-ahead completion auto-listing below prompt (like zsh-autocomplete).
+  # Run BEFORE syntax highlighting so completion list redisplay cannot wipe out region_highlight!
+  if (( ! PENDING && ! KEYS_QUEUED_COUNT && ${+functions[compdef]} )); then
+    if (( _SHELL_PULSE_MENU_HIDDEN == 0 )); then
+      if [[ -n $BUFFER && "$BUFFER" != "$_SHELL_PULSE_LAST_TYPEAHEAD" ]]; then
+        _SHELL_PULSE_LAST_TYPEAHEAD="$BUFFER"
+        if [[ -n $widgets[shell-pulse-typeahead] ]]; then
+          local -a _saved_rh=( "${region_highlight[@]}" )
+          zle shell-pulse-typeahead 2>/dev/null
+          region_highlight=( "${_saved_rh[@]}" )
+        fi
+      elif [[ -z $BUFFER && -n $_SHELL_PULSE_LAST_TYPEAHEAD ]]; then
+        _SHELL_PULSE_LAST_TYPEAHEAD=""
+        zle -Rc 2>/dev/null
+      fi
+    fi
+  fi
+
+  # Native Rust syntax highlighting (sub-microsecond)
+  # ALWAYS executed after typeahead so region_highlight is published freshly for ZLE redraw.
   local -a args
   shell-pulse-highlight-command
   args=( --region-highlight "${SHELL_PULSE_COMMAND_ARGS[@]}" )
@@ -405,21 +425,6 @@ shell-pulse-highlight-redraw() {
       fi
     else
       unset POSTDISPLAY
-    fi
-  fi
-
-  # Real-time type-ahead completion auto-listing below prompt (like zsh-autocomplete)
-  if (( ! PENDING && ! KEYS_QUEUED_COUNT && $+functions[compdef] )); then
-    if (( _SHELL_PULSE_MENU_HIDDEN == 0 )); then
-      if [[ -n $BUFFER && "$BUFFER" != "$_SHELL_PULSE_LAST_TYPEAHEAD" ]]; then
-        _SHELL_PULSE_LAST_TYPEAHEAD="$BUFFER"
-        if [[ -n $widgets[shell-pulse-typeahead] ]]; then
-          zle shell-pulse-typeahead 2>/dev/null
-        fi
-      elif [[ -z $BUFFER && -n $_SHELL_PULSE_LAST_TYPEAHEAD ]]; then
-        _SHELL_PULSE_LAST_TYPEAHEAD=""
-        zle -Rc 2>/dev/null
-      fi
     fi
   fi
 }

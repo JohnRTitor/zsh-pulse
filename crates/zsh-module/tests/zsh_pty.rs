@@ -727,6 +727,7 @@ fn write_child_rc(dir: &Path, load_module: bool) {
     // pseudo-terminal.
     rc.push_str("stty rows 24 cols 80 2>/dev/null\n");
     if load_module {
+        rc.push_str("autoload -Uz compinit && compinit -D 2>/dev/null\n");
         // The adapter looks for the module here, exactly as a user who
         // ran `bench/install.sh` would have it.
         rc.push_str(&format!(

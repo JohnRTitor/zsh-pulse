@@ -60,4 +60,6 @@ Roadmap for achieving complete feature parity with `fish-shell` and `zsh-autocom
 - [x] Configure `nix/default.nix` with `nativeBuildInputs = [ zsh ]` and `zcompile` all installed scripts (`init.zsh`, `widgets.zsh`, `completion.zsh`)
 - [x] Pre-compile `.zwc` wordcode in `bench/install.sh` for development and benchmark workflows
 - [x] Add `*.zwc` to `.gitignore` to keep repository clean
-
+## Phase 10: Completion / Highlighting Coexistence & region_highlight Protection
+- [x] Protect `region_highlight` from being erased by Zsh's `list-choices` completion widget by running typeahead before highlighting and saving/restoring display attributes
+- [x] Enable `compinit` in PTY test harness to ensure tests always exercise real-world interactive shell conditions

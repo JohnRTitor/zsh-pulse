@@ -214,7 +214,9 @@ _shell_pulse_tab() {
   else
     _SHELL_PULSE_MENU_HIDDEN=0
     _SHELL_PULSE_LAST_TYPEAHEAD="$BUFFER"
+    local -a _saved_rh=( "${region_highlight[@]}" )
     zle shell-pulse-typeahead 2>/dev/null || zle expand-or-complete
+    region_highlight=( "${_saved_rh[@]}" )
   fi
 }
 
