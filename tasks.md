@@ -68,3 +68,10 @@ Roadmap for achieving complete feature parity with `fish-shell` and `zsh-autocom
 - [x] Pass `-Q` to `compadd` in `_shell_pulse_history_widget` and `_shell_pulse_typeahead_widget` to prevent Zsh from backslash-escaping spaces and quotes in history commands (e.g. `git diff` instead of `git\ diff`)
 - [x] Add end-to-end PTY regression test `history_search_does_not_escape_spaces_in_command`
 
+## Phase 12: Menu-Selection Re-Entrancy & Segmentation Fault Fix
+- [x] Guard `shell-pulse-highlight-redraw` and `_shell_pulse_typeahead_widget` against re-entrant execution during active menu selection (`KEYMAP == menuselect`, `MENUSELECT`, `MENUMODE`, or completion widgets)
+- [x] Bind Enter in `menuselect` (`^M`, `^J`, `\r`) to `.accept-line` so lines exit cleanly without triggering wrapped hook cascades in `complist.so`
+- [x] Add `zle-line-finish` hook to reset typeahead state when command is submitted
+- [x] Add end-to-end PTY regression test `menu_select_down_arrow_accept_line_does_not_segfault`
+
+

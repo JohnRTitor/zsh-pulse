@@ -1702,3 +1702,43 @@ fn history_search_does_not_escape_spaces_in_command() {
     );
 }
 
+#[test]
+fn menu_select_down_arrow_accept_line_does_not_segfault() {
+    require_zsh_pty!();
+    let Some(term) = colour_terminal() else {
+        skip("no terminal type with standard xterm colour capabilities was found");
+        return;
+    };
+
+    let history = b": 1700000000:0;echo test_clean_exec\n";
+    let capture = match capture_with_history(
+        &Scenario {
+            typed: "echo\x1b[B\r".to_string(), // type echo, Down-Arrow into menu-select, Enter to accept
+            wait_for: b"test_clean_exec",
+            load_module: true,
+            count: 1,
+        },
+        term.name,
+        "menu_no_segfault",
+        history,
+    ) {
+        Ok(capture) => capture,
+        Err(reason) => {
+            skip(&reason);
+            return;
+        }
+    };
+
+    assert!(
+        capture.contains(MODULE_LOADED.as_bytes()),
+        "the module did not load"
+    );
+
+    assert!(
+        capture.contains(b"test_clean_exec"),
+        "command was not executed cleanly after menu-select.\n{}",
+        capture.dump()
+    );
+}
+
+

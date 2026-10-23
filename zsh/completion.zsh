@@ -46,6 +46,11 @@ _shell_pulse_typeahead_widget() {
   setopt extendedglob noglob
   local curcontext="list-choices:::"
 
+  # Never run typeahead if menu selection is already active or in progress.
+  if [[ $KEYMAP == menuselect || -n $MENUSELECT || -n $MENUMODE ]]; then
+    return 0
+  fi
+
   # Strictly prevent inserting text or modifying buffer during typeahead auto-listing.
   compstate[insert]=''
   compstate[old_list]=''
@@ -252,6 +257,9 @@ bindkey -M vicmd '^[OB' down-line-or-select 2>/dev/null
 # Tab (toggle/hide menu) & Shift-Tab (reverse)
 _shell_pulse_bind_all shell-pulse-tab '^I'
 bindkey -M menuselect '^I' send-break 2>/dev/null
+bindkey -M menuselect '^M' .accept-line 2>/dev/null
+bindkey -M menuselect '^J' .accept-line 2>/dev/null
+bindkey -M menuselect '\r' .accept-line 2>/dev/null
 _shell_pulse_bind_all reverse-menu-complete '^[[Z'
 [[ -n "$terminfo[kcbt]" ]] && _shell_pulse_bind_all reverse-menu-complete "$terminfo[kcbt]"
 bindkey -M menuselect '^[[Z' reverse-menu-complete 2>/dev/null

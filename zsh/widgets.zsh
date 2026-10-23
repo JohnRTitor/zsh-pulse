@@ -384,21 +384,34 @@ shell-pulse-highlight-known() {
 # found is the word the shell was asked about, so a disagreement between the
 # shell and the lexer cannot end with the wrong word coloured red. A command
 # word the shell was not asked about is left alone entirely.
+typeset -g _SHELL_PULSE_IN_TYPEAHEAD=0
+
 shell-pulse-highlight-redraw() {
   # Real-time type-ahead completion auto-listing below prompt (like zsh-autocomplete).
-  # Run BEFORE syntax highlighting so completion list redisplay cannot wipe out region_highlight!
+  # MUST NEVER run if:
+  # 1. We are already inside a typeahead widget call (prevent re-entrancy recursion).
+  # 2. We are in menu selection (KEYMAP == menuselect or MENUSELECT / MENUMODE is set).
+  # 3. A completion widget is currently running or was the last widget.
+  # Calling any completion widget while complist.so is in menu-select corrupts Zsh's C heap and causes SIGSEGV.
   if (( ! PENDING && ! KEYS_QUEUED_COUNT && ${+functions[compdef]} )); then
-    if (( _SHELL_PULSE_MENU_HIDDEN == 0 )); then
-      if [[ -n $BUFFER && "$BUFFER" != "$_SHELL_PULSE_LAST_TYPEAHEAD" ]]; then
-        _SHELL_PULSE_LAST_TYPEAHEAD="$BUFFER"
-        if [[ -n $widgets[shell-pulse-typeahead] ]]; then
-          local -a _saved_rh=( "${region_highlight[@]}" )
-          zle shell-pulse-typeahead 2>/dev/null
-          region_highlight=( "${_saved_rh[@]}" )
+    if (( _SHELL_PULSE_MENU_HIDDEN == 0 && _SHELL_PULSE_IN_TYPEAHEAD == 0 )); then
+      if [[ $KEYMAP != menuselect && -z $MENUSELECT && -z $MENUMODE ]]; then
+        if [[ ${WIDGET##.} != (menu-select|*menu*|*complete*|shell-pulse-typeahead) &&
+              ${LASTWIDGET##.} != (menu-select|*menu*|*complete*) ]]; then
+          if [[ -n $BUFFER && "$BUFFER" != "$_SHELL_PULSE_LAST_TYPEAHEAD" ]]; then
+            _SHELL_PULSE_LAST_TYPEAHEAD="$BUFFER"
+            if [[ -n $widgets[shell-pulse-typeahead] ]]; then
+              local -a _saved_rh=( "${region_highlight[@]}" )
+              _SHELL_PULSE_IN_TYPEAHEAD=1
+              zle shell-pulse-typeahead 2>/dev/null
+              _SHELL_PULSE_IN_TYPEAHEAD=0
+              region_highlight=( "${_saved_rh[@]}" )
+            fi
+          elif [[ -z $BUFFER && -n $_SHELL_PULSE_LAST_TYPEAHEAD ]]; then
+            _SHELL_PULSE_LAST_TYPEAHEAD=""
+            zle -Rc 2>/dev/null
+          fi
         fi
-      elif [[ -z $BUFFER && -n $_SHELL_PULSE_LAST_TYPEAHEAD ]]; then
-        _SHELL_PULSE_LAST_TYPEAHEAD=""
-        zle -Rc 2>/dev/null
       fi
     fi
   fi
@@ -429,6 +442,13 @@ shell-pulse-highlight-redraw() {
   fi
 }
 
+# The end-of-line hook: cleanly tear down typeahead state when command is submitted.
+shell-pulse-highlight-line-finish() {
+  _SHELL_PULSE_LAST_TYPEAHEAD=""
+  _SHELL_PULSE_IN_TYPEAHEAD=0
+  _SHELL_PULSE_MENU_HIDDEN=0
+}
+
 # The start-of-line hook.
 #
 # zsh empties the display array at the end of every line
@@ -442,6 +462,7 @@ shell-pulse-highlight-line-init() {
     zle -Rc 2>/dev/null
   fi
   _SHELL_PULSE_MENU_HIDDEN=0
+  _SHELL_PULSE_IN_TYPEAHEAD=0
   shell-pulse-highlight --reset
 }
 
@@ -459,6 +480,7 @@ if ! autoload -Uz add-zle-hook-widget 2>/dev/null; then
   # is the behaviour we are trying to avoid, but there is no better option.
   zle -N zle-line-pre-redraw shell-pulse-highlight-redraw
   zle -N zle-line-init shell-pulse-highlight-line-init
+  zle -N zle-line-finish shell-pulse-highlight-line-finish
 else
   # `add-zle-hook-widget` *autoloads* a widget it has not seen before, on
   # the assumption that the widget is a file in `$fpath`. Our functions are
@@ -467,7 +489,9 @@ else
   # Registering them as widgets first makes it leave them alone.
   zle -N shell-pulse-highlight-redraw shell-pulse-highlight-redraw
   zle -N shell-pulse-highlight-line-init shell-pulse-highlight-line-init
+  zle -N shell-pulse-highlight-line-finish shell-pulse-highlight-line-finish
 
   add-zle-hook-widget zle-line-pre-redraw shell-pulse-highlight-redraw
   add-zle-hook-widget zle-line-init shell-pulse-highlight-line-init
+  add-zle-hook-widget line-finish shell-pulse-highlight-line-finish
 fi
