@@ -57,7 +57,7 @@ _shell_pulse_typeahead_widget() {
   shell-pulse-complete --max=16
 
   if (( ${#_shell_pulse_matches[@]} > 0 )); then
-    compadd -U -d _shell_pulse_descriptions -a _shell_pulse_matches
+    compadd -Q -U -d _shell_pulse_descriptions -a _shell_pulse_matches
     compstate[list]='list force'
   else
     compstate[list]=''
@@ -126,7 +126,7 @@ _shell_pulse_history_widget() {
     PREFIX="$BUFFER"
     SUFFIX=""
     ISUFFIX=""
-    compadd -U -V history -X '%B%F{magenta}[history search]%f%b' -d _shell_pulse_descriptions -a _shell_pulse_matches
+    compadd -Q -U -V history -X '%B%F{magenta}[history search]%f%b' -d _shell_pulse_descriptions -a _shell_pulse_matches
   fi
 }
 

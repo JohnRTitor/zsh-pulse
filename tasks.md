@@ -63,3 +63,8 @@ Roadmap for achieving complete feature parity with `fish-shell` and `zsh-autocom
 ## Phase 10: Completion / Highlighting Coexistence & region_highlight Protection
 - [x] Protect `region_highlight` from being erased by Zsh's `list-choices` completion widget by running typeahead before highlighting and saving/restoring display attributes
 - [x] Enable `compinit` in PTY test harness to ensure tests always exercise real-world interactive shell conditions
+
+## Phase 11: History Completion Quoting Fix
+- [x] Pass `-Q` to `compadd` in `_shell_pulse_history_widget` and `_shell_pulse_typeahead_widget` to prevent Zsh from backslash-escaping spaces and quotes in history commands (e.g. `git diff` instead of `git\ diff`)
+- [x] Add end-to-end PTY regression test `history_search_does_not_escape_spaces_in_command`
+

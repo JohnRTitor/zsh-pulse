@@ -725,7 +725,10 @@ fn write_child_rc(dir: &Path, load_module: bool) {
     //
     // The child sets the size itself: its terminal *is* the
     // pseudo-terminal.
-    rc.push_str("stty rows 24 cols 80 2>/dev/null\n");
+    rc.push_str("HISTFILE=${ZDOTDIR}/.zsh_history\n");
+    rc.push_str("HISTSIZE=1000\n");
+    rc.push_str("SAVEHIST=1000\n");
+    rc.push_str("setopt EXTENDED_HISTORY 2>/dev/null\n");
     if load_module {
         rc.push_str("autoload -Uz compinit && compinit -D 2>/dev/null\n");
         // The adapter looks for the module here, exactly as a user who
@@ -742,6 +745,67 @@ fn write_child_rc(dir: &Path, load_module: bool) {
         "if (( ${{+builtins[shell-pulse-highlight]}} )); then print -r -- {MODULE_LOADED}; fi\n"
     ));
     fs::write(dir.join(".zshrc"), rc).expect("write the child's .zshrc");
+}
+
+fn capture_with_history(
+    scenario: &Scenario,
+    term: &str,
+    label: &str,
+    history: &[u8],
+) -> Result<Capture, String> {
+    let dir = temp_dir(label);
+
+    let harness = dir.join("harness.zsh");
+    fs::write(&harness, HARNESS).expect("write the pty harness");
+    let ready = dir.join("ready.bin");
+    fs::write(&ready, PROMPT.as_bytes()).expect("write the ready marker");
+    let done = dir.join("done.bin");
+    fs::write(&done, scenario.wait_for).expect("write the wait marker");
+    let out = dir.join("capture.bin");
+
+    let rc_dir = dir.join("rc");
+    fs::create_dir_all(&rc_dir).expect("create the rc directory");
+    fs::write(rc_dir.join(".zsh_history"), history).expect("write history");
+    write_child_rc(&rc_dir, scenario.load_module);
+
+    let child = Command::new("zsh")
+        .arg("-f")
+        .arg(&harness)
+        .env("SP_READY_FILE", &ready)
+        .env("SP_DONE_FILE", &done)
+        .env("SP_DONE_COUNT", scenario.count.to_string())
+        .env("SP_TYPE", &scenario.typed)
+        .env("SP_OUT", &out)
+        .env("SP_TIMEOUT", "10")
+        .env("ZDOTDIR", &rc_dir)
+        .env("TERM", term)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn the pty harness");
+    let mut guard = ChildGuard(child);
+
+    let status = wait_with_timeout(&mut guard.0, Duration::from_secs(30))
+        .expect("wait for the pty harness")
+        .unwrap_or_else(|| {
+            panic!(
+                "the pty harness timed out after 30s. Captured bytes:\n{}",
+                String::from_utf8_lossy(&fs::read(&out).unwrap_or_default())
+            );
+        });
+
+    if status.code() == Some(3) {
+        let mut stderr = String::new();
+        let _ = guard.0.stderr.take().unwrap().read_to_string(&mut stderr);
+        return Err(stderr.trim().to_string());
+    }
+
+    assert!(status.success(), "pty harness exited with status {status:?}");
+    let bytes = fs::read(&out).unwrap_or_default();
+    Ok(Capture {
+        bytes,
+        status: status.to_string(),
+    })
 }
 
 /// Run one scenario under a pseudo-terminal.
@@ -1589,3 +1653,52 @@ fn typing_hello_is_not_hijacked_or_auto_completed() {
         capture.dump()
     );
 }
+
+#[test]
+fn history_search_does_not_escape_spaces_in_command() {
+    require_zsh_pty!();
+    let Some(term) = colour_terminal() else {
+        skip("no terminal type with standard xterm colour capabilities was found");
+        return;
+    };
+
+    let history = b": 1700000000:0;git diff\n";
+    let capture = match capture_with_history(
+        &Scenario {
+            typed: "\x12\n".to_string(), // Ctrl-R, Enter to accept
+            wait_for: b"diff",
+            load_module: true,
+            count: 1,
+        },
+        term.name,
+        "hist_no_escape",
+        history,
+    ) {
+        Ok(capture) => capture,
+        Err(reason) => {
+            skip(&reason);
+            return;
+        }
+    };
+
+    assert!(
+        capture.contains(MODULE_LOADED.as_bytes()),
+        "the module did not load"
+    );
+
+    // Must NOT contain backslash escape "git\\ diff".
+    assert!(
+        !capture.contains(b"git\\ diff"),
+        "found 'git\\ diff' with backslash space in capture — history completed with escaped spaces!\n{}",
+        capture.dump()
+    );
+
+    // Must contain plain "git diff" on screen.
+    let occurrences = capture.screen_occurrences(b"git diff");
+    assert!(
+        !occurrences.is_empty(),
+        "did not find plain 'git diff' on screen.\n{}",
+        capture.dump()
+    );
+}
+
