@@ -1213,9 +1213,9 @@ fn words_after_double_dash_are_not_options_on_zsh() {
 /// They are created under the temporary directory, so that the test does
 /// not depend on what happens to be in the working directory.
 fn existing_paths() -> (std::path::PathBuf, std::path::PathBuf) {
-    // The name carries the process id: two test processes on one machine
-    // would otherwise delete each other's files.
-    let dir = std::env::temp_dir().join(format!("shell-pulse-path-test-{}", std::process::id()));
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("shell-pulse-path-test-{}-{count}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create the test directory");
     let file = dir.join("a-file");

@@ -258,6 +258,30 @@ impl Api {
         let p = unsafe { (self.getsparam)(c"WIDGET".as_ptr() as *mut c_char) };
         !p.is_null()
     }
+    /// Whether menu selection or completion is currently active in ZLE.
+    ///
+    /// # Safety
+    ///
+    /// Must only be called from inside zsh.
+    pub unsafe fn is_menu_active(&self) -> bool {
+        // SAFETY: Caller guarantees we are executing inside the zsh process.
+        unsafe {
+            if let Some(p) = crate::raw::dl::lookup_global("localkeymap") {
+                let map = *(p as *const *const core::ffi::c_void);
+                if !map.is_null() {
+                    return true;
+                }
+            }
+            if let Some(p) = crate::raw::dl::lookup_global("menucmp") {
+                let val = *(p as *const core::ffi::c_int);
+                if val != 0 {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// Read a scalar parameter as a lossily-converted `String`.
     ///
     /// Returns `None` if the parameter is unset or null.

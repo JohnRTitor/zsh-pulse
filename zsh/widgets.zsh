@@ -387,40 +387,39 @@ shell-pulse-highlight-known() {
 typeset -g _SHELL_PULSE_IN_TYPEAHEAD=0
 
 shell-pulse-highlight-redraw() {
+  # When menu selection or completion is active, immediately unset ghost autosuggestions
+  # and skip both typeahead and highlight mutation to prevent screen flicker and cursor desynchronization.
+  if [[ $KEYMAP == menuselect || -n $MENUSELECT || -n $MENUMODE || $_SHELL_PULSE_MENU_ACTIVE == 1 ]] ||
+     shell-pulse-complete --is-menu-active 2>/dev/null; then
+    unset POSTDISPLAY
+    return 0
+  fi
+
   # Real-time type-ahead completion auto-listing below prompt (like zsh-autocomplete).
   # MUST NEVER run if:
   # 1. We are already inside a typeahead widget call (prevent re-entrancy recursion).
-  # 2. We are in menu selection (KEYMAP == menuselect or MENUSELECT / MENUMODE is set).
-  # 3. A completion widget is currently running or was the last widget.
+  # 2. We are in menu selection (KEYMAP == menuselect, MENUSELECT / MENUMODE, or localkeymap/menucmp).
+  # 3. A completion/menu/search widget is currently running or was the last widget.
   # Calling any completion widget while complist.so is in menu-select corrupts Zsh's C heap and causes SIGSEGV.
   if (( ! PENDING && ! KEYS_QUEUED_COUNT && ${+functions[compdef]} )); then
     if (( _SHELL_PULSE_MENU_HIDDEN == 0 && _SHELL_PULSE_IN_TYPEAHEAD == 0 )); then
-      if [[ $KEYMAP != menuselect && -z $MENUSELECT && -z $MENUMODE ]]; then
-        if [[ ${WIDGET##.} != (menu-select|*menu*|*complete*|shell-pulse-typeahead) &&
-              ${LASTWIDGET##.} != (menu-select|*menu*|*complete*) ]]; then
-          if [[ -n $BUFFER && "$BUFFER" != "$_SHELL_PULSE_LAST_TYPEAHEAD" ]]; then
-            _SHELL_PULSE_LAST_TYPEAHEAD="$BUFFER"
-            if [[ -n $widgets[shell-pulse-typeahead] ]]; then
-              local -a _saved_rh=( "${region_highlight[@]}" )
-              _SHELL_PULSE_IN_TYPEAHEAD=1
-              zle shell-pulse-typeahead 2>/dev/null
-              _SHELL_PULSE_IN_TYPEAHEAD=0
-              region_highlight=( "${_saved_rh[@]}" )
-            fi
-          elif [[ -z $BUFFER && -n $_SHELL_PULSE_LAST_TYPEAHEAD ]]; then
-            _SHELL_PULSE_LAST_TYPEAHEAD=""
-            zle -Rc 2>/dev/null
+      if [[ ${WIDGET##.} != (menu-select|*menu*|*complete*|shell-pulse-*|*select*|*search*) &&
+            ${LASTWIDGET##.} != (menu-select|*menu*|*complete*|shell-pulse-*|*select*|*search*) ]]; then
+        if [[ -n $BUFFER && "$BUFFER" != "$_SHELL_PULSE_LAST_TYPEAHEAD" ]]; then
+          _SHELL_PULSE_LAST_TYPEAHEAD="$BUFFER"
+          if [[ -n $widgets[shell-pulse-typeahead] ]]; then
+            local -a _saved_rh=( "${region_highlight[@]}" )
+            _SHELL_PULSE_IN_TYPEAHEAD=1
+            zle shell-pulse-typeahead 2>/dev/null
+            _SHELL_PULSE_IN_TYPEAHEAD=0
+            region_highlight=( "${_saved_rh[@]}" )
           fi
+        elif [[ -z $BUFFER && -n $_SHELL_PULSE_LAST_TYPEAHEAD ]]; then
+          _SHELL_PULSE_LAST_TYPEAHEAD=""
+          zle -Rc 2>/dev/null
         fi
       fi
     fi
-  fi
-
-  # When menu selection is active, immediately unset ghost autosuggestions
-  # and skip highlight mutation to prevent screen flicker and cursor desynchronization.
-  if [[ $KEYMAP == menuselect || -n $MENUSELECT || -n $MENUMODE ]]; then
-    unset POSTDISPLAY
-    return 0
   fi
 
   # Native Rust syntax highlighting (sub-microsecond)
@@ -454,15 +453,10 @@ shell-pulse-highlight-line-finish() {
   _SHELL_PULSE_LAST_TYPEAHEAD=""
   _SHELL_PULSE_IN_TYPEAHEAD=0
   _SHELL_PULSE_MENU_HIDDEN=0
+  _SHELL_PULSE_MENU_ACTIVE=0
 }
 
 # The start-of-line hook.
-#
-# zsh empties the display array at the end of every line
-# (`zsh-src/Src/Zle/zle_main.c:1398`), so the module has to be told that a
-# new line is starting: otherwise it would believe it still holds the
-# highlights of the previous line, and a recalled command — whose text
-# matches the cached one — would be drawn with no highlighting at all.
 shell-pulse-highlight-line-init() {
   if [[ -n $_SHELL_PULSE_LAST_TYPEAHEAD ]]; then
     _SHELL_PULSE_LAST_TYPEAHEAD=""
@@ -470,6 +464,7 @@ shell-pulse-highlight-line-init() {
   fi
   _SHELL_PULSE_MENU_HIDDEN=0
   _SHELL_PULSE_IN_TYPEAHEAD=0
+  _SHELL_PULSE_MENU_ACTIVE=0
   shell-pulse-highlight --reset
 }
 

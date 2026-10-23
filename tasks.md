@@ -81,6 +81,10 @@ Roadmap for achieving complete feature parity with `fish-shell` and `zsh-autocom
 - [x] Sanitize multi-line commands in `complete_history` to replace newlines with spaces for clean single-line display
 - [x] Add end-to-end PTY regression test `history_search_single_down_arrow_selects_next_candidate` verifying single Up/Down presses immediately advance the selection highlight in history search
 
-
-
+## Phase 14: Menu Selection State Integrity & C-Level Global Detection
+- [x] Query Zsh C global symbols `localkeymap` and `menucmp` via `Api::is_menu_active(&self)` to detect active menu selection accurately even when `$KEYMAP` remains `"main"` / `"emacs"`
+- [x] Expose `--is-menu-active` flag in both `shell-pulse-complete` and `shell-pulse-highlight` builtins (0 = active, 1 = inactive)
+- [x] Guard `shell-pulse-highlight-redraw` and `_shell_pulse_typeahead_widget` with `is_menu_active` and `_SHELL_PULSE_MENU_ACTIVE` flags to prevent typeahead from executing during menu selection and invalidating `complist`
+- [x] Prefix `menuselect` movement bindings with dot (`.up-line-or-history`, `.down-line-or-history`, etc.) to invoke internal C built-ins directly and prevent user-wrapped widgets (e.g. from `zsh-autosuggestions`) from aborting menu selection
+- [x] Fix race condition in `zsh_integration` path tests using atomic counters
 

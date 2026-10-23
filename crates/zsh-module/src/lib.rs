@@ -1543,6 +1543,10 @@ unsafe extern "C" fn highlight_builtin(
             return 0;
         };
 
+        if has_argument(args, b"--is-menu-active") {
+            return if unsafe { api.is_menu_active() } { 0 } else { 1 };
+        }
+
         // Only the ZLE hook asks for the highlights to be published.
         let publish = wants_regions(args);
 
@@ -1855,6 +1859,8 @@ unsafe extern "C" fn complete_builtin(
                     if let Ok(s) = std::str::from_utf8(path) {
                         histfile_arg = Some(std::path::PathBuf::from(s));
                     }
+                } else if bytes == b"--is-menu-active" {
+                    return if unsafe { api.is_menu_active() } { 0 } else { 1 };
                 } else if bytes == b"--autosuggest" {
                     autosuggest_only = true;
                 } else if bytes == b"--history-only" {

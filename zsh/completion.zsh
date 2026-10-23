@@ -47,7 +47,8 @@ _shell_pulse_typeahead_widget() {
   local curcontext="list-choices:::"
 
   # Never run typeahead if menu selection is already active or in progress.
-  if [[ $KEYMAP == menuselect || -n $MENUSELECT || -n $MENUMODE ]]; then
+  if [[ $KEYMAP == menuselect || -n $MENUSELECT || -n $MENUMODE || $_SHELL_PULSE_MENU_ACTIVE == 1 ]] ||
+     shell-pulse-complete --is-menu-active 2>/dev/null; then
     return 0
   fi
 
@@ -135,6 +136,7 @@ zstyle ':completion:*' completer _shell_pulse_completer _complete
 _shell_pulse_history_widget() {
   emulate -L zsh
   setopt extendedglob noglob
+  typeset -g _SHELL_PULSE_MENU_ACTIVE=1
   shell-pulse-complete --history-only --max=32
   if (( ${#_shell_pulse_matches[@]} > 0 )); then
     IPREFIX=""
@@ -282,27 +284,27 @@ bindkey -M menuselect '^J' .accept-line 2>/dev/null
 bindkey -M menuselect '\r' .accept-line 2>/dev/null
 
 # Menu selection navigation: single keystroke per candidate
-bindkey -M menuselect '^[[A' up-line-or-history 2>/dev/null
-bindkey -M menuselect '^[OA' up-line-or-history 2>/dev/null
-bindkey -M menuselect '^P' up-line-or-history 2>/dev/null
-bindkey -M menuselect 'k' up-line-or-history 2>/dev/null
+bindkey -M menuselect '^[[A' .up-line-or-history 2>/dev/null
+bindkey -M menuselect '^[OA' .up-line-or-history 2>/dev/null
+bindkey -M menuselect '^P' .up-line-or-history 2>/dev/null
+bindkey -M menuselect 'k' .up-line-or-history 2>/dev/null
 
-bindkey -M menuselect '^[[B' down-line-or-history 2>/dev/null
-bindkey -M menuselect '^[OB' down-line-or-history 2>/dev/null
-bindkey -M menuselect '^N' down-line-or-history 2>/dev/null
-bindkey -M menuselect 'j' down-line-or-history 2>/dev/null
+bindkey -M menuselect '^[[B' .down-line-or-history 2>/dev/null
+bindkey -M menuselect '^[OB' .down-line-or-history 2>/dev/null
+bindkey -M menuselect '^N' .down-line-or-history 2>/dev/null
+bindkey -M menuselect 'j' .down-line-or-history 2>/dev/null
 
-bindkey -M menuselect '^[[C' forward-char 2>/dev/null
-bindkey -M menuselect '^[OC' forward-char 2>/dev/null
-bindkey -M menuselect '^F' forward-char 2>/dev/null
-bindkey -M menuselect 'l' forward-char 2>/dev/null
+bindkey -M menuselect '^[[C' .forward-char 2>/dev/null
+bindkey -M menuselect '^[OC' .forward-char 2>/dev/null
+bindkey -M menuselect '^F' .forward-char 2>/dev/null
+bindkey -M menuselect 'l' .forward-char 2>/dev/null
 
-bindkey -M menuselect '^[[D' backward-char 2>/dev/null
-bindkey -M menuselect '^[OD' backward-char 2>/dev/null
-bindkey -M menuselect '^B' backward-char 2>/dev/null
-bindkey -M menuselect 'h' backward-char 2>/dev/null
+bindkey -M menuselect '^[[D' .backward-char 2>/dev/null
+bindkey -M menuselect '^[OD' .backward-char 2>/dev/null
+bindkey -M menuselect '^B' .backward-char 2>/dev/null
+bindkey -M menuselect 'h' .backward-char 2>/dev/null
 
-bindkey -M menuselect '^R' up-line-or-history 2>/dev/null
+bindkey -M menuselect '^R' .up-line-or-history 2>/dev/null
 _shell_pulse_bind_all reverse-menu-complete '^[[Z'
 [[ -n "$terminfo[kcbt]" ]] && _shell_pulse_bind_all reverse-menu-complete "$terminfo[kcbt]"
 bindkey -M menuselect '^[[Z' reverse-menu-complete 2>/dev/null
