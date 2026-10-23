@@ -74,4 +74,13 @@ Roadmap for achieving complete feature parity with `fish-shell` and `zsh-autocom
 - [x] Add `zle-line-finish` hook to reset typeahead state when command is submitted
 - [x] Add end-to-end PTY regression test `menu_select_down_arrow_accept_line_does_not_segfault`
 
+## Phase 13: Single-Keystroke Menu Selection & Navigation Fix
+- [x] Pass `-l` to `compadd` in `_shell_pulse_history_widget` and truncate descriptions to `COLUMNS - 2` so each candidate occupies exactly 1 line and never wraps onto a second row
+- [x] Bind `menuselect` keymap navigation explicitly for `^[[A`, `^[OA`, `^P`, `k` (`up-line-or-history`), `^[[B`, `^[OB`, `^N`, `j` (`down-line-or-history`), `^[[C`, `^[OC`, `^F`, `l` (`forward-char`), `^[[D`, `^[OD`, `^B`, `h` (`backward-char`), and `^R` (`up-line-or-history`)
+- [x] Guard `shell-pulse-highlight-redraw` to skip during active menu selection (`KEYMAP == menuselect || -n $MENUSELECT || -n $MENUMODE`) and unset `POSTDISPLAY` to prevent duplicate redraws and cursor desynchronization
+- [x] Sanitize multi-line commands in `complete_history` to replace newlines with spaces for clean single-line display
+- [x] Add end-to-end PTY regression test `history_search_single_down_arrow_selects_next_candidate` verifying single Up/Down presses immediately advance the selection highlight in history search
+
+
+
 

@@ -416,6 +416,13 @@ shell-pulse-highlight-redraw() {
     fi
   fi
 
+  # When menu selection is active, immediately unset ghost autosuggestions
+  # and skip highlight mutation to prevent screen flicker and cursor desynchronization.
+  if [[ $KEYMAP == menuselect || -n $MENUSELECT || -n $MENUMODE ]]; then
+    unset POSTDISPLAY
+    return 0
+  fi
+
   # Native Rust syntax highlighting (sub-microsecond)
   # ALWAYS executed after typeahead so region_highlight is published freshly for ZLE redraw.
   local -a args

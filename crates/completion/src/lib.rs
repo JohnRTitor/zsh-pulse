@@ -396,9 +396,10 @@ pub fn complete_history(
         };
         for h in hist_cmds.iter().take(max_candidates) {
             if let Ok(s) = std::str::from_utf8(h) {
+                let clean_display = s.replace(['\n', '\r'], " ");
                 candidates.push(Candidate {
                     value: s.to_string(),
-                    display: s.to_string(),
+                    display: clean_display,
                     description: "history".to_string(),
                     kind: CandidateKind::History,
                     score: 100,

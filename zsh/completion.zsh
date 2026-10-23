@@ -62,7 +62,17 @@ _shell_pulse_typeahead_widget() {
   shell-pulse-complete --max=16
 
   if (( ${#_shell_pulse_matches[@]} > 0 )); then
-    compadd -Q -U -d _shell_pulse_descriptions -a _shell_pulse_matches
+    local -a descs
+    local maxw=$(( COLUMNS > 4 ? COLUMNS - 2 : 78 ))
+    local d
+    for d in "${_shell_pulse_descriptions[@]}"; do
+      if (( ${#d} > maxw )); then
+        descs+=( "${d[1,maxw]}" )
+      else
+        descs+=( "$d" )
+      fi
+    done
+    compadd -Q -U -d descs -a _shell_pulse_matches
     compstate[list]='list force'
   else
     compstate[list]=''
@@ -131,7 +141,17 @@ _shell_pulse_history_widget() {
     PREFIX="$BUFFER"
     SUFFIX=""
     ISUFFIX=""
-    compadd -Q -U -V history -X '%B%F{magenta}[history search]%f%b' -d _shell_pulse_descriptions -a _shell_pulse_matches
+    local -a descs
+    local maxw=$(( COLUMNS > 4 ? COLUMNS - 2 : 78 ))
+    local d
+    for d in "${_shell_pulse_descriptions[@]}"; do
+      if (( ${#d} > maxw )); then
+        descs+=( "${d[1,maxw]}" )
+      else
+        descs+=( "$d" )
+      fi
+    done
+    compadd -Q -U -l -V history -X '%B%F{magenta}[history search]%f%b' -d descs -a _shell_pulse_matches
   fi
 }
 
@@ -260,6 +280,29 @@ bindkey -M menuselect '^I' send-break 2>/dev/null
 bindkey -M menuselect '^M' .accept-line 2>/dev/null
 bindkey -M menuselect '^J' .accept-line 2>/dev/null
 bindkey -M menuselect '\r' .accept-line 2>/dev/null
+
+# Menu selection navigation: single keystroke per candidate
+bindkey -M menuselect '^[[A' up-line-or-history 2>/dev/null
+bindkey -M menuselect '^[OA' up-line-or-history 2>/dev/null
+bindkey -M menuselect '^P' up-line-or-history 2>/dev/null
+bindkey -M menuselect 'k' up-line-or-history 2>/dev/null
+
+bindkey -M menuselect '^[[B' down-line-or-history 2>/dev/null
+bindkey -M menuselect '^[OB' down-line-or-history 2>/dev/null
+bindkey -M menuselect '^N' down-line-or-history 2>/dev/null
+bindkey -M menuselect 'j' down-line-or-history 2>/dev/null
+
+bindkey -M menuselect '^[[C' forward-char 2>/dev/null
+bindkey -M menuselect '^[OC' forward-char 2>/dev/null
+bindkey -M menuselect '^F' forward-char 2>/dev/null
+bindkey -M menuselect 'l' forward-char 2>/dev/null
+
+bindkey -M menuselect '^[[D' backward-char 2>/dev/null
+bindkey -M menuselect '^[OD' backward-char 2>/dev/null
+bindkey -M menuselect '^B' backward-char 2>/dev/null
+bindkey -M menuselect 'h' backward-char 2>/dev/null
+
+bindkey -M menuselect '^R' up-line-or-history 2>/dev/null
 _shell_pulse_bind_all reverse-menu-complete '^[[Z'
 [[ -n "$terminfo[kcbt]" ]] && _shell_pulse_bind_all reverse-menu-complete "$terminfo[kcbt]"
 bindkey -M menuselect '^[[Z' reverse-menu-complete 2>/dev/null
