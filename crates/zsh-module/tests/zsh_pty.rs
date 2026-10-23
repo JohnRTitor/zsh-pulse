@@ -1530,3 +1530,61 @@ fn an_existing_directory_is_magenta_and_underlined_on_the_terminal() {
         );
     }
 }
+
+#[test]
+fn typing_hello_is_not_hijacked_or_auto_completed() {
+    require_zsh_pty!();
+    let Some(term) = colour_terminal() else {
+        skip("terminal not standard xterm");
+        return;
+    };
+
+    let capture = match capture(
+        &Scenario {
+            typed: format!("hello {ARGUMENT}"),
+            wait_for: ARGUMENT.as_bytes(),
+            load_module: true,
+            count: 1,
+        },
+        term.name,
+        "hello_clean",
+    ) {
+        Ok(capture) => capture,
+        Err(reason) => {
+            skip(&reason);
+            return;
+        }
+    };
+
+    assert!(
+        capture.contains(MODULE_LOADED.as_bytes()),
+        "the module did not load"
+    );
+
+    // The argument was typed and drawn without being blocked or hijacked.
+    let drawn = capture.screen_occurrences(ARGUMENT.as_bytes());
+    assert!(
+        !drawn.is_empty(),
+        "the line was not drawn, input was hijacked.\n{}",
+        capture.dump()
+    );
+
+    // Must NOT contain auto-correction or compsys warning corruption.
+    assert!(
+        !capture.contains(b"delpart"),
+        "found 'delpart' in capture — auto-correction hijacked input!\n{}",
+        capture.dump()
+    );
+    assert!(
+        !capture.contains(b"No matches for"),
+        "found compsys error 'No matches for' on screen while typing!\n{}",
+        capture.dump()
+    );
+
+    // "hello" is an unknown command, so it should be red+bold.
+    assert!(
+        capture.contains(&term.palette.red_bold),
+        "hello should be highlighted in red+bold as an unknown command.\n{}",
+        capture.dump()
+    );
+}

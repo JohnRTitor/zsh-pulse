@@ -408,18 +408,6 @@ shell-pulse-highlight-redraw() {
     fi
   fi
 
-  # Real-time type-ahead completion auto-listing (up to 16 lines below prompt)
-  if (( ! PENDING && ! KEYS_QUEUED_COUNT )); then
-    if [[ -n $BUFFER && "$BUFFER" != "$_SHELL_PULSE_LAST_TYPEAHEAD" ]]; then
-      _SHELL_PULSE_LAST_TYPEAHEAD="$BUFFER"
-      if [[ -n $widgets[shell-pulse-typeahead] ]]; then
-        zle shell-pulse-typeahead 2>/dev/null
-      fi
-    elif [[ -z $BUFFER && -n $_SHELL_PULSE_LAST_TYPEAHEAD ]]; then
-      _SHELL_PULSE_LAST_TYPEAHEAD=""
-      zle -Rc 2>/dev/null
-    fi
-  fi
 }
 
 # The start-of-line hook.
@@ -430,8 +418,6 @@ shell-pulse-highlight-redraw() {
 # highlights of the previous line, and a recalled command — whose text
 # matches the cached one — would be drawn with no highlighting at all.
 shell-pulse-highlight-line-init() {
-  _SHELL_PULSE_LAST_TYPEAHEAD=""
-  zle -Rc 2>/dev/null
   shell-pulse-highlight --reset
 }
 

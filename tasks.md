@@ -41,3 +41,11 @@ Roadmap for achieving complete feature parity with `fish-shell` and `zsh-autocom
 - [x] Whole-line buffer replacement for interactive history search widget (`PREFIX="$BUFFER"`)
 - [x] Universal keymap bindings supporting both Emacs and Vi modal states (`main`, `emacs`, `viins`, `vicmd`, `menuselect`)
 - [x] Unset dangling `POSTDISPLAY` autosuggestions when cursor retreats into line
+
+## Phase 7: Input Hijacking & Clean Typing Fixes
+- [x] Remove intrusive real-time typeahead completion widget from `line-pre-redraw` hook (prevented typing words like `hello` from being hijacked or auto-corrected)
+- [x] Remove `_approximate` from completer list to eliminate aggressive auto-mutation of typed words
+- [x] Remove `automenu` from completion style to prevent automatic candidate insertion while typing
+- [x] Implement Fish-parity history search (`up-line-or-beginning-search` / `down-line-or-beginning-search`) on Up/Down arrows
+- [x] Bind interactive multi-line history search menu widget to `Ctrl-R`
+- [x] Add PTY end-to-end regression test for typing `hello` cleanly without corruption

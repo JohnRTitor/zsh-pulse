@@ -28,23 +28,11 @@ zstyle ':completion:*' list-prompt ''
 zmodload zsh/complist 2>/dev/null
 
 # Configure completion menu styling and group headings.
-# automenu allows Tab to insert unambiguous prefix first, then enter menu select.
-zstyle ':completion:*' menu select automenu
+zstyle ':completion:*' menu select
 zstyle ':completion:*' group-name ''
 zstyle ':completion:*:descriptions' format '%B%F{yellow}[%d]%f%b'
 zstyle ':completion:*:messages' format '%F{red}%d%f'
 zstyle ':completion:*:warnings' format '%F{red}No matches for: %d%f'
-
-# Real-time type-ahead completion widget (lists choices below prompt without inserting).
-_shell_pulse_typeahead_widget() {
-  emulate -L zsh
-  setopt extendedglob noglob
-  compstate[insert]=''
-  compstate[list]='list force'
-  _main_complete
-}
-
-zle -C shell-pulse-typeahead list-choices _shell_pulse_typeahead_widget
 
 # -----------------------------------------------------------------------------
 # 1. Hybrid Completer Integration
@@ -84,12 +72,13 @@ _shell_pulse_completer() {
 }
 
 # Prepend shell-pulse completer into Zsh's completer list.
-zstyle ':completion:*' completer _shell_pulse_completer _complete _approximate
+zstyle ':completion:*' completer _shell_pulse_completer _complete
 
 # -----------------------------------------------------------------------------
-# 2. Interactive History Search Menu (Up-Arrow / Ctrl-P)
+# 2. History Search & Navigation (Fish Parity)
 # -----------------------------------------------------------------------------
 
+# Interactive multi-line history search menu widget (bound to Ctrl-R).
 _shell_pulse_history_widget() {
   emulate -L zsh
   setopt extendedglob noglob
@@ -105,25 +94,28 @@ _shell_pulse_history_widget() {
 
 zle -C shell-pulse-history-search menu-select _shell_pulse_history_widget
 
+# Fish-style prefix search on Up/Down arrows:
+# - Searches backward/forward in history matching the prefix currently in BUFFER.
+# - If BUFFER is empty or multiline, navigates lines/history cleanly.
+autoload -Uz up-line-or-beginning-search down-line-or-beginning-search 2>/dev/null
+zle -N up-line-or-beginning-search
+zle -N down-line-or-beginning-search
+
 _shell_pulse_up_line_or_search() {
   if [[ $LBUFFER == *$'\n'* ]]; then
     zle .up-line
   else
-    zle shell-pulse-history-search
+    zle up-line-or-beginning-search 2>/dev/null || zle .up-line-or-history
   fi
 }
 
 zle -N up-line-or-search _shell_pulse_up_line_or_search
 
-# -----------------------------------------------------------------------------
-# 3. Down-Arrow / Ctrl-N: Enter Completion Menu
-# -----------------------------------------------------------------------------
-
 _shell_pulse_down_line_or_select() {
   if [[ $RBUFFER == *$'\n'* ]]; then
     zle .down-line
   else
-    zle menu-select -w 2>/dev/null || zle .down-line
+    zle down-line-or-beginning-search 2>/dev/null || zle .down-line-or-history
   fi
 }
 
@@ -202,6 +194,9 @@ bindkey -M menuselect '^[[Z' reverse-menu-complete 2>/dev/null
 _shell_pulse_bind_all forward-char '^[[C' '^[OC' '^F'
 _shell_pulse_bind_all end-of-line '^E'
 _shell_pulse_bind_all forward-word '^[f' '^[^[[C' '^[[1;3C' '^[[1;5C'
+
+# Interactive history search menu
+_shell_pulse_bind_all shell-pulse-history-search '^R'
 
 unfunction _shell_pulse_bind_all 2>/dev/null
 
