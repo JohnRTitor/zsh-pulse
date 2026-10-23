@@ -34,6 +34,44 @@ zstyle ':completion:*:descriptions' format '%B%F{yellow}[%d]%f%b'
 zstyle ':completion:*:messages' format '%F{red}%d%f'
 zstyle ':completion:*:warnings' format '%F{red}No matches for: %d%f'
 
+# Typeahead list-choices configuration:
+# Strictly prevent menu selection, text insertion, and warning banners during auto-listing.
+zstyle ':completion:list-choices:*' menu no
+zstyle ':completion:list-choices:*' warnings format ''
+zstyle ':completion:list-choices:*' messages format ''
+
+# Real-time type-ahead completion widget (lists choices below prompt without inserting).
+_shell_pulse_typeahead_widget() {
+  emulate -L zsh
+  setopt extendedglob noglob
+  local curcontext="list-choices:::"
+
+  # Strictly prevent inserting text or modifying buffer during typeahead auto-listing.
+  compstate[insert]=''
+  compstate[old_list]=''
+  compstate[pattern_insert]=''
+  unset MENUSELECT MENUMODE 2>/dev/null
+
+  # Query shell-pulse's native Rust completion engine (<10us latency).
+  # Never invokes Zsh compsys shell scripts or spelling correctors.
+  shell-pulse-complete --max=16
+
+  if (( ${#_shell_pulse_matches[@]} > 0 )); then
+    compadd -U -d _shell_pulse_descriptions -a _shell_pulse_matches
+    compstate[list]='list force'
+  else
+    compstate[list]=''
+  fi
+
+  unset MENUSELECT MENUMODE 2>/dev/null
+  compstate[insert]=''
+  _lastcomp[insert]=''
+  compstate[pattern_insert]=''
+  return 2
+}
+
+zle -C shell-pulse-typeahead list-choices _shell_pulse_typeahead_widget
+
 # -----------------------------------------------------------------------------
 # 1. Hybrid Completer Integration
 # -----------------------------------------------------------------------------
@@ -115,7 +153,11 @@ _shell_pulse_down_line_or_select() {
   if [[ $RBUFFER == *$'\n'* ]]; then
     zle .down-line
   else
-    zle down-line-or-beginning-search 2>/dev/null || zle .down-line-or-history
+    if [[ -n $_SHELL_PULSE_LAST_TYPEAHEAD ]]; then
+      zle menu-select -w 2>/dev/null || zle down-line-or-beginning-search 2>/dev/null || zle .down-line-or-history
+    else
+      zle down-line-or-beginning-search 2>/dev/null || zle .down-line-or-history
+    fi
   fi
 }
 
@@ -157,7 +199,29 @@ _shell_pulse_forward_word_or_accept() {
 zle -N forward-word _shell_pulse_forward_word_or_accept
 
 # -----------------------------------------------------------------------------
-# 5. Key Bindings (main, emacs, viins, vicmd, menuselect)
+# 5. Tab Behavior: Toggle / Hide Completion Menu
+# -----------------------------------------------------------------------------
+
+typeset -g _SHELL_PULSE_MENU_HIDDEN=0
+
+# Pressing Tab when the completion menu is visible hides/clears the menu.
+# Pressing Tab when the menu is hidden or empty expands/shows completion.
+_shell_pulse_tab() {
+  if (( _SHELL_PULSE_MENU_HIDDEN == 0 )) && [[ -n $_SHELL_PULSE_LAST_TYPEAHEAD ]]; then
+    _SHELL_PULSE_MENU_HIDDEN=1
+    _SHELL_PULSE_LAST_TYPEAHEAD=""
+    zle -Rc 2>/dev/null
+  else
+    _SHELL_PULSE_MENU_HIDDEN=0
+    _SHELL_PULSE_LAST_TYPEAHEAD="$BUFFER"
+    zle shell-pulse-typeahead 2>/dev/null || zle expand-or-complete
+  fi
+}
+
+zle -N shell-pulse-tab _shell_pulse_tab
+
+# -----------------------------------------------------------------------------
+# 6. Key Bindings (main, emacs, viins, vicmd, menuselect)
 # -----------------------------------------------------------------------------
 
 _shell_pulse_bind_all() {
@@ -183,8 +247,9 @@ bindkey -M vicmd 'j' down-line-or-select 2>/dev/null
 bindkey -M vicmd '^[[B' down-line-or-select 2>/dev/null
 bindkey -M vicmd '^[OB' down-line-or-select 2>/dev/null
 
-# Tab & Shift-Tab
-_shell_pulse_bind_all expand-or-complete '^I'
+# Tab (toggle/hide menu) & Shift-Tab (reverse)
+_shell_pulse_bind_all shell-pulse-tab '^I'
+bindkey -M menuselect '^I' send-break 2>/dev/null
 _shell_pulse_bind_all reverse-menu-complete '^[[Z'
 [[ -n "$terminfo[kcbt]" ]] && _shell_pulse_bind_all reverse-menu-complete "$terminfo[kcbt]"
 bindkey -M menuselect '^[[Z' reverse-menu-complete 2>/dev/null
@@ -201,7 +266,7 @@ _shell_pulse_bind_all shell-pulse-history-search '^R'
 unfunction _shell_pulse_bind_all 2>/dev/null
 
 # -----------------------------------------------------------------------------
-# 6. Recent Directories Tracking
+# 7. Recent Directories Tracking
 # -----------------------------------------------------------------------------
 
 autoload -Uz chpwd_recent_dirs cdr add-zsh-hook 2>/dev/null

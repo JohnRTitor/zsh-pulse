@@ -49,3 +49,9 @@ Roadmap for achieving complete feature parity with `fish-shell` and `zsh-autocom
 - [x] Implement Fish-parity history search (`up-line-or-beginning-search` / `down-line-or-beginning-search`) on Up/Down arrows
 - [x] Bind interactive multi-line history search menu widget to `Ctrl-R`
 - [x] Add PTY end-to-end regression test for typing `hello` cleanly without corruption
+
+## Phase 8: Safe Real-Time Auto-Listing & Tab Menu Dismissal
+- [x] Fast Rust-powered typeahead auto-listing (`shell-pulse-complete --max=16`) running in sub-10µs without compsys script overhead
+- [x] Tab toggle widget (`_shell_pulse_tab`): pressing Tab hides/clears the completion menu when visible, expands completions when hidden
+- [x] Pressing Tab inside menu selection (`menuselect`) immediately dismisses and hides the menu (`send-break`)
+- [x] Down-Arrow (`_shell_pulse_down_line_or_select`) enters visible typeahead menu or performs prefix history search
