@@ -214,7 +214,9 @@ pub fn complete_filesystem(ctx: &CompletionContext) -> Vec<Candidate> {
         let is_dir = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
 
         // Compute inserted value
-        let parent_part = if prefix_str.contains('/') {
+        let parent_part = if prefix_str == "~" {
+            "~/"
+        } else if prefix_str.contains('/') {
             let last_slash = prefix_str.rfind('/').unwrap();
             &prefix_str[..=last_slash]
         } else {
@@ -611,6 +613,18 @@ mod tests {
         let outcome = complete_paths(&ctx, 10);
         for c in &outcome.candidates {
             assert!(matches!(c.kind, CandidateKind::File | CandidateKind::Directory));
+        }
+    }
+
+    #[test]
+    fn complete_filesystem_tilde_preserves_tilde_slash_prefix() {
+        let cwd = PathBuf::from("/tmp");
+        let home = PathBuf::from("/home/masum");
+        let line = b"ls ~";
+        let ctx = CompletionContext::new(line, line.len(), cwd, home);
+        let outcome = complete_paths(&ctx, 10);
+        for c in &outcome.candidates {
+            assert!(c.value.starts_with("~/"), "value should start with ~/: {}", c.value);
         }
     }
 }

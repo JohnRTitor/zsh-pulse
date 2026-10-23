@@ -19,8 +19,10 @@
 # 6. Recent Directories:
 #    - Tracks visited directories for fast jump completions.
 
-# Silence completion beeps.
+# Silence completion beeps and prevent typeahead confirmation prompts.
 unsetopt list_beep 2>/dev/null
+LISTMAX=1000
+zstyle ':completion:*' list-prompt ''
 
 # Load menu selection module.
 zmodload zsh/complist 2>/dev/null
@@ -52,7 +54,7 @@ _shell_pulse_completer() {
   emulate -L zsh
   setopt extendedglob noglob
 
-  # If completing an explicit path or a path fragment containing a slash,
+  # If completing an explicit path or a path fragment containing a slash or tilde,
   # use shell-pulse's bounded filesystem scanner in Rust.
   # This guarantees immune execution on massive directories like /nix/store.
   if [[ "$PREFIX" == /* || "$PREFIX" == ./* || "$PREFIX" == ../* || "$PREFIX" == ~* || "$PREFIX" == */* ]]; then
@@ -70,8 +72,9 @@ _shell_pulse_completer() {
           file_descs+=("${_shell_pulse_descriptions[i]}")
         fi
       done
-      (( ${#dirs[@]} > 0 )) && compadd -U -V directories -X '%B%F{blue}[directories]%f%b' -d dir_descs -a dirs
-      (( ${#files[@]} > 0 )) && compadd -U -V files -X '%B%F{cyan}[files]%f%b' -d file_descs -a files
+      # Directories do not append a trailing space (-S ''); files add an auto-removable space (-q -S ' ')
+      (( ${#dirs[@]} > 0 )) && compadd -U -S '' -V directories -X '%B%F{blue}[directories]%f%b' -d dir_descs -a dirs
+      (( ${#files[@]} > 0 )) && compadd -U -q -S ' ' -V files -X '%B%F{cyan}[files]%f%b' -d file_descs -a files
       return 0
     fi
   fi
@@ -92,6 +95,10 @@ _shell_pulse_history_widget() {
   setopt extendedglob noglob
   shell-pulse-complete --history-only --max=32
   if (( ${#_shell_pulse_matches[@]} > 0 )); then
+    IPREFIX=""
+    PREFIX="$BUFFER"
+    SUFFIX=""
+    ISUFFIX=""
     compadd -U -V history -X '%B%F{magenta}[history search]%f%b' -d _shell_pulse_descriptions -a _shell_pulse_matches
   fi
 }
@@ -107,9 +114,6 @@ _shell_pulse_up_line_or_search() {
 }
 
 zle -N up-line-or-search _shell_pulse_up_line_or_search
-bindkey '^[[A' up-line-or-search
-bindkey '^[OA' up-line-or-search
-bindkey '^P' up-line-or-search
 
 # -----------------------------------------------------------------------------
 # 3. Down-Arrow / Ctrl-N: Enter Completion Menu
@@ -124,20 +128,9 @@ _shell_pulse_down_line_or_select() {
 }
 
 zle -N down-line-or-select _shell_pulse_down_line_or_select
-bindkey '^[[B' down-line-or-select
-bindkey '^[OB' down-line-or-select
-bindkey '^N' down-line-or-select
 
 # -----------------------------------------------------------------------------
-# 4. Tab & Shift-Tab Bindings
-# -----------------------------------------------------------------------------
-
-bindkey '^I' expand-or-complete
-bindkey "$terminfo[kcbt]" reverse-menu-complete 2>/dev/null
-bindkey '^[[Z' reverse-menu-complete
-
-# -----------------------------------------------------------------------------
-# 5. Fish-Style Autosuggestion Acceptance (Full Line & Word-by-Word)
+# 4. Fish-Style Autosuggestion Acceptance (Full Line & Word-by-Word)
 # -----------------------------------------------------------------------------
 
 # Forward-char / Right-Arrow widget: accepts the entire ghost text at end of line.
@@ -153,10 +146,6 @@ _shell_pulse_forward_char_or_accept() {
 
 zle -N forward-char _shell_pulse_forward_char_or_accept
 zle -N end-of-line _shell_pulse_forward_char_or_accept
-bindkey '^[[C' forward-char
-bindkey '^[OC' forward-char
-bindkey '^F' forward-char
-bindkey '^E' end-of-line
 
 # Forward-word / Alt-Right / Alt-F: accepts the next single word of ghost text (Fish feature).
 _shell_pulse_forward_word_or_accept() {
@@ -174,10 +163,47 @@ _shell_pulse_forward_word_or_accept() {
 }
 
 zle -N forward-word _shell_pulse_forward_word_or_accept
-bindkey '^[f' forward-word
-bindkey '^[^[[C' forward-word
-bindkey '^[[1;3C' forward-word
-bindkey '^[[1;5C' forward-word
+
+# -----------------------------------------------------------------------------
+# 5. Key Bindings (main, emacs, viins, vicmd, menuselect)
+# -----------------------------------------------------------------------------
+
+_shell_pulse_bind_all() {
+  local widget="$1"
+  shift
+  local key
+  for key; do
+    bindkey -M main "$key" "$widget" 2>/dev/null || bindkey "$key" "$widget" 2>/dev/null
+    bindkey -M emacs "$key" "$widget" 2>/dev/null
+    bindkey -M viins "$key" "$widget" 2>/dev/null
+  done
+}
+
+# Up-Arrow / History search
+_shell_pulse_bind_all up-line-or-search '^[[A' '^[OA' '^P'
+bindkey -M vicmd 'k' up-line-or-search 2>/dev/null
+bindkey -M vicmd '^[[A' up-line-or-search 2>/dev/null
+bindkey -M vicmd '^[OA' up-line-or-search 2>/dev/null
+
+# Down-Arrow / Menu selection
+_shell_pulse_bind_all down-line-or-select '^[[B' '^[OB' '^N'
+bindkey -M vicmd 'j' down-line-or-select 2>/dev/null
+bindkey -M vicmd '^[[B' down-line-or-select 2>/dev/null
+bindkey -M vicmd '^[OB' down-line-or-select 2>/dev/null
+
+# Tab & Shift-Tab
+_shell_pulse_bind_all expand-or-complete '^I'
+_shell_pulse_bind_all reverse-menu-complete '^[[Z'
+[[ -n "$terminfo[kcbt]" ]] && _shell_pulse_bind_all reverse-menu-complete "$terminfo[kcbt]"
+bindkey -M menuselect '^[[Z' reverse-menu-complete 2>/dev/null
+[[ -n "$terminfo[kcbt]" ]] && bindkey -M menuselect "$terminfo[kcbt]" reverse-menu-complete 2>/dev/null
+
+# Ghost text acceptance
+_shell_pulse_bind_all forward-char '^[[C' '^[OC' '^F'
+_shell_pulse_bind_all end-of-line '^E'
+_shell_pulse_bind_all forward-word '^[f' '^[^[[C' '^[[1;3C' '^[[1;5C'
+
+unfunction _shell_pulse_bind_all 2>/dev/null
 
 # -----------------------------------------------------------------------------
 # 6. Recent Directories Tracking

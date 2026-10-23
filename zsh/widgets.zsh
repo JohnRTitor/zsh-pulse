@@ -403,7 +403,7 @@ shell-pulse-highlight-redraw() {
       else
         unset POSTDISPLAY
       fi
-    elif [[ -z $BUFFER ]]; then
+    else
       unset POSTDISPLAY
     fi
   fi

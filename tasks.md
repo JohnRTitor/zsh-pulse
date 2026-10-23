@@ -32,3 +32,12 @@ Roadmap for achieving complete feature parity with `fish-shell` and `zsh-autocom
 - [x] Keystroke latency verification (sub-10µs microbenchmark)
 - [x] Large directory (`/nix/store`) non-blocking completion verification
 - [x] Full workspace test suite pass (`cargo test --all` and `cargo clippy --all -- -D warnings`)
+
+## Phase 6: Edge Case Hardening & Parity Bugfixes
+- [x] Robust stack-based bracket & quote matching (comments immunity, nested quotes & command substitutions `$()`, `${}`)
+- [x] Non-overlapping span overlay slicing in highlight diff engine
+- [x] Preserve `~/` path prefix during tilde filesystem completion
+- [x] Prevent trailing space insertion after directory completions (`compadd -S ''`) and auto-remove space on files (`-q -S ' '`)
+- [x] Whole-line buffer replacement for interactive history search widget (`PREFIX="$BUFFER"`)
+- [x] Universal keymap bindings supporting both Emacs and Vi modal states (`main`, `emacs`, `viins`, `vicmd`, `menuselect`)
+- [x] Unset dangling `POSTDISPLAY` autosuggestions when cursor retreats into line
