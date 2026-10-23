@@ -29,6 +29,6 @@ Roadmap for achieving complete feature parity with `fish-shell` and `zsh-autocom
   - [x] Highlight unclosed or mismatched brackets/quotes in red error (`fg=red,bold`)
 
 ## Phase 5: Verification & Microbenchmarks
-- [ ] Keystroke latency verification (sub-10µs microbenchmark)
-- [ ] Large directory (`/nix/store`) non-blocking completion verification
-- [ ] Full workspace test suite pass (`cargo test --all` and `cargo clippy --all -- -D warnings`)
+- [x] Keystroke latency verification (sub-10µs microbenchmark)
+- [x] Large directory (`/nix/store`) non-blocking completion verification
+- [x] Full workspace test suite pass (`cargo test --all` and `cargo clippy --all -- -D warnings`)
