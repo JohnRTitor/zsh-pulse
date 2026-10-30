@@ -2,8 +2,15 @@
 #
 # Sourced by `init.zsh` once the module has been loaded.
 
-# If the highlight feature was not compiled into the module, exit cleanly.
-if (( ! $+builtins[zsh-pulse-highlight] )); then
+# If neither highlight nor completion builtins are compiled into the module, exit cleanly.
+if (( ! $+builtins[zsh-pulse-highlight] && ! $+builtins[zsh-pulse-complete] )); then
+  return 0
+fi
+
+# If highlighting, typeahead completion, and autosuggestions are all disabled, exit cleanly.
+if [[ ${ZSH_PULSE_HIGHLIGHT:-1} == (0|[fF][aA][lL][sS][eE]|[oO][fF][fF]|[nN][oO]) && \
+      ${ZSH_PULSE_COMPLETION:-1} == (0|[fF][aA][lL][sS][eE]|[oO][fF][fF]|[nN][oO]) && \
+      ${ZSH_PULSE_AUTOSUGGEST:-1} == (0|[fF][aA][lL][sS][eE]|[oO][fF][fF]|[nN][oO]) ]]; then
   return 0
 fi
 #
@@ -406,22 +413,24 @@ zsh-pulse-highlight-redraw() {
   # 2. We are in menu selection (KEYMAP == menuselect, MENUSELECT / MENUMODE, or localkeymap/menucmp).
   # 3. A completion/menu/search widget is currently running or was the last widget.
   # Calling any completion widget while complist.so is in menu-select corrupts Zsh's C heap and causes SIGSEGV.
-  if (( ! PENDING && ! KEYS_QUEUED_COUNT && ${+functions[compdef]} )); then
-    if (( _ZSH_PULSE_MENU_HIDDEN == 0 && _ZSH_PULSE_IN_TYPEAHEAD == 0 )); then
-      if [[ ${WIDGET##.} != (menu-select|*menu*|*complete*|zsh-pulse-*|*select*|*search*) &&
-            ${LASTWIDGET##.} != (menu-select|*menu*|*complete*|zsh-pulse-*|*select*|*search*) ]]; then
-        if [[ -n $BUFFER && "$BUFFER" != "$_ZSH_PULSE_LAST_TYPEAHEAD" ]]; then
-          _ZSH_PULSE_LAST_TYPEAHEAD="$BUFFER"
-          if [[ -n $widgets[zsh-pulse-typeahead] ]]; then
-            local -a _saved_rh=( "${region_highlight[@]}" )
-            _ZSH_PULSE_IN_TYPEAHEAD=1
-            zle zsh-pulse-typeahead 2>/dev/null
-            _ZSH_PULSE_IN_TYPEAHEAD=0
-            region_highlight=( "${_saved_rh[@]}" )
+  if [[ ${ZSH_PULSE_COMPLETION:-1} != (0|[fF][aA][lL][sS][eE]|[oO][fF][fF]|[nN][oO]) ]]; then
+    if (( ! PENDING && ! KEYS_QUEUED_COUNT && ${+functions[compdef]} )); then
+      if (( _ZSH_PULSE_MENU_HIDDEN == 0 && _ZSH_PULSE_IN_TYPEAHEAD == 0 )); then
+        if [[ ${WIDGET##.} != (menu-select|*menu*|*complete*|zsh-pulse-*|*select*|*search*) &&
+              ${LASTWIDGET##.} != (menu-select|*menu*|*complete*|zsh-pulse-*|*select*|*search*) ]]; then
+          if [[ -n $BUFFER && "$BUFFER" != "$_ZSH_PULSE_LAST_TYPEAHEAD" ]]; then
+            _ZSH_PULSE_LAST_TYPEAHEAD="$BUFFER"
+            if [[ -n $widgets[zsh-pulse-typeahead] ]]; then
+              local -a _saved_rh=( "${region_highlight[@]}" )
+              _ZSH_PULSE_IN_TYPEAHEAD=1
+              zle zsh-pulse-typeahead 2>/dev/null
+              _ZSH_PULSE_IN_TYPEAHEAD=0
+              region_highlight=( "${_saved_rh[@]}" )
+            fi
+          elif [[ -z $BUFFER && -n $_ZSH_PULSE_LAST_TYPEAHEAD ]]; then
+            _ZSH_PULSE_LAST_TYPEAHEAD=""
+            zle -Rc 2>/dev/null
           fi
-        elif [[ -z $BUFFER && -n $_ZSH_PULSE_LAST_TYPEAHEAD ]]; then
-          _ZSH_PULSE_LAST_TYPEAHEAD=""
-          zle -Rc 2>/dev/null
         fi
       fi
     fi
@@ -429,27 +438,33 @@ zsh-pulse-highlight-redraw() {
 
   # Native Rust syntax highlighting (sub-microsecond)
   # ALWAYS executed after typeahead so region_highlight is published freshly for ZLE redraw.
-  local -a args
-  zsh-pulse-highlight-command
-  args=( --region-highlight "${ZSH_PULSE_COMMAND_ARGS[@]}" )
-  # The arguments are quoted: a command word may hold a character that is
-  # a glob pattern — `*`, `?`, `[` — and with `GLOB_SUBST` set in the
-  # user's configuration an unquoted expansion would be matched against
-  # the filesystem, and a word with no match would abort the call.
-  zsh-pulse-highlight "${args[@]}"
+  if [[ ${ZSH_PULSE_HIGHLIGHT:-1} != (0|[fF][aA][lL][sS][eE]|[oO][fF][fF]|[nN][oO]) ]] && (( $+builtins[zsh-pulse-highlight] )); then
+    local -a args
+    zsh-pulse-highlight-command
+    args=( --region-highlight "${ZSH_PULSE_COMMAND_ARGS[@]}" )
+    # The arguments are quoted: a command word may hold a character that is
+    # a glob pattern — `*`, `?`, `[` — and with `GLOB_SUBST` set in the
+    # user's configuration an unquoted expansion would be matched against
+    # the filesystem, and a word with no match would abort the call.
+    zsh-pulse-highlight "${args[@]}"
+  fi
 
   # Real-time ghost autosuggestion from zsh-pulse (sub-10us latency)
-  if (( ! PENDING && ! KEYS_QUEUED_COUNT )); then
-    if [[ $CURSOR -ge $#BUFFER && -n $BUFFER ]] && (( $+builtins[zsh-pulse-complete] )); then
-      zsh-pulse-complete --autosuggest 2>/dev/null
-      if [[ -n $_zsh_pulse_autosuggestion ]]; then
-        POSTDISPLAY="$_zsh_pulse_autosuggestion"
+  if [[ ${ZSH_PULSE_AUTOSUGGEST:-1} != (0|[fF][aA][lL][sS][eE]|[oO][fF][fF]|[nN][oO]) ]]; then
+    if (( ! PENDING && ! KEYS_QUEUED_COUNT )); then
+      if [[ $CURSOR -ge $#BUFFER && -n $BUFFER ]] && (( $+builtins[zsh-pulse-complete] )); then
+        zsh-pulse-complete --autosuggest 2>/dev/null
+        if [[ -n $_zsh_pulse_autosuggestion ]]; then
+          POSTDISPLAY="$_zsh_pulse_autosuggestion"
+        else
+          unset POSTDISPLAY
+        fi
       else
         unset POSTDISPLAY
       fi
-    else
-      unset POSTDISPLAY
     fi
+  else
+    unset POSTDISPLAY
   fi
 }
 

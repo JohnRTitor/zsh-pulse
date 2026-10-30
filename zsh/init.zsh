@@ -32,5 +32,20 @@ fi
 
 # The hooks themselves live in their own file, so that they can be read (and
 # changed) without touching the loading.
-source "${${(%):-%x}:A:h}/widgets.zsh"
-source "${${(%):-%x}:A:h}/completion.zsh"
+#
+# Feature toggles (set to 0, false, off, or no to disable):
+#   ZSH_PULSE_HIGHLIGHT    - Syntax highlighting (default: 1)
+#   ZSH_PULSE_COMPLETION   - Typeahead completion, bounded scanner & menu (default: 1)
+#   ZSH_PULSE_HISTORY      - Up/Down history search & Ctrl-R interactive menu (default: 1)
+#   ZSH_PULSE_AUTOSUGGEST  - Fish-style ghost text autosuggestions (default: 1)
+
+if [[ ${ZSH_PULSE_HIGHLIGHT:-1} != (0|[fF][aA][lL][sS][eE]|[oO][fF][fF]|[nN][oO]) || \
+      ${ZSH_PULSE_COMPLETION:-1} != (0|[fF][aA][lL][sS][eE]|[oO][fF][fF]|[nN][oO]) || \
+      ${ZSH_PULSE_AUTOSUGGEST:-1} != (0|[fF][aA][lL][sS][eE]|[oO][fF][fF]|[nN][oO]) ]]; then
+  source "${${(%):-%x}:A:h}/widgets.zsh"
+fi
+
+if [[ ${ZSH_PULSE_COMPLETION:-1} != (0|[fF][aA][lL][sS][eE]|[oO][fF][fF]|[nN][oO]) || \
+      ${ZSH_PULSE_HISTORY:-1} != (0|[fF][aA][lL][sS][eE]|[oO][fF][fF]|[nN][oO]) ]]; then
+  source "${${(%):-%x}:A:h}/completion.zsh"
+fi
