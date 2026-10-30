@@ -45,6 +45,7 @@ fn builtin_is_registered_under_its_exact_name() {
 }
 
 #[test]
+#[allow(clippy::vec_init_then_push)]
 fn no_garbage_names_appear_in_the_builtin_table() {
     require_zsh!();
     // Regression guard for the NUL-termination bug.

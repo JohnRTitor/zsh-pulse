@@ -415,12 +415,16 @@ struct Capture {
 impl Capture {
     /// Whether the captured bytes contain `needle`.
     fn contains(&self, needle: &[u8]) -> bool {
-        self.bytes.windows(needle.len()).any(|window| window == needle)
+        self.bytes
+            .windows(needle.len())
+            .any(|window| window == needle)
     }
 
     /// The captured bytes, escaped so that a failure message is readable.
     fn dump(&self) -> String {
-        String::from_utf8_lossy(&self.bytes).escape_debug().to_string()
+        String::from_utf8_lossy(&self.bytes)
+            .escape_debug()
+            .to_string()
     }
 
     /// The screen the shell drew.
@@ -710,25 +714,19 @@ fn temp_dir(label: &str) -> PathBuf {
 /// `.zshrc` from here and from nowhere else: the user's own configuration
 /// cannot influence the result.
 fn write_child_rc(dir: &Path, load_module: bool) {
+    write_child_rc_extra(dir, load_module, "");
+}
+
+fn write_child_rc_extra(dir: &Path, load_module: bool, extra_rc: &str) {
     let mut rc = String::new();
     rc.push_str(&format!("PS1='{PROMPT}'\n"));
     rc.push_str("RPROMPT=\n");
     rc.push_str("PROMPT_EOL_MARK=''\n");
-    // The size of the terminal.
-    //
-    // The pseudo-terminal the harness opens has no size of its own: the
-    // harness runs with its output on a pipe, so there is no terminal to
-    // copy the size from. zsh falls back to the terminfo default, so this
-    // usually changes nothing — but the screen the test reconstructs is
-    // the screen the line was drawn for, and that should not depend on
-    // what the fallback happens to be.
-    //
-    // The child sets the size itself: its terminal *is* the
-    // pseudo-terminal.
     rc.push_str("HISTFILE=${ZDOTDIR}/.zsh_history\n");
     rc.push_str("HISTSIZE=1000\n");
     rc.push_str("SAVEHIST=1000\n");
     rc.push_str("setopt EXTENDED_HISTORY 2>/dev/null\n");
+    rc.push_str(extra_rc);
     if load_module {
         rc.push_str("autoload -Uz compinit && compinit -D 2>/dev/null\n");
         // The adapter looks for the module here, exactly as a user who
@@ -754,6 +752,17 @@ fn capture_with_history(
     label: &str,
     history: &[u8],
 ) -> Result<Capture, String> {
+    capture_with_history_extra(scenario, term, label, history, "")
+}
+
+#[allow(dead_code)]
+fn capture_with_history_extra(
+    scenario: &Scenario,
+    term: &str,
+    label: &str,
+    history: &[u8],
+    extra_rc: &str,
+) -> Result<Capture, String> {
     let dir = temp_dir(label);
 
     let harness = dir.join("harness.zsh");
@@ -767,7 +776,7 @@ fn capture_with_history(
     let rc_dir = dir.join("rc");
     fs::create_dir_all(&rc_dir).expect("create the rc directory");
     fs::write(rc_dir.join(".zsh_history"), history).expect("write history");
-    write_child_rc(&rc_dir, scenario.load_module);
+    write_child_rc_extra(&rc_dir, scenario.load_module, extra_rc);
 
     let child = Command::new("zsh")
         .arg("-f")
@@ -801,7 +810,10 @@ fn capture_with_history(
         return Err(stderr.trim().to_string());
     }
 
-    assert!(status.success(), "pty harness exited with status {status:?}");
+    assert!(
+        status.success(),
+        "pty harness exited with status {status:?}"
+    );
     let bytes = fs::read(&out).unwrap_or_default();
     Ok(Capture {
         bytes,
@@ -860,10 +872,12 @@ fn capture(scenario: &Scenario, term: &str, label: &str) -> Result<Capture, Stri
     let mut stdout = String::new();
     let mut stderr = String::new();
     if let Some(mut pipe) = guard.0.stdout.take() {
-        pipe.read_to_string(&mut stdout).expect("read the harness output");
+        pipe.read_to_string(&mut stdout)
+            .expect("read the harness output");
     }
     if let Some(mut pipe) = guard.0.stderr.take() {
-        pipe.read_to_string(&mut stderr).expect("read the harness diagnostics");
+        pipe.read_to_string(&mut stderr)
+            .expect("read the harness diagnostics");
     }
 
     // Exit code 3 is the harness's way of saying "this machine cannot run
@@ -919,13 +933,7 @@ fn prompt_escape(term: &str, escape: &str) -> Vec<u8> {
 /// `cyan` correctly but `magenta` differently would make the later
 /// assertions wrong.
 fn colour_terminal() -> Option<Terminal> {
-    const CANDIDATES: &[&str] = &[
-        "xterm-256color",
-        "xterm",
-        "screen",
-        "linux",
-        "xterm-kitty",
-    ];
+    const CANDIDATES: &[&str] = &["xterm-256color", "xterm", "screen", "linux", "xterm-kitty"];
     CANDIDATES.iter().copied().find_map(|name| {
         let palette = Palette::measure(name);
         palette
@@ -1766,9 +1774,9 @@ fn history_search_single_down_arrow_selects_next_candidate() {
         &Scenario {
             // Ctrl-R (opens menu on third_candidate), Down Arrow ONCE (moves to second_candidate), Enter (accepts)
             typed: "\x12\x1b[B\r".to_string(),
-            wait_for: b"second_candidate",
+            wait_for: PROMPT.as_bytes(),
             load_module: true,
-            count: 1,
+            count: 2,
         },
         term.name,
         "single_key_nav",
@@ -1786,9 +1794,15 @@ fn history_search_single_down_arrow_selects_next_candidate() {
         "the module did not load"
     );
 
+    // Verify second_candidate was actually executed on Enter (not third_candidate)
     assert!(
-        capture.contains(b"second_candidate"),
-        "second candidate was not selected on a single down-arrow press.\n{}",
+        capture.contains(b"second_candidate\r\n"),
+        "second candidate command was not executed on a single down-arrow press.\n{}",
+        capture.dump()
+    );
+    assert!(
+        !capture.contains(b"third_candidate\r\n"),
+        "third candidate executed instead of second candidate.\n{}",
         capture.dump()
     );
 }
@@ -1807,9 +1821,9 @@ fn history_search_multiple_down_arrows_cycle_candidates() {
         &Scenario {
             // Ctrl-R (opens menu on third_candidate), Down Arrow TWICE (third -> second -> first), Enter (accepts)
             typed: "\x12\x1b[B\x1b[B\r".to_string(),
-            wait_for: b"first_candidate",
+            wait_for: PROMPT.as_bytes(),
             load_module: true,
-            count: 1,
+            count: 2,
         },
         term.name,
         "multiple_down_arrows",
@@ -1827,13 +1841,66 @@ fn history_search_multiple_down_arrows_cycle_candidates() {
         "the module did not load"
     );
 
+    // Verify first_candidate was actually executed after two down arrows
     assert!(
-        capture.contains(b"first_candidate"),
-        "first candidate was not reached after two down-arrow presses.\n{}",
+        capture.contains(b"first_candidate\r\n"),
+        "first candidate was not executed after two down-arrow presses.\n{}",
+        capture.dump()
+    );
+    assert!(
+        !capture.contains(b"third_candidate\r\n"),
+        "third candidate executed instead of first candidate.\n{}",
         capture.dump()
     );
 }
 
+#[test]
+#[cfg(any(feature = "history", feature = "history-navigation"))]
+fn ctrl_r_preserves_fzf_history_widget_when_present() {
+    require_zsh_pty!();
+    let Some(term) = colour_terminal() else {
+        skip("no terminal type with standard xterm colour capabilities was found");
+        return;
+    };
 
+    let history = b": 1700000000:0;echo regular_history\n";
+    let extra_rc = r#"
+fzf-history-widget() {
+  BUFFER="echo FZF_HISTORY_INVOKED"
+  CURSOR=$#BUFFER
+  zle accept-line
+}
+zle -N fzf-history-widget
+"#;
 
+    let capture = match capture_with_history_extra(
+        &Scenario {
+            // Ctrl-R should invoke fzf-history-widget without being clobbered by shell-pulse
+            typed: "\x12".to_string(),
+            wait_for: PROMPT.as_bytes(),
+            load_module: true,
+            count: 2,
+        },
+        term.name,
+        "fzf_preserve",
+        history,
+        extra_rc,
+    ) {
+        Ok(capture) => capture,
+        Err(reason) => {
+            skip(&reason);
+            return;
+        }
+    };
 
+    assert!(
+        capture.contains(MODULE_LOADED.as_bytes()),
+        "the module did not load"
+    );
+
+    assert!(
+        capture.contains(b"FZF_HISTORY_INVOKED\r\n"),
+        "fzf-history-widget was not preserved on Ctrl-R.\n{}",
+        capture.dump()
+    );
+}

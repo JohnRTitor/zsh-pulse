@@ -399,6 +399,13 @@ zsh-pulse-highlight-known() {
 typeset -g _ZSH_PULSE_IN_TYPEAHEAD=0
 
 zsh-pulse-highlight-redraw() {
+  # Self-heal menu active state if complist has exited or aborted
+  if [[ $KEYMAP != menuselect && -z $MENUSELECT && -z $MENUMODE ]]; then
+    if (( ! $+builtins[zsh-pulse-complete] )) || ! zsh-pulse-complete --is-menu-active 2>/dev/null; then
+      _ZSH_PULSE_MENU_ACTIVE=0
+    fi
+  fi
+
   # When menu selection or completion is active, immediately unset ghost autosuggestions
   # and skip both typeahead and highlight mutation to prevent screen flicker and cursor desynchronization.
   if [[ $KEYMAP == menuselect || -n $MENUSELECT || -n $MENUMODE || $_ZSH_PULSE_MENU_ACTIVE == 1 ]] ||

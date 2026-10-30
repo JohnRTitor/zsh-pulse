@@ -290,8 +290,8 @@ mod tests {
     fn builtin_table_is_null_terminated() {
         let t = builtins();
         assert!(t[BUILTIN_COUNT].node.nam.is_null(), "builtin table must be NULL-terminated");
-        for i in 0..BUILTIN_COUNT {
-            assert!(!t[i].node.nam.is_null());
+        for b in &t[..BUILTIN_COUNT] {
+            assert!(!b.node.nam.is_null());
         }
     }
 

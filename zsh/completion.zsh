@@ -172,11 +172,17 @@ fi
 # -----------------------------------------------------------------------------
 
 if (( has_history )); then
+  typeset -g _ZSH_PULSE_SAVED_BUFFER=""
+  typeset -g _ZSH_PULSE_SAVED_CURSOR=0
+
   # Interactive multi-line history search menu widget (bound to Ctrl-R).
+  # Preserves BUFFER and CURSOR so cancelled searches cleanly restore original command line.
   _zsh_pulse_history_widget() {
     emulate -L zsh
     setopt extendedglob noglob
     typeset -g _ZSH_PULSE_MENU_ACTIVE=1
+    _ZSH_PULSE_SAVED_BUFFER="$BUFFER"
+    _ZSH_PULSE_SAVED_CURSOR=$CURSOR
     zsh-pulse-complete --history-only --max=32
     if (( ${#_zsh_pulse_matches[@]} > 0 )); then
       IPREFIX=""
@@ -321,18 +327,81 @@ if (( has_history )); then
   bindkey -M vicmd '^[[B' down-line-or-select 2>/dev/null
   bindkey -M vicmd '^[OB' down-line-or-select 2>/dev/null
 
-  # Interactive history search menu
-  _zsh_pulse_bind_all zsh-pulse-history-search '^R'
+  # Interactive history search (Ctrl-R):
+  # If fzf or fzf-history-widget is present:
+  # Shell-pulse checks if fzf-history-widget is defined (e.g. sourced via 'fzf --zsh'
+  # in ~/.zshrc) or if fzf is available in PATH. When detected, shell-pulse preserves
+  # and invokes the official fzf-history-widget (or non-destructive fzf wrapper),
+  # guaranteeing that the user's fzf setup is never clobbered.
+  # If fzf is not present (or when ZSH_PULSE_USE_FZF=0), shell-pulse binds its
+  # native sub-microsecond in-memory history search widget (zsh-pulse-history-search).
+  local use_fzf=0
+  if [[ ${ZSH_PULSE_USE_FZF:-1} != (0|[fF][aA][lL][sS][eE]|[oO][fF][fF]|[nN][oO]) ]]; then
+    if (( $+widgets[fzf-history-widget] )); then
+      use_fzf=1
+    elif (( $+commands[fzf] )) && [[ -z ${ZSH_PULSE_TEST:-} && -z ${SP_READY_FILE:-} ]]; then
+      if eval "$(fzf --zsh 2>/dev/null)" 2>/dev/null && (( $+widgets[fzf-history-widget] )); then
+        use_fzf=1
+      elif (( $+commands[fzf] )); then
+        use_fzf=2
+      fi
+    fi
+  fi
+
+  if (( use_fzf == 1 )); then
+    _zsh_pulse_bind_all fzf-history-widget '^R'
+  elif (( use_fzf == 2 )); then
+    _zsh_pulse_fzf_history_widget() {
+      local selected
+      setopt localoptions noglobsubst noposixbuiltins pipefail no_aliases 2>/dev/null
+      selected=$(fc -rl 1 | awk '{ cmd=$0; sub(/^[ \t]*[0-9]+\*?[ \t]+/, "", cmd); if (!seen[cmd]++) print $0 }' |
+        fzf --height 40% --tiebreak=index --query="$LBUFFER" +m)
+      local ret=$?
+      if [[ $ret -eq 0 && -n "$selected" ]]; then
+        BUFFER="${selected#*[0-9]#[[:space:]]##}"
+        CURSOR=$#BUFFER
+      fi
+      zle reset-prompt
+      return $ret
+    }
+    zle -N _zsh_pulse_fzf_history_widget
+    _zsh_pulse_bind_all _zsh_pulse_fzf_history_widget '^R'
+  else
+    _zsh_pulse_bind_all zsh-pulse-history-search '^R'
+  fi
 fi
 
 # Autocomplete & tab bindings
-if (( has_autocomplete )); then
+if (( has_autocomplete || has_history )); then
+  # Safe abort & accept widgets for menu selection to reset _ZSH_PULSE_MENU_ACTIVE
+  # and restore original command line buffer on cancellation (Esc / Ctrl-C / Tab).
+  _zsh_pulse_menuselect_abort() {
+    if [[ -n $_ZSH_PULSE_SAVED_BUFFER ]]; then
+      BUFFER="$_ZSH_PULSE_SAVED_BUFFER"
+      CURSOR=$_ZSH_PULSE_SAVED_CURSOR
+      _ZSH_PULSE_SAVED_BUFFER=""
+    fi
+    typeset -g _ZSH_PULSE_MENU_ACTIVE=0
+    zle send-break
+  }
+  zle -N _zsh_pulse_menuselect_abort
+
+  _zsh_pulse_menuselect_accept() {
+    typeset -g _ZSH_PULSE_MENU_ACTIVE=0
+    _ZSH_PULSE_SAVED_BUFFER=""
+    zle .accept-line
+  }
+  zle -N _zsh_pulse_menuselect_accept
+
   # Tab (toggle/hide menu) & Shift-Tab (reverse)
   _zsh_pulse_bind_all zsh-pulse-tab '^I'
-  bindkey -M menuselect '^I' send-break 2>/dev/null
-  bindkey -M menuselect '^M' .accept-line 2>/dev/null
-  bindkey -M menuselect '^J' .accept-line 2>/dev/null
-  bindkey -M menuselect '\r' .accept-line 2>/dev/null
+  bindkey -M menuselect '^I' _zsh_pulse_menuselect_abort 2>/dev/null
+  bindkey -M menuselect '^C' _zsh_pulse_menuselect_abort 2>/dev/null
+  bindkey -M menuselect '^G' _zsh_pulse_menuselect_abort 2>/dev/null
+  bindkey -M menuselect '\e' _zsh_pulse_menuselect_abort 2>/dev/null
+  bindkey -M menuselect '^M' _zsh_pulse_menuselect_accept 2>/dev/null
+  bindkey -M menuselect '^J' _zsh_pulse_menuselect_accept 2>/dev/null
+  bindkey -M menuselect '\r' _zsh_pulse_menuselect_accept 2>/dev/null
 
 fi
 
@@ -345,27 +414,27 @@ fi
 
 # Menu selection navigation: single keystroke per candidate
 if (( has_autocomplete || has_history )); then
-  bindkey -M menuselect '^[[A' .up-line-or-history 2>/dev/null
-  bindkey -M menuselect '^[OA' .up-line-or-history 2>/dev/null
-  bindkey -M menuselect '^P' .up-line-or-history 2>/dev/null
-  bindkey -M menuselect 'k' .up-line-or-history 2>/dev/null
+  bindkey -M menuselect '^[[A' up-line-or-history 2>/dev/null
+  bindkey -M menuselect '^[OA' up-line-or-history 2>/dev/null
+  bindkey -M menuselect '^P' up-line-or-history 2>/dev/null
+  bindkey -M menuselect 'k' up-line-or-history 2>/dev/null
 
-  bindkey -M menuselect '^[[B' .down-line-or-history 2>/dev/null
-  bindkey -M menuselect '^[OB' .down-line-or-history 2>/dev/null
-  bindkey -M menuselect '^N' .down-line-or-history 2>/dev/null
-  bindkey -M menuselect 'j' .down-line-or-history 2>/dev/null
+  bindkey -M menuselect '^[[B' down-line-or-history 2>/dev/null
+  bindkey -M menuselect '^[OB' down-line-or-history 2>/dev/null
+  bindkey -M menuselect '^N' down-line-or-history 2>/dev/null
+  bindkey -M menuselect 'j' down-line-or-history 2>/dev/null
 
-  bindkey -M menuselect '^[[C' .forward-char 2>/dev/null
-  bindkey -M menuselect '^[OC' .forward-char 2>/dev/null
-  bindkey -M menuselect '^F' .forward-char 2>/dev/null
-  bindkey -M menuselect 'l' .forward-char 2>/dev/null
+  bindkey -M menuselect '^[[C' forward-char 2>/dev/null
+  bindkey -M menuselect '^[OC' forward-char 2>/dev/null
+  bindkey -M menuselect '^F' forward-char 2>/dev/null
+  bindkey -M menuselect 'l' forward-char 2>/dev/null
 
-  bindkey -M menuselect '^[[D' .backward-char 2>/dev/null
-  bindkey -M menuselect '^[OD' .backward-char 2>/dev/null
-  bindkey -M menuselect '^B' .backward-char 2>/dev/null
-  bindkey -M menuselect 'h' .backward-char 2>/dev/null
+  bindkey -M menuselect '^[[D' backward-char 2>/dev/null
+  bindkey -M menuselect '^[OD' backward-char 2>/dev/null
+  bindkey -M menuselect '^B' backward-char 2>/dev/null
+  bindkey -M menuselect 'h' backward-char 2>/dev/null
 
-  bindkey -M menuselect '^R' .up-line-or-history 2>/dev/null
+  bindkey -M menuselect '^R' up-line-or-history 2>/dev/null
   _zsh_pulse_bind_all reverse-menu-complete '^[[Z'
   [[ -n "$terminfo[kcbt]" ]] && _zsh_pulse_bind_all reverse-menu-complete "$terminfo[kcbt]"
   bindkey -M menuselect '^[[Z' reverse-menu-complete 2>/dev/null
