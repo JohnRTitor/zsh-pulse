@@ -9,9 +9,10 @@
 # (`zsh-src/Src/module.c:2177-2186`) rejects an absolute path and a `.so`
 # suffix in a `zmodload` name, so the module has to be
 # `zshpulse/core.so` inside a directory on `$module_path`.
-{ lib
-, rustPlatform
-, zsh
+{
+  lib,
+  rustPlatform,
+  zsh,
 }:
 rustPlatform.buildRustPackage {
   pname = "zsh-pulse";
