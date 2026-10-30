@@ -5,11 +5,16 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[features]
+default = ["highlight", "autocomplete", "history"]
+highlight = []
+autocomplete = ["dep:completion", "completion/autocomplete"]
+history = ["dep:history", "dep:completion", "completion/history"]
+history-navigation = ["history"]
+
 [dependencies]
-zsh-abi.workspace = true
-history.workspace = true
-completion.workspace = true
-ranking.workspace = true
+history = { workspace = true, optional = true }
+completion = { workspace = true, optional = true }
 
 [lints.rust]
 missing_debug_implementations = "warn"

@@ -747,6 +747,7 @@ fn write_child_rc(dir: &Path, load_module: bool) {
     fs::write(dir.join(".zshrc"), rc).expect("write the child's .zshrc");
 }
 
+#[allow(dead_code)]
 fn capture_with_history(
     scenario: &Scenario,
     term: &str,
@@ -934,6 +935,7 @@ fn colour_terminal() -> Option<Terminal> {
 }
 
 #[test]
+#[cfg(feature = "highlight")]
 fn the_typed_command_is_highlighted_on_the_terminal() {
     require_zsh_pty!();
     let Some(term) = colour_terminal() else {
@@ -1018,6 +1020,7 @@ fn the_typed_command_is_highlighted_on_the_terminal() {
 }
 
 #[test]
+#[cfg(feature = "highlight")]
 fn an_empty_line_is_not_highlighted() {
     require_zsh_pty!();
     let Some(term) = colour_terminal() else {
@@ -1074,6 +1077,7 @@ fn an_empty_line_is_not_highlighted() {
 /// hook being replaced by another plugin, and the module believing it still
 /// holds the previous line's regions after zsh has emptied them.
 #[test]
+#[cfg(feature = "highlight")]
 fn the_highlighting_survives_a_second_command_line() {
     require_zsh_pty!();
     let Some(term) = colour_terminal() else {
@@ -1231,6 +1235,7 @@ fn without_the_module_nothing_is_highlighted() {
 /// a prefix and has to come before the green of the finished word — a
 /// plugin that painted `echo` red would put a red after the green.
 #[test]
+#[cfg(feature = "highlight")]
 fn a_known_command_is_green_on_the_terminal() {
     require_zsh_pty!();
     let Some(term) = colour_terminal() else {
@@ -1322,6 +1327,7 @@ fn a_known_command_is_green_on_the_terminal() {
 /// *no* green may appear: a green would mean the plugin thought the
 /// shell knew the word.
 #[test]
+#[cfg(feature = "highlight")]
 fn an_unknown_command_is_red_and_bold_on_the_terminal() {
     require_zsh_pty!();
     let Some(term) = colour_terminal() else {
@@ -1411,6 +1417,7 @@ fn an_unknown_command_is_red_and_bold_on_the_terminal() {
 /// on the line than the command word, so its cyan has to come after the
 /// green — and its region has to be closed before the argument is drawn.
 #[test]
+#[cfg(feature = "highlight")]
 fn an_option_is_highlighted_on_the_terminal() {
     require_zsh_pty!();
     let Some(term) = colour_terminal() else {
@@ -1506,6 +1513,7 @@ fn an_option_is_highlighted_on_the_terminal() {
 /// The directory used here is `std::env::temp_dir()` — the same place the
 /// harness puts its own scratch directory, so it certainly exists.
 #[test]
+#[cfg(feature = "highlight")]
 fn an_existing_directory_is_magenta_and_underlined_on_the_terminal() {
     require_zsh_pty!();
     let Some(term) = colour_terminal() else {
@@ -1597,6 +1605,7 @@ fn an_existing_directory_is_magenta_and_underlined_on_the_terminal() {
 }
 
 #[test]
+#[cfg(feature = "highlight")]
 fn typing_hello_is_not_hijacked_or_auto_completed() {
     require_zsh_pty!();
     let Some(term) = colour_terminal() else {
@@ -1655,6 +1664,7 @@ fn typing_hello_is_not_hijacked_or_auto_completed() {
 }
 
 #[test]
+#[cfg(any(feature = "history", feature = "history-navigation"))]
 fn history_search_does_not_escape_spaces_in_command() {
     require_zsh_pty!();
     let Some(term) = colour_terminal() else {
@@ -1703,6 +1713,7 @@ fn history_search_does_not_escape_spaces_in_command() {
 }
 
 #[test]
+#[cfg(feature = "autocomplete")]
 fn menu_select_down_arrow_accept_line_does_not_segfault() {
     require_zsh_pty!();
     let Some(term) = colour_terminal() else {
@@ -1742,6 +1753,7 @@ fn menu_select_down_arrow_accept_line_does_not_segfault() {
 }
 
 #[test]
+#[cfg(any(feature = "history", feature = "history-navigation"))]
 fn history_search_single_down_arrow_selects_next_candidate() {
     require_zsh_pty!();
     let Some(term) = colour_terminal() else {
@@ -1782,6 +1794,7 @@ fn history_search_single_down_arrow_selects_next_candidate() {
 }
 
 #[test]
+#[cfg(any(feature = "history", feature = "history-navigation"))]
 fn history_search_multiple_down_arrows_cycle_candidates() {
     require_zsh_pty!();
     let Some(term) = colour_terminal() else {

@@ -5,10 +5,16 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[features]
+default = ["autocomplete", "history"]
+autocomplete = []
+history = ["dep:history"]
+history-navigation = ["history"]
+
 # Pure Rust, zero external dependencies.
 [dependencies]
 ranking = { workspace = true }
-history = { workspace = true }
+history = { workspace = true, optional = true }
 
 [lints.rust]
 missing_debug_implementations = "warn"

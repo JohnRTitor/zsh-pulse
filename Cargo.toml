@@ -19,12 +19,12 @@ rust-version = "1.85"
 
 [workspace.dependencies]
 zsh-abi = { path = "crates/zsh-abi" }
-engine = { path = "crates/engine" }
+engine = { path = "crates/engine", default-features = false }
 lexer = { path = "crates/lexer" }
 highlight = { path = "crates/highlight" }
 ranking = { path = "crates/ranking" }
 history = { path = "crates/history" }
-completion = { path = "crates/completion" }
+completion = { path = "crates/completion", default-features = false }
 
 [profile.release]
 opt-level = 3

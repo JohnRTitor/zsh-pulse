@@ -12,13 +12,24 @@ path = "src/lib.rs"
 # a `cdylib` alone cannot be linked into a benchmark.
 crate-type = ["cdylib", "rlib"]
 
+[features]
+default = ["highlight", "autocomplete", "history"]
+highlight = ["dep:highlight", "dep:lexer", "engine/highlight"]
+autocomplete = ["dep:completion", "engine/autocomplete"]
+history = ["dep:history", "dep:completion", "engine/history"]
+history-navigation = ["history", "engine/history-navigation"]
+
 [dependencies]
 zsh-abi.workspace = true
-engine.workspace = true
-lexer.workspace = true
-highlight.workspace = true
-completion.workspace = true
-history.workspace = true
+engine = { workspace = true }
+lexer = { workspace = true, optional = true }
+highlight = { workspace = true, optional = true }
+completion = { workspace = true, optional = true }
+history = { workspace = true, optional = true }
+
+[[example]]
+name = "bench_region"
+required-features = ["highlight"]
 
 [lints.rust]
 missing_debug_implementations = "warn"

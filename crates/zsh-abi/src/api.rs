@@ -229,12 +229,8 @@ impl Api {
     ///
     /// **This is not cheap for an array**: zsh materialises the whole array
     /// to answer it. Call it at most once per line, not once per keystroke.
-    ///
-    /// # Safety
-    ///
-    /// Must only be called from inside zsh with a NUL-terminated name.
-    pub unsafe fn param_exists(&self, name: &std::ffi::CStr) -> bool {
-        // Safety: caller guarantees zsh context and a valid name.
+    pub fn param_exists(&self, name: &std::ffi::CStr) -> bool {
+        // Safety: caller guarantees zsh context (via Api::resolve) and a valid CStr.
         let p = unsafe { (self.getsparam)(name.as_ptr() as *mut c_char) };
         !p.is_null()
     }
@@ -249,22 +245,15 @@ impl Api {
     /// The module uses it for two reasons: the ZLE special parameters only
     /// exist inside a widget, and the existence of `region_highlight` alone
     /// cannot be told apart from a global array of that name.
-    ///
-    /// # Safety
-    ///
-    /// Must only be called from inside zsh.
-    pub unsafe fn in_zle(&self) -> bool {
-        // Safety: caller guarantees zsh context and a valid name.
+    pub fn in_zle(&self) -> bool {
+        // Safety: caller guarantees zsh context (via Api::resolve) and a valid literal CStr.
         let p = unsafe { (self.getsparam)(c"WIDGET".as_ptr() as *mut c_char) };
         !p.is_null()
     }
+
     /// Whether menu selection or completion is currently active in ZLE.
-    ///
-    /// # Safety
-    ///
-    /// Must only be called from inside zsh.
-    pub unsafe fn is_menu_active(&self) -> bool {
-        // SAFETY: Caller guarantees we are executing inside the zsh process.
+    pub fn is_menu_active(&self) -> bool {
+        // SAFETY: Caller guarantees we are executing inside the zsh process (via Api::resolve).
         unsafe {
             if let Some(p) = crate::raw::dl::lookup_global("localkeymap") {
                 let map = *(p as *const *const core::ffi::c_void);
@@ -289,11 +278,7 @@ impl Api {
     /// **This allocates.** On the keystroke path prefer
     /// [`Api::read_param_bytes`], which reuses a caller-owned buffer and does
     /// not allocate at all once warm.
-    ///
-    /// # Safety
-    ///
-    /// Must only be called from inside zsh with a NUL-terminated name.
-    pub unsafe fn get_param_string(&self, name: &std::ffi::CStr) -> Option<String> {
+    pub fn get_param_string(&self, name: &std::ffi::CStr) -> Option<String> {
         // SAFETY: caller guarantees zsh context and a valid name.
         let p = unsafe { (self.getsparam)(name.as_ptr() as *mut c_char) };
         if p.is_null() {
@@ -335,11 +320,7 @@ impl Api {
     /// still be able to load the module: the module then falls back to
     /// replacing the array instead of merging into it. When the symbol is
     /// missing this returns `false`.
-    ///
-    /// # Safety
-    ///
-    /// Must only be called from inside zsh with a NUL-terminated name.
-    pub unsafe fn get_param_array(&self, name: &std::ffi::CStr, out: &mut Vec<String>) -> bool {
+    pub fn get_param_array(&self, name: &std::ffi::CStr, out: &mut Vec<String>) -> bool {
         // Safety: caller guarantees zsh context and a valid name.
         unsafe { read_array(self.getaparam, name, out) }
     }
@@ -355,11 +336,7 @@ impl Api {
     /// another parameter read.
     ///
     /// Returns the number of bytes written.
-    ///
-    /// # Safety
-    ///
-    /// Must only be called from inside zsh with a NUL-terminated name.
-    pub unsafe fn read_param_bytes(
+    pub fn read_param_bytes(
         &self,
         name: &std::ffi::CStr,
         out: &mut Vec<u8>,
@@ -382,11 +359,7 @@ impl Api {
     /// The command line is read this way: a user can paste an arbitrarily
     /// long line, and the module must not copy it into its own memory just
     /// to decide that it is too long to highlight.
-    ///
-    /// # Safety
-    ///
-    /// Must only be called from inside zsh with a NUL-terminated name.
-    pub unsafe fn read_param_bytes_capped(
+    pub fn read_param_bytes_capped(
         &self,
         name: &std::ffi::CStr,
         out: &mut Vec<u8>,
@@ -417,11 +390,7 @@ impl Api {
     ///
     /// `scratch` is reused to hold the raw bytes for diagnostics; pass a
     /// zero-capacity vector and ignore it if that is not needed.
-    ///
-    /// # Safety
-    ///
-    /// Must only be called from inside zsh with a NUL-terminated name.
-    pub unsafe fn read_param_i64(
+    pub fn read_param_i64(
         &self,
         name: &std::ffi::CStr,
         scratch: &mut Vec<u8>,
@@ -482,11 +451,7 @@ impl Api {
     /// The return value is not meaningful: `setaparam` is declared to return
     /// `int` but returns a `Param` pointer truncated to `int`
     /// (`zsh-src/Src/params.c:3556-3559`), so it always looks like garbage.
-    ///
-    /// # Safety
-    ///
-    /// Must only be called from inside zsh with NUL-terminated arguments.
-    pub unsafe fn set_param_string(&self, name: &std::ffi::CStr, value: &std::ffi::CStr) {
+    pub fn set_param_string(&self, name: &std::ffi::CStr, value: &std::ffi::CStr) {
         // Two slots, NULL-terminated: the value and the terminator.
         let slots = core::mem::size_of::<*mut c_char>() * 2;
         // Safety: zalloc is resolved and we are inside zsh.
@@ -517,11 +482,7 @@ impl Api {
     /// The rows themselves must come from `ztrdup` and the row array from
     /// `zalloc`; zsh frees both. See [`Api::set_param_string`] for the
     /// ownership rules and why `zhalloc`/`dupstring` are wrong.
-    ///
-    /// # Safety
-    ///
-    /// Must only be called from inside zsh.
-    pub unsafe fn set_param_array(&self, name: &std::ffi::CStr, rows: &[&std::ffi::CStr]) {
+    pub fn set_param_array(&self, name: &std::ffi::CStr, rows: &[&std::ffi::CStr]) {
         let bytes = core::mem::size_of::<*mut c_char>() * (rows.len() + 1);
         // Safety: zalloc is resolved and we are inside zsh.
         unsafe {

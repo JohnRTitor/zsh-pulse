@@ -13,7 +13,11 @@ repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 profile="${1:-release}"
 
 echo "building zsh-module ($profile)…"
-cargo build --profile "$profile" -p zsh-module
+if [ -n "${FEATURES:-}" ]; then
+  cargo build --profile "$profile" -p zsh-module --no-default-features --features "$FEATURES"
+else
+  cargo build --profile "$profile" -p zsh-module
+fi
 
 dest="$repo/bench/mp/zshpulse"
 mkdir -p "$dest"
@@ -21,7 +25,7 @@ cp "$repo/target/$profile/libzshpulse_core.so" "$dest/core.so"
 echo "installed -> $dest/core.so"
 
 # Fail loudly here rather than mid-benchmark.
-if ! zsh -f -c "module_path=('$repo/bench/mp' \$module_path); zmodload zshpulse/core; whence -w zsh-pulse-highlight zsh-pulse-complete"; then
+if ! zsh -f -c "module_path=('$repo/bench/mp' \$module_path); zmodload zshpulse/core; (( \$+builtins[zsh-pulse-highlight] || \$+builtins[zsh-pulse-complete] ))"; then
   echo "ERROR: module built but zsh refused to load it" >&2
   exit 1
 fi

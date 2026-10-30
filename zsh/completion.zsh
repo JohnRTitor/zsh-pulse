@@ -24,6 +24,20 @@ unsetopt list_beep 2>/dev/null
 LISTMAX=1000
 zstyle ':completion:*' list-prompt ''
 
+# If the completion/history builtin was not compiled into the module, exit cleanly.
+if (( ! $+builtins[zsh-pulse-complete] )); then
+  return 0
+fi
+
+local has_autocomplete=0
+local has_history=0
+if zsh-pulse-complete --has-feature=autocomplete 2>/dev/null; then
+  has_autocomplete=1
+fi
+if zsh-pulse-complete --has-feature=history 2>/dev/null; then
+  has_history=1
+fi
+
 # Load menu selection module.
 zmodload zsh/complist 2>/dev/null
 
@@ -125,8 +139,10 @@ _zsh_pulse_completer() {
   return 1
 }
 
-# Prepend zsh-pulse completer into Zsh's completer list.
-zstyle ':completion:*' completer _zsh_pulse_completer _complete
+# Prepend zsh-pulse completer into Zsh's completer list if autocomplete is enabled.
+if (( has_autocomplete )); then
+  zstyle ':completion:*' completer _zsh_pulse_completer _complete
+fi
 
 # -----------------------------------------------------------------------------
 # 2. History Search & Navigation (Fish Parity)
@@ -264,24 +280,36 @@ _zsh_pulse_bind_all() {
   done
 }
 
-# Up-Arrow / History search
-_zsh_pulse_bind_all up-line-or-search '^[[A' '^[OA' '^P'
-bindkey -M vicmd 'k' up-line-or-search 2>/dev/null
-bindkey -M vicmd '^[[A' up-line-or-search 2>/dev/null
-bindkey -M vicmd '^[OA' up-line-or-search 2>/dev/null
+# Up-Arrow / History search & Down-Arrow
+if (( has_history )); then
+  _zsh_pulse_bind_all up-line-or-search '^[[A' '^[OA' '^P'
+  bindkey -M vicmd 'k' up-line-or-search 2>/dev/null
+  bindkey -M vicmd '^[[A' up-line-or-search 2>/dev/null
+  bindkey -M vicmd '^[OA' up-line-or-search 2>/dev/null
 
-# Down-Arrow / Menu selection
-_zsh_pulse_bind_all down-line-or-select '^[[B' '^[OB' '^N'
-bindkey -M vicmd 'j' down-line-or-select 2>/dev/null
-bindkey -M vicmd '^[[B' down-line-or-select 2>/dev/null
-bindkey -M vicmd '^[OB' down-line-or-select 2>/dev/null
+  _zsh_pulse_bind_all down-line-or-select '^[[B' '^[OB' '^N'
+  bindkey -M vicmd 'j' down-line-or-select 2>/dev/null
+  bindkey -M vicmd '^[[B' down-line-or-select 2>/dev/null
+  bindkey -M vicmd '^[OB' down-line-or-select 2>/dev/null
 
-# Tab (toggle/hide menu) & Shift-Tab (reverse)
-_zsh_pulse_bind_all zsh-pulse-tab '^I'
-bindkey -M menuselect '^I' send-break 2>/dev/null
-bindkey -M menuselect '^M' .accept-line 2>/dev/null
-bindkey -M menuselect '^J' .accept-line 2>/dev/null
-bindkey -M menuselect '\r' .accept-line 2>/dev/null
+  # Interactive history search menu
+  _zsh_pulse_bind_all zsh-pulse-history-search '^R'
+fi
+
+# Autocomplete & tab bindings
+if (( has_autocomplete )); then
+  # Tab (toggle/hide menu) & Shift-Tab (reverse)
+  _zsh_pulse_bind_all zsh-pulse-tab '^I'
+  bindkey -M menuselect '^I' send-break 2>/dev/null
+  bindkey -M menuselect '^M' .accept-line 2>/dev/null
+  bindkey -M menuselect '^J' .accept-line 2>/dev/null
+  bindkey -M menuselect '\r' .accept-line 2>/dev/null
+
+  # Ghost text acceptance
+  _zsh_pulse_bind_all forward-char '^[[C' '^[OC' '^F'
+  _zsh_pulse_bind_all end-of-line '^E'
+  _zsh_pulse_bind_all forward-word '^[f' '^[^[[C' '^[[1;3C' '^[[1;5C'
+fi
 
 # Menu selection navigation: single keystroke per candidate
 bindkey -M menuselect '^[[A' .up-line-or-history 2>/dev/null
@@ -309,14 +337,6 @@ _zsh_pulse_bind_all reverse-menu-complete '^[[Z'
 [[ -n "$terminfo[kcbt]" ]] && _zsh_pulse_bind_all reverse-menu-complete "$terminfo[kcbt]"
 bindkey -M menuselect '^[[Z' reverse-menu-complete 2>/dev/null
 [[ -n "$terminfo[kcbt]" ]] && bindkey -M menuselect "$terminfo[kcbt]" reverse-menu-complete 2>/dev/null
-
-# Ghost text acceptance
-_zsh_pulse_bind_all forward-char '^[[C' '^[OC' '^F'
-_zsh_pulse_bind_all end-of-line '^E'
-_zsh_pulse_bind_all forward-word '^[f' '^[^[[C' '^[[1;3C' '^[[1;5C'
-
-# Interactive history search menu
-_zsh_pulse_bind_all zsh-pulse-history-search '^R'
 
 unfunction _zsh_pulse_bind_all 2>/dev/null
 

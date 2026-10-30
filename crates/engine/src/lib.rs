@@ -4,6 +4,14 @@
 //! `zsh-module` boundary hands in plain Rust values. That keeps the interesting
 //! logic testable without a shell.
 
+#[cfg(not(any(
+    feature = "highlight",
+    feature = "autocomplete",
+    feature = "history",
+    feature = "history-navigation"
+)))]
+compile_error!("At least one feature must be enabled: 'highlight', 'autocomplete', or 'history'.");
+
 pub mod state;
 pub mod worker;
 

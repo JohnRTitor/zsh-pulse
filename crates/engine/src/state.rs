@@ -47,10 +47,16 @@ pub enum EngineStatus {
 
 /// The engine's shared state.
 ///
-use std::path::{Path, PathBuf};
+#[cfg(any(feature = "autocomplete", feature = "history", feature = "history-navigation"))]
+use std::path::PathBuf;
+#[cfg(any(feature = "history", feature = "history-navigation"))]
+use std::path::Path;
+#[cfg(any(feature = "history", feature = "history-navigation"))]
 use std::sync::RwLock;
 
+#[cfg(any(feature = "autocomplete", feature = "history", feature = "history-navigation"))]
 use completion::{CompletionContext, CompletionOutcome};
+#[cfg(any(feature = "history", feature = "history-navigation"))]
 use history::HistoryIndex;
 
 /// Deliberately tiny in Stage B. It exists to prove the boundary works before
@@ -60,10 +66,13 @@ pub struct EngineState {
     status: EngineStatus,
     line: LineSnapshot,
     /// How many times the highlight entry point has been invoked.
+    #[cfg(feature = "highlight")]
     highlight_calls: AtomicU64,
     /// How many times the completion entry point has been invoked.
+    #[cfg(any(feature = "autocomplete", feature = "history", feature = "history-navigation"))]
     completion_calls: AtomicU64,
     /// In-memory history index.
+    #[cfg(any(feature = "history", feature = "history-navigation"))]
     history: RwLock<HistoryIndex>,
 }
 
@@ -79,8 +88,11 @@ impl EngineState {
         Self {
             status: EngineStatus::Idle,
             line: LineSnapshot::new(),
+            #[cfg(feature = "highlight")]
             highlight_calls: AtomicU64::new(0),
+            #[cfg(any(feature = "autocomplete", feature = "history", feature = "history-navigation"))]
             completion_calls: AtomicU64::new(0),
+            #[cfg(any(feature = "history", feature = "history-navigation"))]
             history: RwLock::new(HistoryIndex::new()),
         }
     }
@@ -106,22 +118,26 @@ impl EngineState {
     }
 
     /// Record a highlight invocation and advance the line revision.
+    #[cfg(feature = "highlight")]
     pub fn record_highlight(&self) -> u64 {
         self.highlight_calls.fetch_add(1, Ordering::Relaxed);
         self.line.bump()
     }
 
     /// Total highlight invocations.
+    #[cfg(feature = "highlight")]
     pub fn highlight_calls(&self) -> u64 {
         self.highlight_calls.load(Ordering::Relaxed)
     }
 
     /// Total completion invocations.
+    #[cfg(any(feature = "autocomplete", feature = "history", feature = "history-navigation"))]
     pub fn completion_calls(&self) -> u64 {
         self.completion_calls.load(Ordering::Relaxed)
     }
 
     /// Lazily load or refresh history index from a file path.
+    #[cfg(any(feature = "history", feature = "history-navigation"))]
     pub fn ensure_history_loaded(&self, path: &Path) {
         let mut hist = self.history.write().unwrap_or_else(|e| e.into_inner());
         if hist.is_empty() {
@@ -134,6 +150,7 @@ impl EngineState {
     }
 
     /// Compute ghost text extension for the given line and cursor.
+    #[cfg(feature = "autocomplete")]
     pub fn autosuggest(
         &self,
         line: &[u8],
@@ -141,13 +158,20 @@ impl EngineState {
         cwd: PathBuf,
         home: PathBuf,
     ) -> Option<String> {
+        #[cfg(any(feature = "history", feature = "history-navigation"))]
         let hist_guard = self.history.read().unwrap_or_else(|e| e.into_inner());
+        #[cfg(any(feature = "history", feature = "history-navigation"))]
+        let hist_ref = Some(&*hist_guard);
+        #[cfg(not(any(feature = "history", feature = "history-navigation")))]
+        let hist_ref: Option<&completion::HistoryIndex> = None;
+
         let ctx = CompletionContext::new(line, cursor, cwd, home);
-        let outcome = completion::complete(&ctx, Some(&*hist_guard), 5);
+        let outcome = completion::complete(&ctx, hist_ref, 5);
         outcome.autosuggestion
     }
 
     /// Compute ranked completion candidates for the given line and cursor.
+    #[cfg(feature = "autocomplete")]
     pub fn complete(
         &self,
         line: &[u8],
@@ -157,12 +181,19 @@ impl EngineState {
         max_candidates: usize,
     ) -> CompletionOutcome {
         self.completion_calls.fetch_add(1, Ordering::Relaxed);
+        #[cfg(any(feature = "history", feature = "history-navigation"))]
         let hist_guard = self.history.read().unwrap_or_else(|e| e.into_inner());
+        #[cfg(any(feature = "history", feature = "history-navigation"))]
+        let hist_ref = Some(&*hist_guard);
+        #[cfg(not(any(feature = "history", feature = "history-navigation")))]
+        let hist_ref: Option<&completion::HistoryIndex> = None;
+
         let ctx = CompletionContext::new(line, cursor, cwd, home);
-        completion::complete(&ctx, Some(&*hist_guard), max_candidates)
+        completion::complete(&ctx, hist_ref, max_candidates)
     }
 
     /// Compute history-only candidates for interactive history search.
+    #[cfg(any(feature = "history", feature = "history-navigation"))]
     pub fn complete_history(
         &self,
         line: &[u8],
@@ -178,6 +209,7 @@ impl EngineState {
     }
 
     /// Compute bounded path candidates only.
+    #[cfg(feature = "autocomplete")]
     pub fn complete_paths(
         &self,
         line: &[u8],
@@ -223,6 +255,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "highlight")]
     fn recording_a_highlight_advances_the_revision() {
         let mut e = EngineState::new();
         e.activate();

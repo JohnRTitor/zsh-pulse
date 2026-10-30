@@ -28,6 +28,8 @@
 //! that plugins can tell *whose* entries they are looking at
 //! (`zsh-src/Doc/Zsh/zle.yo:986-998`), and it costs eleven bytes.
 
+#![forbid(unsafe_code)]
+
 use highlight::{char_offset, HighlightSpan, StyleId};
 
 /// The `memo=` token that identifies our entries.
@@ -250,10 +252,7 @@ impl Entries {
         self.buf
             .split_inclusive(|b| *b == 0)
             .filter(|row| !row.is_empty())
-            .map(|row| {
-                // Safety: every row ends with a NUL and contains no other.
-                unsafe { std::ffi::CStr::from_bytes_with_nul_unchecked(row) }
-            })
+            .filter_map(|row| std::ffi::CStr::from_bytes_with_nul(row).ok())
             .collect()
     }
 

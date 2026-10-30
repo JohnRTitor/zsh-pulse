@@ -1,6 +1,11 @@
 # zsh-pulse — the zsh side of the plugin: the hooks.
 #
 # Sourced by `init.zsh` once the module has been loaded.
+
+# If the highlight feature was not compiled into the module, exit cleanly.
+if (( ! $+builtins[zsh-pulse-highlight] )); then
+  return 0
+fi
 #
 # Two hooks are installed:
 #
@@ -390,7 +395,7 @@ zsh-pulse-highlight-redraw() {
   # When menu selection or completion is active, immediately unset ghost autosuggestions
   # and skip both typeahead and highlight mutation to prevent screen flicker and cursor desynchronization.
   if [[ $KEYMAP == menuselect || -n $MENUSELECT || -n $MENUMODE || $_ZSH_PULSE_MENU_ACTIVE == 1 ]] ||
-     zsh-pulse-complete --is-menu-active 2>/dev/null; then
+     { (( $+builtins[zsh-pulse-complete] )) && zsh-pulse-complete --is-menu-active 2>/dev/null; }; then
     unset POSTDISPLAY
     return 0
   fi
@@ -435,8 +440,8 @@ zsh-pulse-highlight-redraw() {
 
   # Real-time ghost autosuggestion from zsh-pulse (sub-10us latency)
   if (( ! PENDING && ! KEYS_QUEUED_COUNT )); then
-    if [[ $CURSOR -ge $#BUFFER && -n $BUFFER ]]; then
-      zsh-pulse-complete --autosuggest
+    if [[ $CURSOR -ge $#BUFFER && -n $BUFFER ]] && (( $+builtins[zsh-pulse-complete] )); then
+      zsh-pulse-complete --autosuggest 2>/dev/null
       if [[ -n $_zsh_pulse_autosuggestion ]]; then
         POSTDISPLAY="$_zsh_pulse_autosuggestion"
       else

@@ -30,6 +30,7 @@ fn module_loads_into_a_bare_zsh() {
 }
 
 #[test]
+#[cfg(feature = "highlight")]
 fn builtin_is_registered_under_its_exact_name() {
     require_zsh!();
     // The name must be exactly `zsh-pulse-highlight`: a Rust `&str` is not
@@ -51,9 +52,14 @@ fn no_garbage_names_appear_in_the_builtin_table() {
     assert!(ok, "zsh exited badly: {out}");
     let mut lines: Vec<&str> = out.lines().filter(|l| l.contains("zsh-pulse")).collect();
     lines.sort_unstable();
+    let mut expected = Vec::new();
+    #[cfg(any(feature = "autocomplete", feature = "history", feature = "history-navigation"))]
+    expected.push("zsh-pulse-complete");
+    #[cfg(feature = "highlight")]
+    expected.push("zsh-pulse-highlight");
     assert_eq!(
         lines,
-        vec!["zsh-pulse-complete", "zsh-pulse-highlight"],
+        expected,
         "unexpected entries in the builtin table: {lines:?}"
     );
 }
@@ -1386,6 +1392,7 @@ fn an_append_assignment_does_not_hide_the_command() {
 }
 
 #[test]
+#[cfg(any(feature = "autocomplete", feature = "history", feature = "history-navigation"))]
 fn complete_builtin_populates_matches_for_files() {
     require_zsh!();
     let (ok, out) = run_zsh(
@@ -1400,6 +1407,7 @@ fn complete_builtin_populates_matches_for_files() {
 }
 
 #[test]
+#[cfg(any(feature = "autocomplete", feature = "history", feature = "history-navigation"))]
 fn complete_builtin_on_large_dir_does_not_hang() {
     require_zsh!();
     let store = std::path::Path::new("/nix/store");
@@ -1483,6 +1491,7 @@ fn brackets_inside_double_quotes_do_not_break_outer_brackets_on_zsh() {
 }
 
 #[test]
+#[cfg(any(feature = "autocomplete", feature = "history", feature = "history-navigation"))]
 fn complete_builtin_tilde_expansion_preserves_tilde_slash() {
     require_zsh!();
     let (ok, out) = run_zsh(

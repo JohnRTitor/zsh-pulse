@@ -90,7 +90,27 @@ pub fn module_so() -> PathBuf {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let workspace = manifest.parent().expect("workspace root");
     let newest = newest_source_mtime(workspace).expect("scan workspace sources");
-    let stale = match std::fs::metadata(&so).and_then(|m| m.modified()) {
+
+    let feature_stamp_path = profile_dir.join("libzshpulse_core.features");
+    let current_features = {
+        let mut f = Vec::new();
+        if cfg!(feature = "highlight") {
+            f.push("highlight");
+        }
+        if cfg!(feature = "autocomplete") {
+            f.push("autocomplete");
+        }
+        if cfg!(any(feature = "history", feature = "history-navigation")) {
+            f.push("history");
+        }
+        f.join(",")
+    };
+    let feature_changed = match std::fs::read_to_string(&feature_stamp_path) {
+        Ok(prev) => prev != current_features,
+        Err(_) => true,
+    };
+
+    let stale = feature_changed || match std::fs::metadata(&so).and_then(|m| m.modified()) {
         Ok(built) => built < newest,
         Err(_) => true,
     };
@@ -100,14 +120,23 @@ pub fn module_so() -> PathBuf {
         // `--target-dir` is in use, and the rebuild would then write the
         // module somewhere the tests do not look.
         let target_dir = profile_dir.parent().expect("target directory");
-        let status = Command::new(env!("CARGO"))
-            .args(["build", "-p", "zsh-module", "--lib"])
+        let mut cmd = Command::new(env!("CARGO"));
+        cmd.args(["build", "-p", "zsh-module", "--lib"]);
+        #[cfg(not(all(feature = "highlight", feature = "autocomplete", feature = "history")))]
+        {
+            cmd.arg("--no-default-features");
+            if !current_features.is_empty() {
+                cmd.arg("--features").arg(&current_features);
+            }
+        }
+        let status = cmd
             .arg("--target-dir")
             .arg(target_dir)
             .current_dir(workspace)
             .status()
             .expect("run cargo build");
         assert!(status.success(), "rebuilding the cdylib failed: {status}");
+        let _ = std::fs::write(&feature_stamp_path, &current_features);
     }
 
     assert!(

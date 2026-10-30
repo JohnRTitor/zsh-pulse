@@ -16,8 +16,6 @@ version = "0.1.0"
 dependencies = [
  "completion",
  "history",
- "ranking",
- "zsh-abi",
 ]
 
 [[package]]

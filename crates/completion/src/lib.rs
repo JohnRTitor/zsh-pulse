@@ -15,7 +15,12 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[cfg(feature = "history")]
 use history::HistoryIndex;
+
+#[cfg(not(feature = "history"))]
+#[derive(Debug)]
+pub struct HistoryIndex;
 
 /// Maximum entries to inspect when prefix is empty.
 pub const MAX_UNFILTERED_DIR_SCAN: usize = 128;
@@ -272,6 +277,7 @@ pub fn complete_commands(ctx: &CompletionContext, history: Option<&HistoryIndex>
         Err(_) => return Vec::new(),
     };
 
+    #[allow(unused_mut)]
     let mut candidates = Vec::new();
 
     // 1. Builtins
@@ -288,6 +294,7 @@ pub fn complete_commands(ctx: &CompletionContext, history: Option<&HistoryIndex>
     }
 
     // 2. History commands (if in command position)
+    #[cfg(feature = "history")]
     if let Some(hist) = history {
         let hist_matches = hist.search_prefix(ctx.prefix.as_slice(), 8);
         for m in hist_matches {
@@ -306,6 +313,9 @@ pub fn complete_commands(ctx: &CompletionContext, history: Option<&HistoryIndex>
             }
         }
     }
+
+    #[cfg(not(feature = "history"))]
+    let _ = history;
 
     candidates
 }
@@ -326,6 +336,7 @@ pub fn complete(
     all_candidates.extend(complete_filesystem(ctx));
 
     // Also include history lines matching prefix if in argument or general position
+    #[cfg(feature = "history")]
     if let Some(hist) = history {
         let hist_cmds = hist.search_prefix(ctx.line.as_slice(), 5);
         for h in hist_cmds {
@@ -375,7 +386,9 @@ pub fn complete_history(
     history: Option<&HistoryIndex>,
     max_candidates: usize,
 ) -> CompletionOutcome {
+    #[allow(unused_mut)]
     let mut candidates = Vec::new();
+    #[cfg(feature = "history")]
     if let Some(hist) = history {
         let hist_cmds = if ctx.line.is_empty() {
             hist.search_fuzzy(b"", max_candidates)
@@ -407,6 +420,9 @@ pub fn complete_history(
             }
         }
     }
+
+    #[cfg(not(feature = "history"))]
+    let _ = (history, max_candidates);
 
     CompletionOutcome {
         candidates,
@@ -448,6 +464,7 @@ fn compute_autosuggestion(
     candidates: &[Candidate],
 ) -> Option<String> {
     // 1. Check history for a command starting with the current line
+    #[cfg(feature = "history")]
     if let Some(hist) = history {
         if !ctx.line.is_empty() {
             if let Some(full_cmd) = hist.find_most_recent_prefix(&ctx.line) {
@@ -459,6 +476,9 @@ fn compute_autosuggestion(
             }
         }
     }
+
+    #[cfg(not(feature = "history"))]
+    let _ = history;
 
     // 2. If no full-line history suggestion, check best candidate matching current word
     if let Ok(prefix_str) = std::str::from_utf8(&ctx.prefix) {
@@ -554,6 +574,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "history")]
     fn compute_autosuggestion_from_history() {
         let history_data = b"cargo build --release\n";
         let history = HistoryIndex::from_bytes(history_data);
@@ -590,6 +611,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "history")]
     fn complete_history_only_returns_history_candidates() {
         let history_data = b"git checkout main\ngit checkout -b feature\ngit status\n";
         let history = HistoryIndex::from_bytes(history_data);
