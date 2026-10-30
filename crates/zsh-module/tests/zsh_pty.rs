@@ -140,7 +140,7 @@ const ARGUMENT: &str = "SPARGXYZ";
 /// the `echo` — and the second line would never have to be drawn.
 const SECOND_ARGUMENT: &str = "SPARGZULU";
 
-/// The bytes zsh writes for the attributes shell-pulse publishes.
+/// The bytes zsh writes for the attributes zsh-pulse publishes.
 ///
 /// **Measured, not assumed.** The bytes zsh writes for an attribute come
 /// from the terminal's capabilities, so the exact sequence depends on
@@ -272,7 +272,7 @@ impl Palette {
 struct Terminal {
     /// The `TERM` to run the pseudo-terminal under.
     name: &'static str,
-    /// The bytes zsh writes for the attributes shell-pulse publishes.
+    /// The bytes zsh writes for the attributes zsh-pulse publishes.
     palette: Palette,
 }
 
@@ -294,7 +294,7 @@ struct Terminal {
 /// The shell under the pty reads its configuration from `$ZDOTDIR`, so the
 /// caller decides what it loads — with the module, or without it.
 const HARNESS: &str = r#"
-# shell-pulse — the interactive pty harness.
+# zsh-pulse — the interactive pty harness.
 #
 # Starts an interactive zsh under a pseudo-terminal, types a line into its
 # line editor and records every byte the shell writes to the terminal.
@@ -316,7 +316,7 @@ typeset -g COUNT=${SP_DONE_COUNT:-1}
 typeset -g TYPED=${SP_TYPE-}
 typeset -g OUT=${SP_OUT-}
 typeset -g TIMEOUT=${SP_TIMEOUT:-10}
-typeset -g PTY=shellpulse-pty
+typeset -g PTY=zshpulse-pty
 typeset -g CAP=''
 typeset -gi OCCURRENCES=0
 
@@ -698,7 +698,7 @@ fn wait_with_timeout(child: &mut Child, limit: Duration) -> std::io::Result<Opti
 /// The name carries the process id and the scenario's label, so two tests
 /// running in parallel never share one.
 fn temp_dir(label: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("shell-pulse-pty-{}-{label}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("zsh-pulse-pty-{}-{label}", std::process::id()));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).expect("create the temporary directory");
     dir
@@ -734,7 +734,7 @@ fn write_child_rc(dir: &Path, load_module: bool) {
         // The adapter looks for the module here, exactly as a user who
         // ran `bench/install.sh` would have it.
         rc.push_str(&format!(
-            "export SHELL_PULSE_MODULE_PATH='{}'\n",
+            "export ZSH_PULSE_MODULE_PATH='{}'\n",
             install_module().display()
         ));
         rc.push_str(&format!("source '{}'\n", adapter_path().display()));
@@ -742,7 +742,7 @@ fn write_child_rc(dir: &Path, load_module: bool) {
     // Proof that the module really loaded. Without it, "nothing was
     // highlighted" would prove nothing at all.
     rc.push_str(&format!(
-        "if (( ${{+builtins[shell-pulse-highlight]}} )); then print -r -- {MODULE_LOADED}; fi\n"
+        "if (( ${{+builtins[zsh-pulse-highlight]}} )); then print -r -- {MODULE_LOADED}; fi\n"
     ));
     fs::write(dir.join(".zshrc"), rc).expect("write the child's .zshrc");
 }
@@ -1191,7 +1191,7 @@ fn without_the_module_nothing_is_highlighted() {
     };
 
     // The control: zsh itself must not colour the line, or the assertion
-    // in the first test would prove nothing about shell-pulse.
+    // in the first test would prove nothing about zsh-pulse.
     assert!(
         !capture.contains(MODULE_LOADED.as_bytes()),
         "the module was loaded although this scenario asks for a shell \
@@ -1205,13 +1205,13 @@ fn without_the_module_nothing_is_highlighted() {
     );
     // Not one of the sequences the plugin can write may be there. zsh
     // itself must not colour the command line; if it does, the other
-    // tests in this file cannot tell shell-pulse's highlighting apart
+    // tests in this file cannot tell zsh-pulse's highlighting apart
     // from zsh's own.
     for sequence in term.palette.every_sequence() {
         assert!(
             !capture.contains(sequence),
             "zsh itself must not colour the command line; if it does, the \
-             other tests in this file cannot tell shell-pulse's highlighting \
+             other tests in this file cannot tell zsh-pulse's highlighting \
              apart from zsh's own, but the bytes {sequence:?} are in the \
              terminal output.\ncaptured {} bytes:\n{}",
             capture.bytes.len(),

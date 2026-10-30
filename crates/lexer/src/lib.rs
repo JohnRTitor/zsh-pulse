@@ -2,7 +2,7 @@
 //!
 //! # What this crate is
 //!
-//! `shell-pulse` highlights the command line as the user types. That needs
+//! `zsh-pulse` highlights the command line as the user types. That needs
 //! two things the shell cannot give us: a *token* view of the line (so a
 //! quoted string can be coloured differently from a bare word), and the
 //! ability to re-lex a line after a single keystroke **without re-reading

@@ -1,4 +1,4 @@
-# ZLE integration design — `shell-pulse`
+# ZLE integration design — `zsh-pulse`
 
 How the plugin gets its colours onto the user's screen, and what happens when
 it cannot.
@@ -50,18 +50,18 @@ module and does nothing else, and
 `init.zsh` gives up quietly if the module cannot be loaded:
 
 ```zsh
-if ! zmodload shellpulse/highlight 2>/dev/null; then
+if ! zmodload zshpulse/core 2>/dev/null; then
   return 0
 fi
 ```
 
-`widgets.zsh` defines the two widgets — `shell-pulse-highlight-redraw` and
-`shell-pulse-highlight-line-init` — and registers them with zsh's own
+`widgets.zsh` defines the two widgets — `zsh-pulse-highlight-redraw` and
+`zsh-pulse-highlight-line-init` — and registers them with zsh's own
 `add-zle-hook-widget`:
 
 ```zsh
-add-zle-hook-widget zle-line-pre-redraw shell-pulse-highlight-redraw
-add-zle-hook-widget zle-line-init shell-pulse-highlight-line-init
+add-zle-hook-widget zle-line-pre-redraw zsh-pulse-highlight-redraw
+add-zle-hook-widget zle-line-init zsh-pulse-highlight-line-init
 ```
 
 `add-zle-hook-widget` **keeps** the widgets that are already registered for
@@ -171,7 +171,7 @@ looks inside a substitution that makes up the **whole** word, splits the
 text between the `$(` and the `)` with the shell's own lexer, and answers
 for the command words in it. A substitution that does not make up the whole
 word — `x$(cmd)y` — is not looked inside. The nesting is bounded at four
-levels (`SHELL_PULSE_MAX_SUBSTITUTION_DEPTH`), so a pathological line
+levels (`ZSH_PULSE_MAX_SUBSTITUTION_DEPTH`), so a pathological line
 cannot make the adapter recurse for ever.
 
 The name that is looked up is the word *without* its quoting, because that
@@ -191,7 +191,7 @@ and only falls back to a fork for a word that is in none of them
 #### The line the adapter will look at
 
 The adapter refuses to look at a line longer than **4 KiB**
-(`SHELL_PULSE_MAX_LINE`): the length of `$BUFFER` is compared with the
+(`ZSH_PULSE_MAX_LINE`): the length of `$BUFFER` is compared with the
 limit *before* the line is split
 ([`zsh/widgets.zsh:141-143`](../../zsh/widgets.zsh#L141)), and a line that
 is too long is left alone.
@@ -214,8 +214,8 @@ split, and changes nothing about what is drawn.
 
 The lookup is a hash lookup, but it is done on every keystroke, and the
 command word rarely changes while the user types the arguments — so the
-answers are remembered (`SHELL_PULSE_COMMAND_CACHE`). An answer is only
-trusted for **two seconds** (`SHELL_PULSE_COMMAND_CACHE_TTL`).
+answers are remembered (`ZSH_PULSE_COMMAND_CACHE`). An answer is only
+trusted for **two seconds** (`ZSH_PULSE_COMMAND_CACHE_TTL`).
 
 Both the positive and the negative answers are cached, and both expire. A
 word the shell knew may stop being known — the user may `unalias` it or
@@ -231,9 +231,9 @@ The adapter quotes every array it passes on:
 
 | call | array |
 |---|---|
-| `shell-pulse-highlight-words "${words[@]}"` | the words of the line |
-| `shell-pulse-highlight-known "${(Q)word}"` | the name to look up, with the quoting removed |
-| `shell-pulse-highlight "${args[@]}"` | the argument vector for the builtin |
+| `zsh-pulse-highlight-words "${words[@]}"` | the words of the line |
+| `zsh-pulse-highlight-known "${(Q)word}"` | the name to look up, with the quoting removed |
+| `zsh-pulse-highlight "${args[@]}"` | the argument vector for the builtin |
 
 A command word may hold a character that is a glob pattern (`*`, `?`, `[`),
 and with `GLOB_SUBST` set in the user's configuration an unquoted expansion
@@ -242,7 +242,7 @@ abort the call. Quoting the arrays means that the guarantee that a command
 word is never taken for a glob pattern does not depend on the options that
 happen to be set two frames up the call stack.
 
-`shell-pulse-highlight-known` also returns early for an **empty word**:
+`zsh-pulse-highlight-known` also returns early for an **empty word**:
 `''` is a word, but it is not a name the shell could know, and the guard
 keeps the subscript lookups below from being asked about an empty key.
 
@@ -326,7 +326,7 @@ exists, in which case it is magenta, because the filesystem is consulted
 before the word is called unknown. The order the two answers are asked in
 is described in [architecture §3](architecture.md).
 
-Every published entry carries `memo=shell-pulse`
+Every published entry carries `memo=zsh-pulse`
 ([`crates/zsh-module/src/region.rs:34`](../../crates/zsh-module/src/region.rs#L34)),
 so that another plugin — or a future version of this one — can tell whose
 entries they are.
@@ -334,7 +334,7 @@ entries they are.
 A row therefore looks like:
 
 ```
-0 4 fg=green memo=shell-pulse
+0 4 fg=green memo=zsh-pulse
 ```
 
 ### 2.3 The rows are built in one reused buffer
@@ -370,7 +370,7 @@ be 256, which was a guess, and at that count the added latency was over
 200 µs.
 
 The truncation is **reported**, not silent: the entry builder returns a `bool`
-and the module logs it when `SHELL_PULSE_DEBUG` is set
+and the module logs it when `ZSH_PULSE_DEBUG` is set
 ([`crates/zsh-module/src/lib.rs:327-329`](../../crates/zsh-module/src/lib.rs#L327)).
 
 ---
@@ -495,7 +495,7 @@ zsh decides to redraw
             ├─ makezleparams(0)                zle_main.c:1534
             │     creates BUFFER / CURSOR / region_highlight for this call
             └─ our hook function runs
-                 └─ shell-pulse-highlight --region-highlight
+                 └─ zsh-pulse-highlight --region-highlight
                   ├─ read CURSOR, read BUFFER      (getsparam_u)
                   ├─ re-lex, build spans, build rows
                   └─ setaparam("region_highlight", rows)
@@ -540,7 +540,7 @@ in the adapter.
 | line length | 4 KiB (`MAX_LINE`) | `:102` | the highlights are **cleared**, not left stale |
 | wall-clock budget | 1 ms (`BUDGET`) | `:93` | the highlights are **cleared**; the next keystroke is cheap because the cache is already updated |
 | region count | 32 (`region::MAX_ENTRIES`) | `region.rs:276` | the extra regions are dropped, and the truncation is reported |
-| the adapter's line cap | 4 KiB (`SHELL_PULSE_MAX_LINE`) | `zsh/widgets.zsh:90` | the line is **not split** and its words are not walked; the module would not have highlighted it either |
+| the adapter's line cap | 4 KiB (`ZSH_PULSE_MAX_LINE`) | `zsh/widgets.zsh:90` | the line is **not split** and its words are not walked; the module would not have highlighted it either |
 
 The adapter's cap is the fourth one, and it is the one that keeps a pasted
 megabyte cheap: without it, every keystroke of such a line would cost a
@@ -581,7 +581,7 @@ There are three fallbacks, at three different levels.
 ### 6.1 The module cannot be loaded
 
 ```zsh
-if ! zmodload shellpulse/highlight 2>/dev/null; then
+if ! zmodload zshpulse/core 2>/dev/null; then
   return 0
 fi
 ```

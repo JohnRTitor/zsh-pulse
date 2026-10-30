@@ -1,7 +1,7 @@
 #!/usr/bin/env zsh
 # Per-native-call cost of the loaded zsh module.
 #
-# Isolates the FFI boundary: loads shellpulse/highlight, then invokes the
+# Isolates the FFI boundary: loads zshpulse/core, then invokes the
 # builtin N times on a *changing* buffer. The empty-loop arm subtracts zsh's
 # own interpretation cost, so what is left is the marginal cost of one
 # keystroke's worth of highlighting.
@@ -26,7 +26,7 @@ LEN=${2:-28}
 REPO=${0:A:h:h}
 MP="$REPO/bench/mp"
 
-if [[ ! -f $MP/shellpulse/highlight.so ]]; then
+if [[ ! -f $MP/zshpulse/core.so ]]; then
   print -u2 "module not installed. Run: ./bench/install.sh"
   exit 1
 fi
@@ -45,8 +45,8 @@ else
   LINE="${(j: :)parts}"
 fi
 
-BUILTIN='shell-pulse-highlight'
-LOAD="module_path=($MP \$module_path); zmodload shellpulse/highlight"
+BUILTIN='zsh-pulse-highlight'
+LOAD="module_path=($MP \$module_path); zmodload zshpulse/core"
 
 # Quote the buffer *here*, in the outer shell.
 #

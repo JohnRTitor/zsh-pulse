@@ -1,17 +1,17 @@
 #!/usr/bin/env zsh
 #
-# Startup cost and syscall behaviour of the shell-pulse zsh module.
+# Startup cost and syscall behaviour of the zsh-pulse zsh module.
 #
 # What this measures
 # -------------------
-# 1. Load cost -- how much `zmodload shellpulse/highlight` adds to the startup
+# 1. Load cost -- how much `zmodload zshpulse/core` adds to the startup
 #    of a fresh `zsh -f`.  Four arms are timed with zsh's own clock
 #    (`zmodload zsh/datetime` gives `EPOCHREALTIME`, microsecond
 #    resolution); no `hyperfine` and no external tool are needed:
 #
 #      baseline : `zsh -f -c :`
 #      path     : the same, plus the `module_path=(...)` assignment
-#      loaded   : the same, plus `zmodload shellpulse/highlight`
+#      loaded   : the same, plus `zmodload zshpulse/core`
 #      plugin   : the same, plus `source zsh/init.zsh` (the real user path)
 #
 #    `loaded - path` is what the module itself costs; `loaded - baseline` is
@@ -37,7 +37,7 @@
 #   * the module really loads and registers a builtin (`whence -w` says
 #     "builtin"), checked *before* anything is measured;
 #   * the line under test really reaches the builtin -- the module's own
-#     `SHELL_PULSE_DEBUG` diagnostics are counted, and the count must equal
+#     `ZSH_PULSE_DEBUG` diagnostics are counted, and the count must equal
 #     the number of calls made;
 #   * the syscall counter really can see a process being spawned -- a
 #     control run spawns one on purpose, inside the measurement window, and
@@ -50,10 +50,10 @@
 #
 # Environment
 # -----------
-#   SHELL_PULSE_MODULE_PATH    directory holding `shellpulse/highlight.so`
+#   ZSH_PULSE_MODULE_PATH    directory holding `zshpulse/core.so`
 #                               (default: <repo>/bench/mp)
-#   SHELL_PULSE_BENCH_SAMPLES  timing samples per arm (default: 30)
-#   SHELL_PULSE_BENCH_CALLS    builtin calls in the hot-path run (default: 50)
+#   ZSH_PULSE_BENCH_SAMPLES  timing samples per arm (default: 30)
+#   ZSH_PULSE_BENCH_CALLS    builtin calls in the hot-path run (default: 50)
 #
 # Exits non-zero if any check fails.
 #
@@ -78,27 +78,27 @@ REPO=${0:A:h:h}
 
 # Where the module lives.  `zsh/init.zsh` uses the same variable, so the two
 # can be pointed at the same build.
-MP=${SHELL_PULSE_MODULE_PATH:-$REPO/bench/mp}
+MP=${ZSH_PULSE_MODULE_PATH:-$REPO/bench/mp}
 
 # Exported so that the plugin arm (`source zsh/init.zsh`) loads the very
 # same module this harness measures.
-export SHELL_PULSE_MODULE_PATH=$MP
+export ZSH_PULSE_MODULE_PATH=$MP
 
 # How many samples per timing arm, and how many times the builtin is called
 # in the hot-path run.
-SAMPLES=${SHELL_PULSE_BENCH_SAMPLES:-30}
-CALLS=${SHELL_PULSE_BENCH_CALLS:-50}
+SAMPLES=${ZSH_PULSE_BENCH_SAMPLES:-30}
+CALLS=${ZSH_PULSE_BENCH_CALLS:-50}
 
 [[ $SAMPLES == <-> ]] && (( SAMPLES >= 2 )) || {
-  print -u2 -- "ERROR: SHELL_PULSE_BENCH_SAMPLES must be a number of at least 2."
+  print -u2 -- "ERROR: ZSH_PULSE_BENCH_SAMPLES must be a number of at least 2."
   exit 1
 }
 [[ $CALLS == <-> ]] && (( CALLS >= 1 )) || {
-  print -u2 -- "ERROR: SHELL_PULSE_BENCH_CALLS must be a number of at least 1."
+  print -u2 -- "ERROR: ZSH_PULSE_BENCH_CALLS must be a number of at least 1."
   exit 1
 }
 
-# The module is loaded as `shellpulse/highlight`, never as a path: zsh's
+# The module is loaded as `zshpulse/core`, never as a path: zsh's
 # `modname_ok()` accepts only slash-separated identifiers, so absolute paths
 # and `.so` suffixes are rejected.  `${(qq)}` quotes the path for the inner
 # shell correctly even if it contains a single quote.
@@ -106,7 +106,7 @@ MP_Q=${(qq)MP}
 
 # The inner scripts.  `$module_path` is escaped so the *inner* zsh expands
 # it, not this one.
-LOAD_SNIPPET="module_path=($MP_Q \$module_path); zmodload shellpulse/highlight"
+LOAD_SNIPPET="module_path=($MP_Q \$module_path); zmodload zshpulse/core"
 
 ARM_BASELINE=":"
 ARM_PATH="module_path=($MP_Q \$module_path)"
@@ -178,11 +178,11 @@ fi
 
 if [[ ! -d $MP ]]; then
   fail "module path does not exist: $MP" \
-    "set SHELL_PULSE_MODULE_PATH to the directory that holds shellpulse/highlight.so"
+    "set ZSH_PULSE_MODULE_PATH to the directory that holds zshpulse/core.so"
 fi
 
-if [[ ! -f $MP/shellpulse/highlight.so ]]; then
-  fail "module not found: $MP/shellpulse/highlight.so" \
+if [[ ! -f $MP/zshpulse/core.so ]]; then
+  fail "module not found: $MP/zshpulse/core.so" \
     "build and install it with: ./bench/install.sh release"
 fi
 
@@ -199,7 +199,7 @@ load_check() {
   LOAD_OUTPUT=$(zsh -f -c "$1" 2>&1)
   LOAD_STATUS=$?
 }
-load_check "$LOAD_SNIPPET; whence -w shell-pulse-highlight"
+load_check "$LOAD_SNIPPET; whence -w zsh-pulse-highlight"
 if [[ $LOAD_OUTPUT != *builtin* ]]; then
   fail "the module did not load, or did not register a builtin." \
     "zsh said: ${LOAD_OUTPUT:-<nothing>}" \
@@ -453,7 +453,7 @@ parse_syscall_total() {
 # Temporary files
 # --------------------------------------------------------------------------
 
-WORK=${TMPDIR:-/tmp}/shell-pulse-bench-startup.$$
+WORK=${TMPDIR:-/tmp}/zsh-pulse-bench-startup.$$
 mkdir -p "$WORK" || fail "cannot create the temporary directory $WORK"
 
 # The temporary directory goes away however this script ends -- including
@@ -471,13 +471,13 @@ trap 'cleanup; exit 143' TERM
 # Report header
 # --------------------------------------------------------------------------
 
-print -r -- "shell-pulse -- startup cost and syscall behaviour"
+print -r -- "zsh-pulse -- startup cost and syscall behaviour"
 print -r -- "=================================================="
 print -r -- ""
 report "zsh version" "$(zsh --version)" ""
 report "module path" "$MP" ""
-report "module file" "$MP/shellpulse/highlight.so" ""
-report "module size" "$(stat -c %s -- "$MP/shellpulse/highlight.so" 2>/dev/null || print '?')" "bytes"
+report "module file" "$MP/zshpulse/core.so" ""
+report "module size" "$(stat -c %s -- "$MP/zshpulse/core.so" 2>/dev/null || print '?')" "bytes"
 report "timing samples per arm" "$SAMPLES" "samples"
 report "hot-path builtin calls" "$CALLS" "calls"
 
@@ -505,7 +505,7 @@ fi
 report "zsh -f (baseline)" "$(fmt_ms $BASE_MED)" "ms" \
   "min $(fmt_ms $BASE_MIN) ms, max $(fmt_ms $BASE_MAX) ms"
 report "zsh -f + module_path assignment" "$(fmt_ms $PATH_MED)" "ms"
-report "zsh -f + zmodload shellpulse/highlight" "$(fmt_ms $LOAD_MED)" "ms" \
+report "zsh -f + zmodload zshpulse/core" "$(fmt_ms $LOAD_MED)" "ms" \
   "min $(fmt_ms $LOAD_MIN) ms, max $(fmt_ms $LOAD_MAX) ms"
 if [[ -n $ARM_PLUGIN ]]; then
   report "zsh -f + source zsh/init.zsh" "$(fmt_ms $PLUGIN_MED)" "ms"
@@ -648,27 +648,27 @@ WHENCE_FILE=$WORK/whence.txt
 WHENCE_Q=${(qq)WHENCE_FILE}
 
 HOT_SCRIPT="module_path=($MP_Q \$module_path)
-zmodload shellpulse/highlight
-whence -w shell-pulse-highlight >$WHENCE_Q 2>/dev/null
+zmodload zshpulse/core
+whence -w zsh-pulse-highlight >$WHENCE_Q 2>/dev/null
 read -r whence_line <$WHENCE_Q
-[[ \$whence_line == *builtin* ]] || { print -u2 'SHELL_PULSE_FATAL: the builtin is missing'; exit 1 }
-print -u2 -- 'SHELL_PULSE_HOT_BEGIN'
+[[ \$whence_line == *builtin* ]] || { print -u2 'ZSH_PULSE_FATAL: the builtin is missing'; exit 1 }
+print -u2 -- 'ZSH_PULSE_HOT_BEGIN'
 for i in {1..$CALLS}; do
   if (( i % 2 )); then BUFFER=$BUF_A_Q; else BUFFER=$BUF_B_Q; fi
   CURSOR=8
-  shell-pulse-highlight
+  zsh-pulse-highlight
 done
-print -u2 -- 'SHELL_PULSE_HOT_END'"
+print -u2 -- 'ZSH_PULSE_HOT_END'"
 
 if (( ! STRACE_USABLE )); then
   report "hot-path spawn count" "skipped: strace is not usable" ""
   record_check "hot path spawns no process" skip "strace is not usable"
 else
-  # 3a. The run with the module's own diagnostics on.  `SHELL_PULSE_DEBUG`
+  # 3a. The run with the module's own diagnostics on.  `ZSH_PULSE_DEBUG`
   #     makes the module print what it read, so the trace shows how many
   #     calls really reached the native code.
   HOT_STATUS=0
-  SHELL_PULSE_DEBUG=1 \
+  ZSH_PULSE_DEBUG=1 \
     $STRACE -f -s 200 \
       -e trace=execve,execveat,clone,clone3,fork,vfork,write \
       -o "$WORK/hot_debug.txt" \
@@ -678,7 +678,7 @@ else
       "the inner shell refuses to run without the builtin"
   fi
 
-  if ! count_spawns "$WORK/hot_debug.txt" SHELL_PULSE_HOT_BEGIN SHELL_PULSE_HOT_END; then
+  if ! count_spawns "$WORK/hot_debug.txt" ZSH_PULSE_HOT_BEGIN ZSH_PULSE_HOT_END; then
     fail "the hot-path trace has no begin/end markers, so the spawn window is undefined."
   fi
 
@@ -734,7 +734,7 @@ else
     fail "the hot-path run without diagnostics failed (exit status $HOT_STATUS)."
   fi
 
-  if ! count_spawns "$WORK/hot_plain.txt" SHELL_PULSE_HOT_BEGIN SHELL_PULSE_HOT_END; then
+  if ! count_spawns "$WORK/hot_plain.txt" ZSH_PULSE_HOT_BEGIN ZSH_PULSE_HOT_END; then
     fail "the hot-path trace has no begin/end markers, so the spawn window is undefined."
   fi
   report "spawns inside the window (no diagnostics)" "${SPAWN[inside:total]}" "spawns"
@@ -752,7 +752,7 @@ else
   # 3c. The control.  The same counter that just reported "zero" must find
   #     a process that is spawned on purpose inside the window.  If it does
   #     not, the "zero" above is a broken counter, not a measurement.
-  CONTROL_SCRIPT="print -u2 -- 'SHELL_PULSE_HOT_BEGIN'; zsh -f -c ':'; print -u2 -- 'SHELL_PULSE_HOT_END'"
+  CONTROL_SCRIPT="print -u2 -- 'ZSH_PULSE_HOT_BEGIN'; zsh -f -c ':'; print -u2 -- 'ZSH_PULSE_HOT_END'"
   CONTROL_STATUS=0
   $STRACE -f -s 200 \
     -e trace=execve,execveat,clone,clone3,fork,vfork,write \
@@ -762,7 +762,7 @@ else
     fail "the control run failed (exit status $CONTROL_STATUS)."
   fi
 
-  if ! count_spawns "$WORK/control.txt" SHELL_PULSE_HOT_BEGIN SHELL_PULSE_HOT_END; then
+  if ! count_spawns "$WORK/control.txt" ZSH_PULSE_HOT_BEGIN ZSH_PULSE_HOT_END; then
     fail "the control trace has no begin/end markers, so the spawn window is undefined."
   fi
   report "control: spawns inside the window" "${SPAWN[inside:total]}" "spawns" "a child spawned on purpose"

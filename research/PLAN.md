@@ -1,4 +1,4 @@
-# Implementation Plan — `shell-pulse`
+# Implementation Plan — `zsh-pulse`
 
 A Rust-native interactive enhancement engine for zsh: incremental syntax
 highlighting, asynchronous completion, history intelligence and fuzzy ranking,
@@ -12,7 +12,7 @@ not by assumption.
 
 ## Starting position (verified)
 
-- Repo: single package `shell-pulse`, edition 2024, **zero dependencies**;
+- Repo: single package `zsh-pulse`, edition 2024, **zero dependencies**;
   `src/main.rs` is a hello world.
 - Toolchain: rustc/cargo 1.98.1. crates.io reachable; `criterion-0.8.2`,
   `memchr-2.8.3`, `rustix-1.1.5`, `libc-0.2.190` already in the cargo cache.
@@ -42,9 +42,9 @@ writes live ZLE state, and refuses to load safely when symbols are missing.
 |---|---|
 | B1. Cargo workspace + `zsh-abi` crate: `#[repr(C)]` `hashnode`/`builtin`, `extern "C"` decls, `setup_`/`boot_`/`cleanup_`/`finish_` (`#[no_mangle]`) | — |
 | B2. **Capability probe**: `dlsym` every required symbol at load; on any miss, fail the load cleanly and select the fallback | export variance |
-| B3. Export **both** symbol forms (`setup_` and `setup_shellpulse`); the unused one is ignored | `DYNAMIC_NAME_CLASH_OK` variance |
+| B3. Export **both** symbol forms (`setup_` and `setup_zshpulse`); the unused one is ignored | `DYNAMIC_NAME_CLASH_OK` variance |
 | B4. `catch_unwind` at every entry point — a Rust panic must never unwind into zsh | panic/abort containment |
-| B5. `$module_path` packaging (`shellpulse/core.so`, no dots) + `zmodload shellpulse/core` | absolute-path rejection |
+| B5. `$module_path` packaging (`zshpulse/core.so`, no dots) + `zmodload zshpulse/core` | absolute-path rejection |
 | B6. Measure inside a **real interactive zsh** via `zpty`: load time, per-call cost, idle RSS | validates 112 ns in ZLE context |
 | B7. Thread probe: one std thread does work, hands back via fd, main thread reads it | threads inside zsh |
 

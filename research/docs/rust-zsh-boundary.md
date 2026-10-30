@@ -1,4 +1,4 @@
-# The Rust↔Zsh boundary and ownership rules — `shell-pulse`
+# The Rust↔Zsh boundary and ownership rules — `zsh-pulse`
 
 Everything in this document is about one thing: **which side of the
 Rust↔Zsh boundary owns which byte of memory, and what must be true for the
@@ -80,7 +80,7 @@ Companion documents: [architecture](architecture.md) ·
    └────────────────────────────────────┼───────────────────────┘
                                         │
    ┌────────────────────────────────────┼───────────────────────┐
-   │  shellpulse/highlight.so           ▼                       │
+   │  zshpulse/core.so           ▼                       │
    │                                                            │
    │   zsh-abi:  Api { addbuiltins, getsparam, getsparam_u,     │
    │                  setaparam, zalloc, ztrdup }               │
@@ -109,7 +109,7 @@ links and unit-tests normally in a non-zsh process.
 
 | # | Symbol | Signature (as zsh declares it) | zsh source | Rust type | Used for |
 |---|---|---|---|---|---|
-| 1 | `addbuiltins` | `int addbuiltins(char const *nam, Builtin binl, int size)` | [`Src/module.c:543`](../upstream/zsh-src/Src/module.c#L543) | `AddBuiltinsFn` | registering the `shell-pulse-highlight` builtin |
+| 1 | `addbuiltins` | `int addbuiltins(char const *nam, Builtin binl, int size)` | [`Src/module.c:543`](../upstream/zsh-src/Src/module.c#L543) | `AddBuiltinsFn` | registering the `zsh-pulse-highlight` builtin |
 | 2 | `getsparam` | `char *getsparam(char *s)` | [`Src/params.c:3037`](../upstream/zsh-src/Src/params.c#L3037) | `GetSparamFn` | asking whether a parameter exists (`Api::param_exists`) |
 | 3 | `getsparam_u` | `char *getsparam_u(char *s)` | [`Src/params.c:3049`](../upstream/zsh-src/Src/params.c#L3049) | `GetSparamFn` | reading `BUFFER` and `CURSOR` unmetafied |
 | 4 | `setaparam` | `Param setaparam(char *s, char **aval)` | [`Src/params.c:3556`](../upstream/zsh-src/Src/params.c#L3556) | `SetaparamFn` | writing `region_highlight` |
@@ -149,7 +149,7 @@ so nobody can add one by accident.
 | `CURSOR` | read | every keystroke | via `getsparam_u`, then parsed to an `i64` by `parse_i64`; **no allocation** |
 | `region_highlight` | read (existence only) | every keystroke | `getsparam` is used only to ask "does this parameter exist?" |
 | `region_highlight` | **written** | when the styling changed | one `setaparam` per change; **nothing at all** when it did not |
-| `SHELL_PULSE_STATE` | written | only when `SHELL_PULSE_ECHO` is set | a debugging aid, off by default |
+| `ZSH_PULSE_STATE` | written | only when `ZSH_PULSE_ECHO` is set | a debugging aid, off by default |
 
 ### The argument vector
 
@@ -332,7 +332,7 @@ hash table then stores that pointer
 4. The name zsh registers is `b->node.nam` **verbatim**. The `nam` argument
    of `addbuiltins` is only used in diagnostics
    ([`zsh-src/Src/module.c:552`](../upstream/zsh-src/Src/module.c#L553)). The
-   module therefore registers the full name `shell-pulse-highlight` in
+   module therefore registers the full name `zsh-pulse-highlight` in
    `node.nam` and passes the same string as the diagnostic name.
 5. The table must be **NULL-terminated**: `addbuiltins` scans `binl[n]` for
    `n < size`, and the module's own table has a second, all-zero entry as a
@@ -349,7 +349,7 @@ hash table then stores that pointer
 A Rust `&'static str` is a `(pointer, length)` pair. Handing one to zsh as a
 `char *` makes zsh read past the end into whatever follows in `.rodata`.
 During development this produced a builtin literally named
-`shell-pulse-SHELL_PULSE_DEBUG` and corrupted zsh's builtin table.
+`zsh-pulse-ZSH_PULSE_DEBUG` and corrupted zsh's builtin table.
 
 The fix is structural: `CStr` only accepts C string literals
 ([`crates/zsh-abi/src/raw.rs:81-100`](../../crates/zsh-abi/src/raw.rs#L81)),
@@ -453,7 +453,7 @@ With `DYNAMIC_NAME_CLASH_OK` (this zsh's build), zsh calls
 ([`zsh-src/Src/module.c:1774-1777`](../upstream/zsh-src/Src/module.c#L1774)).
 Otherwise it builds `<name>` with `/` → `Qs` and `_` → `Qu`
 ([`zsh-src/Src/module.c:1780-1798`](../upstream/zsh-src/Src/module.c#L1780)),
-which for `shellpulse/highlight` is `setup_shellpulseQshighlight`.
+which for `zshpulse/core` is `setup_zshpulseQscore`.
 
 The module exports **both** forms, so one build works on either kind of zsh
 ([`crates/zsh-module/src/lib.rs:2560-2584`](../../crates/zsh-module/src/lib.rs#L2560)).

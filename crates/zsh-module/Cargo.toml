@@ -6,7 +6,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [lib]
-name = "shellpulse_highlight"
+name = "zshpulse_core"
 path = "src/lib.rs"
 # The `rlib` is what lets the conversion cost be measured on its own:
 # a `cdylib` alone cannot be linked into a benchmark.

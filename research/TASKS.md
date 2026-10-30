@@ -18,12 +18,12 @@ Legend: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked
   the load cleanly and select the fallback on any miss *(retires: export
   variance — verified working; all 6 symbols resolve on this zsh)*
 - [x] **B3** Export both symbol forms (`setup_` and
-  `setup_shellpulseQshighlight`); unused one ignored *(retires:
+  `setup_zshpulseQscore`); unused one ignored *(retires:
   `DYNAMIC_NAME_CLASH_OK` variance)*
 - [x] **B4** `catch_unwind` guard at every entry point — a Rust panic must
   never unwind into zsh *(verified by 1000-panic test)*
-- [x] **B5** `$module_path` packaging (`shellpulse/highlight.so`) +
-  `zmodload shellpulse/highlight`
+- [x] **B5** `$module_path` packaging (`zshpulse/core.so`) +
+  `zmodload zshpulse/core`
 - [x] **B6** Per-call cost measured with a reproducible harness
   (`bench/bench_module_call.zsh` + `bench/install.sh`).
 
@@ -82,7 +82,7 @@ was sound, so it was reimplemented from scratch rather than patched.
   silently measuring an **empty** buffer; then `${(qqq)}`'s double quotes broke
   the command entirely. The harness now fails loudly on either.
 - Counting `/proc/self/status` threads is unreliable under parallel tests.
-  Tests now count threads *named* `shellpulse-wrk`, which is immune to
+  Tests now count threads *named* `zshpulse-wrk`, which is immune to
   scheduling.
 
 **Exit criteria status**
@@ -101,7 +101,7 @@ the `setaparam` double-write corruption (#4 below), not threading.
 ### Findings that changed the design
 
 1. **A Rust `&str` is not NUL-terminated.** Handing one to zsh as `char *`
-   produced a builtin named `shell-pulse-SHELL_PULSE_DEBUG` and corrupted zsh's
+   produced a builtin named `zsh-pulse-ZSH_PULSE_DEBUG` and corrupted zsh's
    builtin table. `CStr` now only accepts `c"…"` literals, and a test asserts
    the trailing NUL really exists.
 2. **`setaparam` takes ownership** of the value array (`assignaparam` calls
@@ -112,7 +112,7 @@ the `setaparam` double-write corruption (#4 below), not threading.
 3. **`setaparam`'s return value is meaningless** — it returns a `Param` pointer
    truncated to `int`.
 4. **Writing a parameter twice corrupts the heap** (`free(): invalid size`).
-   The write path was therefore **gated behind `SHELL_PULSE_ECHO`** and off
+   The write path was therefore **gated behind `ZSH_PULSE_ECHO`** and off
    by default. **This blocked Stage C's `region_highlight` push — and it is
    now understood and fixed**: the values were allocated from zsh's *pool*
    allocator, whose memory `popheap()` recycles around every command, so the
@@ -253,15 +253,15 @@ same way.
     a command word may hold a glob character (`*`, `?`, `[`), and with
     `GLOB_SUBST` set in the user's configuration an unquoted expansion would
     be matched against the filesystem. The quoting goes all the way down:
-    `shell-pulse-highlight-words "${words[@]}"` and
-    `shell-pulse-highlight-known "${(Q)word}"` are quoted as well, so the
+    `zsh-pulse-highlight-words "${words[@]}"` and
+    `zsh-pulse-highlight-known "${(Q)word}"` are quoted as well, so the
     guarantee that a command word is never taken for a glob pattern does not
     depend on the options the caller happened to set two frames up.
-    `shell-pulse-highlight-known` also returns early for an empty word
+    `zsh-pulse-highlight-known` also returns early for an empty word
   - [x] **the adapter does not look at a line it will not highlight.** The
     module does not highlight a line longer than 4 KiB (`MAX_LINE`), so the
     adapter compares the length of `$BUFFER` with the same limit
-    (`SHELL_PULSE_MAX_LINE`) *before* it splits the line. The split and the
+    (`ZSH_PULSE_MAX_LINE`) *before* it splits the line. The split and the
     walk of every word would otherwise be paid on every keystroke, for a
     line that is never highlighted — and a pasted megabyte would have made
     the shell unresponsive
@@ -272,7 +272,7 @@ same way.
     it; it now sets only `extendedglob` and `noglob`, and does so locally
     (`setopt localoptions …`)
   - [x] **a substitution is only looked inside when there is one.**
-    `shell-pulse-highlight-inside` used to be called for every word of the
+    `zsh-pulse-highlight-inside` used to be called for every word of the
     line; it is now called only for a word that contains `$(` or a
     backtick. A zsh function call is not free, and this ran for every word
   - [x] **the benchmark measures the real spans.**
@@ -416,7 +416,7 @@ Three things were measured rather than guessed, and the numbers changed the
 design:
 
 - **Another plugin's highlights now survive.** The module reads the entries
-  zsh holds, drops the ones carrying its own `memo=shell-pulse`, keeps
+  zsh holds, drops the ones carrying its own `memo=zsh-pulse`, keeps
   everyone else's, and appends its own — what
   `zsh-syntax-highlighting` does
   (`research/upstream/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh:168-175`).
@@ -456,7 +456,7 @@ design:
   test skips with a printed reason.
 - The `region_highlight` array is **merged** with the entries another plugin
   left behind rather than replaced wholesale: our own entries carry
-  `memo=shell-pulse` so that they can be told apart, and everyone else's
+  `memo=zsh-pulse` so that they can be told apart, and everyone else's
   are kept. A *clear* still replaces the whole array, so another plugin's
   entries are lost when the plugin bails out to unstyled.
 - The whole-line colouring cannot know everything: a quoted command word is
@@ -476,7 +476,7 @@ design:
 - [x] **D1** Async core: bounded channel + std threads, single fd owner
   closed on every path, monotonic `revision` guard that discards stale results
   *(done — `crates/engine/src/worker.rs` runs worker thread with named thread
-  `shellpulse-wrk`, non-blocking submission, monotonic revision guard and shutdown join)*
+  `zshpulse-wrk`, non-blocking submission, monotonic revision guard and shutdown join)*
 - [x] **D2** Completion: native zsh first, Rust providers for filesystem /
   history / fuzzy; `compinit`/`compdef`/`zstyle` untouched; bounded candidate
   set with reported truncation

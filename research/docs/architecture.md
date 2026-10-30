@@ -1,4 +1,4 @@
-# Architecture — `shell-pulse`
+# Architecture — `zsh-pulse`
 
 Status: describes the code as it stands in this repository.
 Scope: the crates, the layering, the data flow, the threading model, and the
@@ -18,7 +18,7 @@ The plan this implements is [`../PLAN.md`](../PLAN.md); the work log is
 
 ## 1. What the thing is
 
-`shell-pulse` is a zsh plugin that highlights the command line as the user
+`zsh-pulse` is a zsh plugin that highlights the command line as the user
 types. The lexer is Rust; the line editor is zsh's; the two are joined by a
 native module that zsh loads with `zmodload`.
 
@@ -38,7 +38,7 @@ The constraints that shaped everything below:
 
 ```
                         ┌──────────────────┐
-                        │  zsh-module      │  cdylib: shellpulse/highlight.so
+                        │  zsh-module      │  cdylib: zshpulse/core.so
                         │  (zsh-module)    │  the only crate that talks to zsh
                         └───┬───────┬───┬──┘
                             │       │   │
@@ -114,10 +114,10 @@ implements it.
         │  looks up the widget named "zle-line-pre-redraw"
         │  and runs it (zsh-src/Src/Zle/zle_main.c:1069, :1087)
         ▼
- shell-pulse-highlight-redraw()          zsh/widgets.zsh:388
+ zsh-pulse-highlight-redraw()          zsh/widgets.zsh:388
         │  calls the builtin with --region-highlight
         ▼
- shell-pulse-highlight  (the builtin)    crates/zsh-module/src/lib.rs:1462
+ zsh-pulse-highlight  (the builtin)    crates/zsh-module/src/lib.rs:1462
         │
         ├─ guard(...)                       crates/zsh-abi/src/guard.rs:47
         │     a Rust panic can never unwind into zsh's C frames
@@ -153,7 +153,7 @@ implements it.
         │     ├─ if the spans are unchanged → return, zsh is not touched
         │     │
         │     ├─ region::Entries::build_merged(...)  crates/zsh-module/src/region.rs:212
-        │     │     one reusable byte buffer, "<start> <end> <attr> memo=shell-pulse"
+        │     │     one reusable byte buffer, "<start> <end> <attr> memo=zsh-pulse"
         │     │     another plugin's entries are kept, ours are replaced
         │     │
         │     ├─ if the elapsed time > 1 ms → clear and return
@@ -308,7 +308,7 @@ worker thread never calls into zsh.
 | Thread | Created | May call into zsh? | Lifetime |
 |---|---|---|---|
 | The shell's main thread | by zsh | yes — it is zsh | the shell's life |
-| The engine worker (`shellpulse-wrk`) | `Worker::spawn`, lazily, from `boot_` ([`crates/zsh-module/src/lib.rs:2500`](../../crates/zsh-module/src/lib.rs#L2500)) | **never** — it holds no zsh handle at all ([`crates/engine/src/worker.rs:8-12`](../../crates/engine/src/worker.rs#L8)) | until the `Worker` is dropped, which joins the thread ([`crates/engine/src/worker.rs:201-214`](../../crates/engine/src/worker.rs#L201)) |
+| The engine worker (`zshpulse-wrk`) | `Worker::spawn`, lazily, from `boot_` ([`crates/zsh-module/src/lib.rs:2500`](../../crates/zsh-module/src/lib.rs#L2500)) | **never** — it holds no zsh handle at all ([`crates/engine/src/worker.rs:8-12`](../../crates/engine/src/worker.rs#L8)) | until the `Worker` is dropped, which joins the thread ([`crates/engine/src/worker.rs:201-214`](../../crates/engine/src/worker.rs#L201)) |
 
 The worker's discipline is two rules
 ([`crates/engine/src/worker.rs:8-15`](../../crates/engine/src/worker.rs#L8)):
@@ -438,7 +438,7 @@ full in the [boundary document](rust-zsh-boundary.md).
 * **Chosen:** `zle-line-pre-redraw`, installed with zsh's own
   `add-zle-hook-widget`
   ([`zsh/widgets.zsh`](../../zsh/widgets.zsh),
-  `shell-pulse-highlight-redraw`).
+  `zsh-pulse-highlight-redraw`).
 * **Rejected:** wrapping every widget the way FSH does
   ([`../upstream/fsh/fast-syntax-highlighting.plugin.zsh:242-284`](../upstream/fsh/fast-syntax-highlighting.plugin.zsh)),
   whose cost scales with the user's widget count.

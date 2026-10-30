@@ -1,9 +1,9 @@
-# shell-pulse completion, autosuggestions, and pager adapter.
+# zsh-pulse completion, autosuggestions, and pager adapter.
 #
 # Provides:
 # 1. Hybrid Completer Integration:
 #    - Preserves 100% of native Zsh completers (_complete: git, cargo, docker, nix, flags, subcommands).
-#    - Intercepts paths with shell-pulse's bounded Rust scanner to eliminate large directory hangs (/nix/store).
+#    - Intercepts paths with zsh-pulse's bounded Rust scanner to eliminate large directory hangs (/nix/store).
 # 2. Category Grouping & Columnated Pager:
 #    - Clean headings ([directories], [files], [commands], [history], [options]).
 #    - Arrow-key menu selection via zsh/complist.
@@ -41,14 +41,14 @@ zstyle ':completion:list-choices:*' warnings format ''
 zstyle ':completion:list-choices:*' messages format ''
 
 # Real-time type-ahead completion widget (lists choices below prompt without inserting).
-_shell_pulse_typeahead_widget() {
+_zsh_pulse_typeahead_widget() {
   emulate -L zsh
   setopt extendedglob noglob
   local curcontext="list-choices:::"
 
   # Never run typeahead if menu selection is already active or in progress.
-  if [[ $KEYMAP == menuselect || -n $MENUSELECT || -n $MENUMODE || $_SHELL_PULSE_MENU_ACTIVE == 1 ]] ||
-     shell-pulse-complete --is-menu-active 2>/dev/null; then
+  if [[ $KEYMAP == menuselect || -n $MENUSELECT || -n $MENUMODE || $_ZSH_PULSE_MENU_ACTIVE == 1 ]] ||
+     zsh-pulse-complete --is-menu-active 2>/dev/null; then
     return 0
   fi
 
@@ -58,22 +58,22 @@ _shell_pulse_typeahead_widget() {
   compstate[pattern_insert]=''
   unset MENUSELECT MENUMODE 2>/dev/null
 
-  # Query shell-pulse's native Rust completion engine (<10us latency).
+  # Query zsh-pulse's native Rust completion engine (<10us latency).
   # Never invokes Zsh compsys shell scripts or spelling correctors.
-  shell-pulse-complete --max=16
+  zsh-pulse-complete --max=16
 
-  if (( ${#_shell_pulse_matches[@]} > 0 )); then
+  if (( ${#_zsh_pulse_matches[@]} > 0 )); then
     local -a descs
     local maxw=$(( COLUMNS > 4 ? COLUMNS - 2 : 78 ))
     local d
-    for d in "${_shell_pulse_descriptions[@]}"; do
+    for d in "${_zsh_pulse_descriptions[@]}"; do
       if (( ${#d} > maxw )); then
         descs+=( "${d[1,maxw]}" )
       else
         descs+=( "$d" )
       fi
     done
-    compadd -Q -U -d descs -a _shell_pulse_matches
+    compadd -Q -U -d descs -a _zsh_pulse_matches
     compstate[list]='list force'
   else
     compstate[list]=''
@@ -86,32 +86,32 @@ _shell_pulse_typeahead_widget() {
   return 2
 }
 
-zle -C shell-pulse-typeahead list-choices _shell_pulse_typeahead_widget
+zle -C zsh-pulse-typeahead list-choices _zsh_pulse_typeahead_widget
 
 # -----------------------------------------------------------------------------
 # 1. Hybrid Completer Integration
 # -----------------------------------------------------------------------------
 
-_shell_pulse_completer() {
+_zsh_pulse_completer() {
   emulate -L zsh
   setopt extendedglob noglob
 
   # If completing an explicit path or a path fragment containing a slash or tilde,
-  # use shell-pulse's bounded filesystem scanner in Rust.
+  # use zsh-pulse's bounded filesystem scanner in Rust.
   # This guarantees immune execution on massive directories like /nix/store.
   if [[ "$PREFIX" == /* || "$PREFIX" == ./* || "$PREFIX" == ../* || "$PREFIX" == ~* || "$PREFIX" == */* ]]; then
-    shell-pulse-complete --paths-only --max=32
-    if (( ${#_shell_pulse_matches[@]} > 0 )); then
+    zsh-pulse-complete --paths-only --max=32
+    if (( ${#_zsh_pulse_matches[@]} > 0 )); then
       local -a dirs files
       local -a dir_descs file_descs
       local i
-      for (( i=1; i<=${#_shell_pulse_matches[@]}; i++ )); do
-        if [[ "${_shell_pulse_kinds[i]}" == "directory" ]]; then
-          dirs+=("${_shell_pulse_matches[i]}")
-          dir_descs+=("${_shell_pulse_descriptions[i]}")
+      for (( i=1; i<=${#_zsh_pulse_matches[@]}; i++ )); do
+        if [[ "${_zsh_pulse_kinds[i]}" == "directory" ]]; then
+          dirs+=("${_zsh_pulse_matches[i]}")
+          dir_descs+=("${_zsh_pulse_descriptions[i]}")
         else
-          files+=("${_shell_pulse_matches[i]}")
-          file_descs+=("${_shell_pulse_descriptions[i]}")
+          files+=("${_zsh_pulse_matches[i]}")
+          file_descs+=("${_zsh_pulse_descriptions[i]}")
         fi
       done
       # Directories do not append a trailing space (-S ''); files add an auto-removable space (-q -S ' ')
@@ -125,20 +125,20 @@ _shell_pulse_completer() {
   return 1
 }
 
-# Prepend shell-pulse completer into Zsh's completer list.
-zstyle ':completion:*' completer _shell_pulse_completer _complete
+# Prepend zsh-pulse completer into Zsh's completer list.
+zstyle ':completion:*' completer _zsh_pulse_completer _complete
 
 # -----------------------------------------------------------------------------
 # 2. History Search & Navigation (Fish Parity)
 # -----------------------------------------------------------------------------
 
 # Interactive multi-line history search menu widget (bound to Ctrl-R).
-_shell_pulse_history_widget() {
+_zsh_pulse_history_widget() {
   emulate -L zsh
   setopt extendedglob noglob
-  typeset -g _SHELL_PULSE_MENU_ACTIVE=1
-  shell-pulse-complete --history-only --max=32
-  if (( ${#_shell_pulse_matches[@]} > 0 )); then
+  typeset -g _ZSH_PULSE_MENU_ACTIVE=1
+  zsh-pulse-complete --history-only --max=32
+  if (( ${#_zsh_pulse_matches[@]} > 0 )); then
     IPREFIX=""
     PREFIX="$BUFFER"
     SUFFIX=""
@@ -146,18 +146,18 @@ _shell_pulse_history_widget() {
     local -a descs
     local maxw=$(( COLUMNS > 4 ? COLUMNS - 2 : 78 ))
     local d
-    for d in "${_shell_pulse_descriptions[@]}"; do
+    for d in "${_zsh_pulse_descriptions[@]}"; do
       if (( ${#d} > maxw )); then
         descs+=( "${d[1,maxw]}" )
       else
         descs+=( "$d" )
       fi
     done
-    compadd -Q -U -l -V history -X '%B%F{magenta}[history search]%f%b' -d descs -a _shell_pulse_matches
+    compadd -Q -U -l -V history -X '%B%F{magenta}[history search]%f%b' -d descs -a _zsh_pulse_matches
   fi
 }
 
-zle -C shell-pulse-history-search menu-select _shell_pulse_history_widget
+zle -C zsh-pulse-history-search menu-select _zsh_pulse_history_widget
 
 # Fish-style prefix search on Up/Down arrows:
 # - Searches backward/forward in history matching the prefix currently in BUFFER.
@@ -166,7 +166,7 @@ autoload -Uz up-line-or-beginning-search down-line-or-beginning-search 2>/dev/nu
 zle -N up-line-or-beginning-search
 zle -N down-line-or-beginning-search
 
-_shell_pulse_up_line_or_search() {
+_zsh_pulse_up_line_or_search() {
   if [[ $LBUFFER == *$'\n'* ]]; then
     zle .up-line
   else
@@ -174,13 +174,13 @@ _shell_pulse_up_line_or_search() {
   fi
 }
 
-zle -N up-line-or-search _shell_pulse_up_line_or_search
+zle -N up-line-or-search _zsh_pulse_up_line_or_search
 
-_shell_pulse_down_line_or_select() {
+_zsh_pulse_down_line_or_select() {
   if [[ $RBUFFER == *$'\n'* ]]; then
     zle .down-line
   else
-    if [[ -n $_SHELL_PULSE_LAST_TYPEAHEAD ]]; then
+    if [[ -n $_ZSH_PULSE_LAST_TYPEAHEAD ]]; then
       zle menu-select -w 2>/dev/null || zle down-line-or-beginning-search 2>/dev/null || zle .down-line-or-history
     else
       zle down-line-or-beginning-search 2>/dev/null || zle .down-line-or-history
@@ -188,14 +188,14 @@ _shell_pulse_down_line_or_select() {
   fi
 }
 
-zle -N down-line-or-select _shell_pulse_down_line_or_select
+zle -N down-line-or-select _zsh_pulse_down_line_or_select
 
 # -----------------------------------------------------------------------------
 # 4. Fish-Style Autosuggestion Acceptance (Full Line & Word-by-Word)
 # -----------------------------------------------------------------------------
 
 # Forward-char / Right-Arrow widget: accepts the entire ghost text at end of line.
-_shell_pulse_forward_char_or_accept() {
+_zsh_pulse_forward_char_or_accept() {
   if [[ -n $POSTDISPLAY && $CURSOR -ge $#BUFFER ]]; then
     BUFFER="$BUFFER$POSTDISPLAY"
     CURSOR=$#BUFFER
@@ -205,11 +205,11 @@ _shell_pulse_forward_char_or_accept() {
   fi
 }
 
-zle -N forward-char _shell_pulse_forward_char_or_accept
-zle -N end-of-line _shell_pulse_forward_char_or_accept
+zle -N forward-char _zsh_pulse_forward_char_or_accept
+zle -N end-of-line _zsh_pulse_forward_char_or_accept
 
 # Forward-word / Alt-Right / Alt-F: accepts the next single word of ghost text (Fish feature).
-_shell_pulse_forward_word_or_accept() {
+_zsh_pulse_forward_word_or_accept() {
   if [[ -n $POSTDISPLAY && $CURSOR -ge $#BUFFER ]]; then
     if [[ $POSTDISPLAY =~ '^([[:space:]]*[^[:space:]]+[[:space:]]*)' ]]; then
       local word="$MATCH"
@@ -223,37 +223,37 @@ _shell_pulse_forward_word_or_accept() {
   zle .forward-word
 }
 
-zle -N forward-word _shell_pulse_forward_word_or_accept
+zle -N forward-word _zsh_pulse_forward_word_or_accept
 
 # -----------------------------------------------------------------------------
 # 5. Tab Behavior: Toggle / Hide Completion Menu
 # -----------------------------------------------------------------------------
 
-typeset -g _SHELL_PULSE_MENU_HIDDEN=0
+typeset -g _ZSH_PULSE_MENU_HIDDEN=0
 
 # Pressing Tab when the completion menu is visible hides/clears the menu.
 # Pressing Tab when the menu is hidden or empty expands/shows completion.
-_shell_pulse_tab() {
-  if (( _SHELL_PULSE_MENU_HIDDEN == 0 )) && [[ -n $_SHELL_PULSE_LAST_TYPEAHEAD ]]; then
-    _SHELL_PULSE_MENU_HIDDEN=1
-    _SHELL_PULSE_LAST_TYPEAHEAD=""
+_zsh_pulse_tab() {
+  if (( _ZSH_PULSE_MENU_HIDDEN == 0 )) && [[ -n $_ZSH_PULSE_LAST_TYPEAHEAD ]]; then
+    _ZSH_PULSE_MENU_HIDDEN=1
+    _ZSH_PULSE_LAST_TYPEAHEAD=""
     zle -Rc 2>/dev/null
   else
-    _SHELL_PULSE_MENU_HIDDEN=0
-    _SHELL_PULSE_LAST_TYPEAHEAD="$BUFFER"
+    _ZSH_PULSE_MENU_HIDDEN=0
+    _ZSH_PULSE_LAST_TYPEAHEAD="$BUFFER"
     local -a _saved_rh=( "${region_highlight[@]}" )
-    zle shell-pulse-typeahead 2>/dev/null || zle expand-or-complete
+    zle zsh-pulse-typeahead 2>/dev/null || zle expand-or-complete
     region_highlight=( "${_saved_rh[@]}" )
   fi
 }
 
-zle -N shell-pulse-tab _shell_pulse_tab
+zle -N zsh-pulse-tab _zsh_pulse_tab
 
 # -----------------------------------------------------------------------------
 # 6. Key Bindings (main, emacs, viins, vicmd, menuselect)
 # -----------------------------------------------------------------------------
 
-_shell_pulse_bind_all() {
+_zsh_pulse_bind_all() {
   local widget="$1"
   shift
   local key
@@ -265,19 +265,19 @@ _shell_pulse_bind_all() {
 }
 
 # Up-Arrow / History search
-_shell_pulse_bind_all up-line-or-search '^[[A' '^[OA' '^P'
+_zsh_pulse_bind_all up-line-or-search '^[[A' '^[OA' '^P'
 bindkey -M vicmd 'k' up-line-or-search 2>/dev/null
 bindkey -M vicmd '^[[A' up-line-or-search 2>/dev/null
 bindkey -M vicmd '^[OA' up-line-or-search 2>/dev/null
 
 # Down-Arrow / Menu selection
-_shell_pulse_bind_all down-line-or-select '^[[B' '^[OB' '^N'
+_zsh_pulse_bind_all down-line-or-select '^[[B' '^[OB' '^N'
 bindkey -M vicmd 'j' down-line-or-select 2>/dev/null
 bindkey -M vicmd '^[[B' down-line-or-select 2>/dev/null
 bindkey -M vicmd '^[OB' down-line-or-select 2>/dev/null
 
 # Tab (toggle/hide menu) & Shift-Tab (reverse)
-_shell_pulse_bind_all shell-pulse-tab '^I'
+_zsh_pulse_bind_all zsh-pulse-tab '^I'
 bindkey -M menuselect '^I' send-break 2>/dev/null
 bindkey -M menuselect '^M' .accept-line 2>/dev/null
 bindkey -M menuselect '^J' .accept-line 2>/dev/null
@@ -305,20 +305,20 @@ bindkey -M menuselect '^B' .backward-char 2>/dev/null
 bindkey -M menuselect 'h' .backward-char 2>/dev/null
 
 bindkey -M menuselect '^R' .up-line-or-history 2>/dev/null
-_shell_pulse_bind_all reverse-menu-complete '^[[Z'
-[[ -n "$terminfo[kcbt]" ]] && _shell_pulse_bind_all reverse-menu-complete "$terminfo[kcbt]"
+_zsh_pulse_bind_all reverse-menu-complete '^[[Z'
+[[ -n "$terminfo[kcbt]" ]] && _zsh_pulse_bind_all reverse-menu-complete "$terminfo[kcbt]"
 bindkey -M menuselect '^[[Z' reverse-menu-complete 2>/dev/null
 [[ -n "$terminfo[kcbt]" ]] && bindkey -M menuselect "$terminfo[kcbt]" reverse-menu-complete 2>/dev/null
 
 # Ghost text acceptance
-_shell_pulse_bind_all forward-char '^[[C' '^[OC' '^F'
-_shell_pulse_bind_all end-of-line '^E'
-_shell_pulse_bind_all forward-word '^[f' '^[^[[C' '^[[1;3C' '^[[1;5C'
+_zsh_pulse_bind_all forward-char '^[[C' '^[OC' '^F'
+_zsh_pulse_bind_all end-of-line '^E'
+_zsh_pulse_bind_all forward-word '^[f' '^[^[[C' '^[[1;3C' '^[[1;5C'
 
 # Interactive history search menu
-_shell_pulse_bind_all shell-pulse-history-search '^R'
+_zsh_pulse_bind_all zsh-pulse-history-search '^R'
 
-unfunction _shell_pulse_bind_all 2>/dev/null
+unfunction _zsh_pulse_bind_all 2>/dev/null
 
 # -----------------------------------------------------------------------------
 # 7. Recent Directories Tracking

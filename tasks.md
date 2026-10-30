@@ -1,9 +1,9 @@
-# shell-pulse: Ultimate Completion & Syntax Highlighting Tasks
+# zsh-pulse: Ultimate Completion & Syntax Highlighting Tasks
 
 Roadmap for achieving complete feature parity with `fish-shell` and `zsh-autocomplete` while maintaining sub-microsecond latency and zero subshells.
 
 ## Phase 1: Hybrid Completer Integration (Full Tool Support)
-- [x] Configure Zsh completer pipeline: prepend `_shell_pulse_completer` before `_complete` and `_approximate`
+- [x] Configure Zsh completer pipeline: prepend `_zsh_pulse_completer` before `_complete` and `_approximate`
 - [x] Bounded filesystem paths scanner in Rust (`complete_paths`) to prevent freezes on massive directories (e.g., `/nix/store`)
 - [x] Category grouping & descriptions (`[directories]`, `[files]`, `[history search]`, `[commands]`, `[options]`)
 - [x] Fallthrough preservation of 1,000+ native Zsh tool completers (`git`, `cargo`, `docker`, `nix`, flags)
@@ -51,10 +51,10 @@ Roadmap for achieving complete feature parity with `fish-shell` and `zsh-autocom
 - [x] Add PTY end-to-end regression test for typing `hello` cleanly without corruption
 
 ## Phase 8: Safe Real-Time Auto-Listing & Tab Menu Dismissal
-- [x] Fast Rust-powered typeahead auto-listing (`shell-pulse-complete --max=16`) running in sub-10µs without compsys script overhead
-- [x] Tab toggle widget (`_shell_pulse_tab`): pressing Tab hides/clears the completion menu when visible, expands completions when hidden
+- [x] Fast Rust-powered typeahead auto-listing (`zsh-pulse-complete --max=16`) running in sub-10µs without compsys script overhead
+- [x] Tab toggle widget (`_zsh_pulse_tab`): pressing Tab hides/clears the completion menu when visible, expands completions when hidden
 - [x] Pressing Tab inside menu selection (`menuselect`) immediately dismisses and hides the menu (`send-break`)
-- [x] Down-Arrow (`_shell_pulse_down_line_or_select`) enters visible typeahead menu or performs prefix history search
+- [x] Down-Arrow (`_zsh_pulse_down_line_or_select`) enters visible typeahead menu or performs prefix history search
 
 ## Phase 9: Zsh Wordcode (`zcompile`) Compilation & Zero Parse Overhead
 - [x] Configure `nix/default.nix` with `nativeBuildInputs = [ zsh ]` and `zcompile` all installed scripts (`init.zsh`, `widgets.zsh`, `completion.zsh`)
@@ -65,26 +65,26 @@ Roadmap for achieving complete feature parity with `fish-shell` and `zsh-autocom
 - [x] Enable `compinit` in PTY test harness to ensure tests always exercise real-world interactive shell conditions
 
 ## Phase 11: History Completion Quoting Fix
-- [x] Pass `-Q` to `compadd` in `_shell_pulse_history_widget` and `_shell_pulse_typeahead_widget` to prevent Zsh from backslash-escaping spaces and quotes in history commands (e.g. `git diff` instead of `git\ diff`)
+- [x] Pass `-Q` to `compadd` in `_zsh_pulse_history_widget` and `_zsh_pulse_typeahead_widget` to prevent Zsh from backslash-escaping spaces and quotes in history commands (e.g. `git diff` instead of `git\ diff`)
 - [x] Add end-to-end PTY regression test `history_search_does_not_escape_spaces_in_command`
 
 ## Phase 12: Menu-Selection Re-Entrancy & Segmentation Fault Fix
-- [x] Guard `shell-pulse-highlight-redraw` and `_shell_pulse_typeahead_widget` against re-entrant execution during active menu selection (`KEYMAP == menuselect`, `MENUSELECT`, `MENUMODE`, or completion widgets)
+- [x] Guard `zsh-pulse-highlight-redraw` and `_zsh_pulse_typeahead_widget` against re-entrant execution during active menu selection (`KEYMAP == menuselect`, `MENUSELECT`, `MENUMODE`, or completion widgets)
 - [x] Bind Enter in `menuselect` (`^M`, `^J`, `\r`) to `.accept-line` so lines exit cleanly without triggering wrapped hook cascades in `complist.so`
 - [x] Add `zle-line-finish` hook to reset typeahead state when command is submitted
 - [x] Add end-to-end PTY regression test `menu_select_down_arrow_accept_line_does_not_segfault`
 
 ## Phase 13: Single-Keystroke Menu Selection & Navigation Fix
-- [x] Pass `-l` to `compadd` in `_shell_pulse_history_widget` and truncate descriptions to `COLUMNS - 2` so each candidate occupies exactly 1 line and never wraps onto a second row
+- [x] Pass `-l` to `compadd` in `_zsh_pulse_history_widget` and truncate descriptions to `COLUMNS - 2` so each candidate occupies exactly 1 line and never wraps onto a second row
 - [x] Bind `menuselect` keymap navigation explicitly for `^[[A`, `^[OA`, `^P`, `k` (`up-line-or-history`), `^[[B`, `^[OB`, `^N`, `j` (`down-line-or-history`), `^[[C`, `^[OC`, `^F`, `l` (`forward-char`), `^[[D`, `^[OD`, `^B`, `h` (`backward-char`), and `^R` (`up-line-or-history`)
-- [x] Guard `shell-pulse-highlight-redraw` to skip during active menu selection (`KEYMAP == menuselect || -n $MENUSELECT || -n $MENUMODE`) and unset `POSTDISPLAY` to prevent duplicate redraws and cursor desynchronization
+- [x] Guard `zsh-pulse-highlight-redraw` to skip during active menu selection (`KEYMAP == menuselect || -n $MENUSELECT || -n $MENUMODE`) and unset `POSTDISPLAY` to prevent duplicate redraws and cursor desynchronization
 - [x] Sanitize multi-line commands in `complete_history` to replace newlines with spaces for clean single-line display
 - [x] Add end-to-end PTY regression test `history_search_single_down_arrow_selects_next_candidate` verifying single Up/Down presses immediately advance the selection highlight in history search
 
 ## Phase 14: Menu Selection State Integrity & C-Level Global Detection
 - [x] Query Zsh C global symbols `localkeymap` and `menucmp` via `Api::is_menu_active(&self)` to detect active menu selection accurately even when `$KEYMAP` remains `"main"` / `"emacs"`
-- [x] Expose `--is-menu-active` flag in both `shell-pulse-complete` and `shell-pulse-highlight` builtins (0 = active, 1 = inactive)
-- [x] Guard `shell-pulse-highlight-redraw` and `_shell_pulse_typeahead_widget` with `is_menu_active` and `_SHELL_PULSE_MENU_ACTIVE` flags to prevent typeahead from executing during menu selection and invalidating `complist`
+- [x] Expose `--is-menu-active` flag in both `zsh-pulse-complete` and `zsh-pulse-highlight` builtins (0 = active, 1 = inactive)
+- [x] Guard `zsh-pulse-highlight-redraw` and `_zsh_pulse_typeahead_widget` with `is_menu_active` and `_ZSH_PULSE_MENU_ACTIVE` flags to prevent typeahead from executing during menu selection and invalidating `complist`
 - [x] Prefix `menuselect` movement bindings with dot (`.up-line-or-history`, `.down-line-or-history`, etc.) to invoke internal C built-ins directly and prevent user-wrapped widgets (e.g. from `zsh-autosuggestions`) from aborting menu selection
 - [x] Fix race condition in `zsh_integration` path tests using atomic counters
 

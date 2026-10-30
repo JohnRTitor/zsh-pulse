@@ -1,10 +1,10 @@
-# shell-pulse — the zsh side of the plugin: loading it.
+# zsh-pulse — the zsh side of the plugin: loading it.
 #
 # Source this from your `.zshrc`:
 #
-#     source /path/to/shell-pulse/zsh/init.zsh
+#     source /path/to/zsh-pulse/zsh/init.zsh
 #
-# The native module must be installed as `shellpulse/highlight.so` on
+# The native module must be installed as `zshpulse/core.so` on
 # `$module_path`; `bench/install.sh` installs it where this file looks for
 # it by default.
 #
@@ -19,13 +19,13 @@
 # module from an arbitrary directory.
 #
 # Override this before sourcing to install the module somewhere else.
-: ${SHELL_PULSE_MODULE_PATH:=${${(%):-%x}:A:h:h}/bench/mp}
+: ${ZSH_PULSE_MODULE_PATH:=${${(%):-%x}:A:h:h}/bench/mp}
 
-if [[ -d $SHELL_PULSE_MODULE_PATH ]]; then
-  module_path=("$SHELL_PULSE_MODULE_PATH" $module_path)
+if [[ -d $ZSH_PULSE_MODULE_PATH ]]; then
+  module_path=("$ZSH_PULSE_MODULE_PATH" $module_path)
 fi
 
-if ! zmodload shellpulse/highlight 2>/dev/null; then
+if ! zmodload zshpulse/core 2>/dev/null; then
   # The fallback path: no module, no damage, no highlighting from us.
   return 0
 fi

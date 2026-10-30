@@ -1,4 +1,4 @@
-//! The zsh loadable module: `shellpulse/highlight.so`.
+//! The zsh loadable module: `zshpulse/core.so`.
 //!
 //! # Safety contract
 //!
@@ -71,14 +71,14 @@ fn zsh() -> Option<&'static Api> {
 static DEBUG: OnceLock<bool> = OnceLock::new();
 
 fn debug_enabled() -> &'static bool {
-    DEBUG.get_or_init(|| std::env::var_os("SHELL_PULSE_DEBUG").is_some())
+    DEBUG.get_or_init(|| std::env::var_os("ZSH_PULSE_DEBUG").is_some())
 }
 
 /// Whether the (currently unsafe) parameter write-back is enabled.
 static ECHO: OnceLock<bool> = OnceLock::new();
 
 fn echo_enabled() -> &'static bool {
-    ECHO.get_or_init(|| std::env::var_os("SHELL_PULSE_ECHO").is_some())
+    ECHO.get_or_init(|| std::env::var_os("ZSH_PULSE_ECHO").is_some())
 }
 
 // ---------------------------------------------------------------------------
@@ -1442,7 +1442,7 @@ impl Scratch {
     /// line and nothing else.
     ///
     /// `want_whole` asks for the whole line anyway, for the diagnostic
-    /// modes (`SHELL_PULSE_DEBUG` and `SHELL_PULSE_ECHO`), which show the
+    /// modes (`ZSH_PULSE_DEBUG` and `ZSH_PULSE_ECHO`), which show the
     /// user exactly what is on the line. The copy is returned to the
     /// caller, who drops it after printing: the scratch stays small.
     ///
@@ -1519,7 +1519,7 @@ const SCRATCH_KEEP_RATIO: usize = 4;
 
 static SCRATCH: std::sync::Mutex<Scratch> = std::sync::Mutex::new(Scratch::new());
 
-/// `shell-pulse-highlight` — invoked once per redraw by the zsh adapter.
+/// `zsh-pulse-highlight` — invoked once per redraw by the zsh adapter.
 ///
 /// It reads the live ZLE state, highlights the line and hands the result to
 /// zsh through `region_highlight`.
@@ -1640,7 +1640,7 @@ unsafe extern "C" fn highlight_builtin(
                 None => std::ffi::CString::default(),
             };
             unsafe {
-                api.set_param_string(cstr(b"_shell_pulse_autosuggestion\0"), &ghost_cstr);
+                api.set_param_string(cstr(b"_zsh_pulse_autosuggestion\0"), &ghost_cstr);
             }
         }
 
@@ -1662,7 +1662,7 @@ unsafe extern "C" fn highlight_builtin(
                     String::from_utf8_lossy(line)
                 ))
                 .unwrap_or_default();
-                api.set_param_string(cstr(b"SHELL_PULSE_STATE\0"), &value);
+                api.set_param_string(cstr(b"ZSH_PULSE_STATE\0"), &value);
             }
         }
         0
@@ -1688,7 +1688,7 @@ fn install_panic_hook() {
                 .unwrap_or_else(|| "unknown".to_string());
             let _ = writeln!(
                 std::io::stderr(),
-                "shell-pulse: internal error at {}: {}",
+                "zsh-pulse: internal error at {}: {}",
                 location.as_deref().unwrap_or("?"),
                 message
             );
@@ -1711,7 +1711,7 @@ fn report_degraded() {
     }
     let _ = writeln!(
         std::io::stderr(),
-        "shell-pulse: disabled after an internal error; the shell is unaffected"
+        "zsh-pulse: disabled after an internal error; the shell is unaffected"
     );
 }
 
@@ -1786,17 +1786,17 @@ fn cstr(bytes: &[u8]) -> &std::ffi::CStr {
     unsafe { std::ffi::CStr::from_bytes_with_nul_unchecked(bytes) }
 }
 
-/// Emit a diagnostic when `SHELL_PULSE_DEBUG` is set in the environment.
+/// Emit a diagnostic when `ZSH_PULSE_DEBUG` is set in the environment.
 ///
 /// Uses raw `write(2)`: this may run before zsh has finished setting up, and
 /// it must never allocate or panic on the load path.
 fn debug(msg: &str) {
     use std::io::Write as _;
-    if std::env::var_os("SHELL_PULSE_DEBUG").is_none() {
+    if std::env::var_os("ZSH_PULSE_DEBUG").is_none() {
         return;
     }
     let mut err = std::io::stderr();
-    let _ = writeln!(err, "[shell-pulse] {msg}");
+    let _ = writeln!(err, "[zsh-pulse] {msg}");
 }
 
 
@@ -1807,19 +1807,19 @@ fn wants_autosuggest(args: *mut *mut std::ffi::c_char) -> bool {
     has_argument(args, AUTOSUGGEST_ARGUMENT)
 }
 
-/// The full builtin name as zsh will register it: `shell-pulse-highlight`.
-static BUILTIN_FULL: CStr = CStr::new(c"shell-pulse-highlight");
+/// The full builtin name as zsh will register it: `zsh-pulse-highlight`.
+static BUILTIN_FULL: CStr = CStr::new(c"zsh-pulse-highlight");
 
-/// The completion builtin name: `shell-pulse-complete`.
-static BUILTIN_COMPLETE: CStr = CStr::new(c"shell-pulse-complete");
+/// The completion builtin name: `zsh-pulse-complete`.
+static BUILTIN_COMPLETE: CStr = CStr::new(c"zsh-pulse-complete");
 
-/// `shell-pulse-complete` — computes completion candidates and ghost text.
+/// `zsh-pulse-complete` — computes completion candidates and ghost text.
 ///
 /// It reads live `BUFFER` and `CURSOR` from ZLE, queries the engine,
 /// and writes the results to Zsh parameters:
-/// - `_shell_pulse_matches`: candidate values to insert
-/// - `_shell_pulse_descriptions`: candidate formatted descriptions for menus
-/// - `_shell_pulse_autosuggestion`: inline ghost text suffix
+/// - `_zsh_pulse_matches`: candidate values to insert
+/// - `_zsh_pulse_descriptions`: candidate formatted descriptions for menus
+/// - `_zsh_pulse_autosuggestion`: inline ghost text suffix
 unsafe extern "C" fn complete_builtin(
     _nam: *mut std::ffi::c_char,
     args: *mut *mut std::ffi::c_char,
@@ -1907,7 +1907,7 @@ unsafe extern "C" fn complete_builtin(
                 None => std::ffi::CString::default(),
             };
             unsafe {
-                api.set_param_string(cstr(b"_shell_pulse_autosuggestion\0"), &ghost_cstr);
+                api.set_param_string(cstr(b"_zsh_pulse_autosuggestion\0"), &ghost_cstr);
             }
             return 0;
         }
@@ -1940,9 +1940,9 @@ unsafe extern "C" fn complete_builtin(
         let kind_refs: Vec<&std::ffi::CStr> = kind_cstrs.iter().map(|c| c.as_c_str()).collect();
 
         unsafe {
-            api.set_param_array(cstr(b"_shell_pulse_matches\0"), &match_refs);
-            api.set_param_array(cstr(b"_shell_pulse_descriptions\0"), &desc_refs);
-            api.set_param_array(cstr(b"_shell_pulse_kinds\0"), &kind_refs);
+            api.set_param_array(cstr(b"_zsh_pulse_matches\0"), &match_refs);
+            api.set_param_array(cstr(b"_zsh_pulse_descriptions\0"), &desc_refs);
+            api.set_param_array(cstr(b"_zsh_pulse_kinds\0"), &kind_refs);
         }
 
         let ghost_cstr = match outcome.autosuggestion {
@@ -1950,7 +1950,7 @@ unsafe extern "C" fn complete_builtin(
             None => std::ffi::CString::default(),
         };
         unsafe {
-            api.set_param_string(cstr(b"_shell_pulse_autosuggestion\0"), &ghost_cstr);
+            api.set_param_string(cstr(b"_zsh_pulse_autosuggestion\0"), &ghost_cstr);
         }
 
         0
@@ -2024,9 +2024,9 @@ mod tests {
     fn builtin_name_matches_the_declared_prefix() {
         let t = unsafe { &*addr_of_mut!(PULSE_BUILTINS) };
         let name0 = unsafe { std::ffi::CStr::from_ptr(t[0].node.nam) };
-        assert_eq!(name0.to_bytes_with_nul(), b"shell-pulse-highlight\0");
+        assert_eq!(name0.to_bytes_with_nul(), b"zsh-pulse-highlight\0");
         let name1 = unsafe { std::ffi::CStr::from_ptr(t[1].node.nam) };
-        assert_eq!(name1.to_bytes_with_nul(), b"shell-pulse-complete\0");
+        assert_eq!(name1.to_bytes_with_nul(), b"zsh-pulse-complete\0");
     }
 
     #[test]
@@ -2046,10 +2046,10 @@ mod tests {
             boot_,
             cleanup_,
             finish_,
-            setup_shellpulseQshighlight,
-            boot_shellpulseQshighlight,
-            cleanup_shellpulseQshighlight,
-            finish_shellpulseQshighlight,
+            setup_zshpulseQscore,
+            boot_zshpulseQscore,
+            cleanup_zshpulseQscore,
+            finish_zshpulseQscore,
         ];
         for f in fns {
             // Every entry must be a callable function pointer of the right type.
@@ -2625,7 +2625,7 @@ mod tests {
     /// appear only when the machine was busy.
     fn scratch_dir(label: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(
-            "shell-pulse-path-ttl-{}-{label}",
+            "zsh-pulse-path-ttl-{}-{label}",
             std::process::id()
         ))
     }
@@ -2771,7 +2771,7 @@ pub unsafe extern "C" fn boot_(_m: Module) -> std::ffi::c_int {
             // load time rather than on a user's first completion request.
             if let Ok(reply) = w.submit(
                 0,
-                b"shell-pulse-probe".to_vec(),
+                b"zsh-pulse-probe".to_vec(),
                 std::time::Duration::from_millis(200),
             ) {
                 debug(&format!("worker ready: rev={} checksum={}", reply.revision, reply.checksum));
@@ -2823,8 +2823,8 @@ pub unsafe extern "C" fn finish_(_m: Module) -> std::ffi::c_int {
 // --- mangled aliases, for builds without DYNAMIC_NAME_CLASH_OK --------------
 //
 // zsh builds the symbol as `<prefix><mangled module name>`. The module is
-// loaded as `shellpulse/highlight`, so `/` becomes `Qs` and `_` becomes `Qu`
-// (`zsh-src/Src/module.c:1786-1796`), giving `setup_shellpulseQshighlight`.
+// loaded as `zshpulse/core`, so `/` becomes `Qs` and `_` becomes `Qu`
+// (`zsh-src/Src/module.c:1786-1796`), giving `setup_zshpulseQscore`.
 //
 // These exist purely for the host's lookup and are never called by us.
 // `#[used]` keeps them from being stripped as unreferenced.
@@ -2840,7 +2840,7 @@ macro_rules! mangled_alias {
     };
 }
 
-mangled_alias!(setup_, setup_shellpulseQshighlight);
-mangled_alias!(boot_, boot_shellpulseQshighlight);
-mangled_alias!(cleanup_, cleanup_shellpulseQshighlight);
-mangled_alias!(finish_, finish_shellpulseQshighlight);
+mangled_alias!(setup_, setup_zshpulseQscore);
+mangled_alias!(boot_, boot_zshpulseQscore);
+mangled_alias!(cleanup_, cleanup_zshpulseQscore);
+mangled_alias!(finish_, finish_zshpulseQscore);

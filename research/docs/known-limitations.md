@@ -1,4 +1,4 @@
-# Known limitations — `shell-pulse`
+# Known limitations — `zsh-pulse`
 
 An honest list of what this plugin does **not** do, what is measured but not
 optimised, and what is untested. Every entry says what the limitation is, how
@@ -116,7 +116,7 @@ only the computation differs.
 ### 1.3 A *clear* still replaces `region_highlight` wholesale, so it clears another plugin's entries
 
 *(Fixed: the module now merges. It reads the entries zsh holds, drops the ones
-carrying its own `memo=shell-pulse`, keeps everyone else's, and appends its
+carrying its own `memo=zsh-pulse`, keeps everyone else's, and appends its
 own — exactly what `zsh-syntax-highlighting` does
 (`research/upstream/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh:168-175`).
 The residual is that a *clear* still replaces the whole array, so another
@@ -132,7 +132,7 @@ isearch region, the suffix and the pasted text — survive
 So if another plugin also writes `region_highlight` **without** merging, the
 last writer wins and the other's regions disappear.
 
-**How you can tell.** Our own entries carry `memo=shell-pulse`
+**How you can tell.** Our own entries carry `memo=zsh-pulse`
 ([`crates/zsh-module/src/region.rs:34`](../../crates/zsh-module/src/region.rs#L34)),
 which is exactly the mechanism zsh's documentation suggests for telling
 plugins' entries apart
@@ -321,7 +321,7 @@ syscall, but it still counts against the bound.
 **At most 32 regions are published for one line** (`region::MAX_ENTRIES`).
 A long line — many quoted words, many options — produces more regions than
 the old colouring did, and the ones past the cap are dropped. The truncation
-is reported when `SHELL_PULSE_DEBUG` is set, but it is not otherwise
+is reported when `ZSH_PULSE_DEBUG` is set, but it is not otherwise
 visible.
 
 **A command word the shell was not asked about is never painted red or
@@ -345,7 +345,7 @@ thread, and they sit on both sides of the Rust↔Zsh boundary:
 
 | Bound | Value | Where | What it stops |
 |---|---|---|---|
-| the adapter's line cap | 4 KiB (`SHELL_PULSE_MAX_LINE`) | [`zsh/widgets.zsh:90`](../../zsh/widgets.zsh#L90) | the line is not split and its words are not walked, so a pasted megabyte costs a length comparison and not a split |
+| the adapter's line cap | 4 KiB (`ZSH_PULSE_MAX_LINE`) | [`zsh/widgets.zsh:90`](../../zsh/widgets.zsh#L90) | the line is not split and its words are not walked, so a pasted megabyte costs a length comparison and not a split |
 | the module's line limit | 4 KiB (`MAX_LINE`) | [`crates/zsh-module/src/lib.rs:102`](../../crates/zsh-module/src/lib.rs#L102) | the line is not highlighted, and its bytes are not copied out of zsh at all |
 | the module's answer cap | 4 KiB (`MAX_ANSWER_BYTES`) | [`crates/zsh-module/src/lib.rs:1650`](../../crates/zsh-module/src/lib.rs#L1650) | the words the shell answers about are not copied into the module's own buffer without limit |
 

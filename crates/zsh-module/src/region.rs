@@ -24,14 +24,14 @@
 //!
 //! # The `memo=` field
 //!
-//! Every entry we publish carries `memo=shell-pulse`. The field exists so
+//! Every entry we publish carries `memo=zsh-pulse`. The field exists so
 //! that plugins can tell *whose* entries they are looking at
 //! (`zsh-src/Doc/Zsh/zle.yo:986-998`), and it costs eleven bytes.
 
 use highlight::{char_offset, HighlightSpan, StyleId};
 
 /// The `memo=` token that identifies our entries.
-pub const MEMO: &str = "memo=shell-pulse";
+pub const MEMO: &str = "memo=zsh-pulse";
 
 /// Whether an entry is one of ours.
 ///
@@ -392,7 +392,7 @@ mod tests {
         let rows = entries.rows();
         assert_eq!(rows.len(), 1);
         // `'héllo'` starts at character 5 and is six characters long.
-        assert_eq!(rows[0].to_bytes(), b"5 11 fg=yellow memo=shell-pulse");
+        assert_eq!(rows[0].to_bytes(), b"5 11 fg=yellow memo=zsh-pulse");
     }
 
     #[test]
@@ -400,7 +400,7 @@ mod tests {
         let spans = [HighlightSpan::new(0, 4, StyleId::Command)];
         let mut entries = Entries::new();
         entries.build(&spans, None);
-        assert_eq!(entries.rows()[0].to_bytes(), b"0 4 fg=green memo=shell-pulse");
+        assert_eq!(entries.rows()[0].to_bytes(), b"0 4 fg=green memo=zsh-pulse");
     }
 
     #[test]
@@ -413,7 +413,7 @@ mod tests {
         let mut entries = Entries::new();
         entries.build(&spans, Some(&offsets));
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries.rows()[0].to_bytes(), b"0 4 fg=green memo=shell-pulse");
+        assert_eq!(entries.rows()[0].to_bytes(), b"0 4 fg=green memo=zsh-pulse");
     }
 
     #[test]
@@ -459,7 +459,7 @@ mod tests {
             // `CStr` guarantees the NUL; what is checked here is that the
             // row holds no *interior* NUL, which would truncate it.
             assert!(!row.to_bytes().contains(&0), "no interior NUL");
-            assert!(row.to_bytes().ends_with(b"memo=shell-pulse"));
+            assert!(row.to_bytes().ends_with(b"memo=zsh-pulse"));
         }
     }
 }

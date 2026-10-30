@@ -1,20 +1,20 @@
-# The `shell-pulse` Nix package.
+# The `zsh-pulse` Nix package.
 #
 # It builds the native zsh module and installs the zsh adapter beside it:
 #
-#   $out/lib/shellpulse/highlight.so   the module (`zmodload shellpulse/highlight`)
-#   $out/share/shell-pulse/zsh/…        the adapter (`init.zsh`, `widgets.zsh`)
+#   $out/lib/zshpulse/core.so        the module (`zmodload zshpulse/core`)
+#   $out/share/zsh-pulse/zsh/…        the adapter (`init.zsh`, `widgets.zsh`)
 #
 # The layout is not a choice: zsh's `modname_ok()`
 # (`zsh-src/Src/module.c:2177-2186`) rejects an absolute path and a `.so`
 # suffix in a `zmodload` name, so the module has to be
-# `shellpulse/highlight.so` inside a directory on `$module_path`.
+# `zshpulse/core.so` inside a directory on `$module_path`.
 { lib
 , rustPlatform
 , zsh
 }:
 rustPlatform.buildRustPackage {
-  pname = "shell-pulse";
+  pname = "zsh-pulse";
   version = "0.1.0";
 
   nativeBuildInputs = [ zsh ];
@@ -42,41 +42,41 @@ rustPlatform.buildRustPackage {
   doCheck = false;
 
   postInstall = ''
-    # zsh wants `shellpulse/highlight.so`; cargo produced
-    # `libshellpulse_highlight.so`.
-    mkdir -p "$out/lib/shellpulse"
-    mv "$out/lib/libshellpulse_highlight.so" "$out/lib/shellpulse/highlight.so"
+    # zsh wants `zshpulse/core.so`; cargo produced
+    # `libzshpulse_core.so`.
+    mkdir -p "$out/lib/zshpulse"
+    mv "$out/lib/libzshpulse_core.so" "$out/lib/zshpulse/core.so"
 
     # The adapter. `init.zsh` loads the module and sources `widgets.zsh`,
     # which installs the `zle-line-pre-redraw` hook.
-    install -Dm644 zsh/init.zsh "$out/share/shell-pulse/zsh/init.zsh"
-    install -Dm644 zsh/widgets.zsh "$out/share/shell-pulse/zsh/widgets.zsh"
-    install -Dm644 zsh/completion.zsh "$out/share/shell-pulse/zsh/completion.zsh"
+    install -Dm644 zsh/init.zsh "$out/share/zsh-pulse/zsh/init.zsh"
+    install -Dm644 zsh/widgets.zsh "$out/share/zsh-pulse/zsh/widgets.zsh"
+    install -Dm644 zsh/completion.zsh "$out/share/zsh-pulse/zsh/completion.zsh"
 
     # A one-liner for a `.zshrc`: it points the adapter at the module that
     # was just built, because the adapter's own default path is relative to
     # the checkout it came from.
-    sed "s|@out@|$out|g" zsh/nix-init.zsh > "$out/share/shell-pulse/init.zsh"
+    sed "s|@out@|$out|g" zsh/nix-init.zsh > "$out/share/zsh-pulse/init.zsh"
 
     # Pre-compile all installed zsh scripts into wordcode (.zwc) using zcompile.
     # This strips comment overhead, eliminates parsing latency on shell startup,
     # and allows zsh to memory-map (mmap) the compiled bytecode directly.
-    zsh -c "zcompile '$out/share/shell-pulse/init.zsh'"
-    zsh -c "zcompile '$out/share/shell-pulse/zsh/init.zsh'"
-    zsh -c "zcompile '$out/share/shell-pulse/zsh/widgets.zsh'"
-    zsh -c "zcompile '$out/share/shell-pulse/zsh/completion.zsh'"
+    zsh -c "zcompile '$out/share/zsh-pulse/init.zsh'"
+    zsh -c "zcompile '$out/share/zsh-pulse/zsh/init.zsh'"
+    zsh -c "zcompile '$out/share/zsh-pulse/zsh/widgets.zsh'"
+    zsh -c "zcompile '$out/share/zsh-pulse/zsh/completion.zsh'"
   '';
 
   meta = {
     description = "Incremental syntax highlighting for zsh, in Rust";
     longDescription = ''
-      shell-pulse loads a small native module into zsh and highlights the
+      zsh-pulse loads a small native module into zsh and highlights the
       command line as it is typed, through zsh's `region_highlight`
       parameter. The lexer is pure Rust and re-lexes only the part of the
       line that changed.
     '';
     license = lib.licenses.mit;
     platforms = lib.platforms.unix;
-    mainProgram = "shell-pulse";
+    mainProgram = "zsh-pulse";
   };
 }

@@ -77,7 +77,7 @@ fn newest_source_mtime(dir: &std::path::Path) -> Option<std::time::SystemTime> {
 ///
 /// **Why the explicit rebuild:** `cargo test` builds this crate's rlib for
 /// the test harness but does not refresh the `cdylib`. Without this check the
-/// integration tests silently ran a `libshellpulse_highlight.so` built hours
+/// integration tests silently ran a `libzshpulse_core.so` built hours
 /// earlier — passing against code that was no longer there.
 pub fn module_so() -> PathBuf {
     let exe = std::env::current_exe().expect("test executable path");
@@ -85,7 +85,7 @@ pub fn module_so() -> PathBuf {
         .parent()
         .and_then(std::path::Path::parent)
         .expect("target/<profile>");
-    let so = profile_dir.join("libshellpulse_highlight.so");
+    let so = profile_dir.join("libzshpulse_core.so");
 
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let workspace = manifest.parent().expect("workspace root");
@@ -118,11 +118,11 @@ pub fn module_so() -> PathBuf {
     so
 }
 
-/// Create a temporary `$module_path` containing `shellpulse/highlight.so`.
+/// Create a temporary `$module_path` containing `zshpulse/core.so`.
 ///
 /// zsh requires slash-separated identifiers with no dots, so the module must
-/// live at `<dir>/shellpulse/highlight.so` and be loaded as
-/// `shellpulse/highlight` (`zsh-src/Src/module.c:2177-2186`).
+/// live at `<dir>/zshpulse/core.so` and be loaded as
+/// `zshpulse/core` (`zsh-src/Src/module.c:2177-2186`).
 ///
 /// Installed **once** per test process: cargo runs these tests in parallel, and
 /// concurrent `fs::copy` into one destination produced a truncated `.so` that
@@ -131,23 +131,23 @@ static INSTALLED: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 
 pub fn install_module() -> &'static PathBuf {
     INSTALLED.get_or_init(|| {
-        let base = std::env::temp_dir().join(format!("shell-pulse-it-{}", std::process::id()));
-        let dir = base.join("shellpulse");
+        let base = std::env::temp_dir().join(format!("zsh-pulse-it-{}", std::process::id()));
+        let dir = base.join("zshpulse");
         std::fs::create_dir_all(&dir).expect("create module dir");
-        std::fs::copy(module_so(), dir.join("highlight.so")).expect("copy cdylib");
+        std::fs::copy(module_so(), dir.join("core.so")).expect("copy cdylib");
         base
     })
 }
 
 /// Run `zsh -f` with the module on `$module_path`.
 ///
-/// `body` is zsh code run *after* `zmodload shellpulse/highlight`.
+/// `body` is zsh code run *after* `zmodload zshpulse/core`.
 /// Returns (success, combined stdout+stderr).
 pub fn run_zsh(body: &str, env: &[(&str, &str)]) -> (bool, String) {
     let mp = install_module();
     let script = format!(
         "module_path=({mp} $module_path)\n\
-         zmodload shellpulse/highlight\n\
+         zmodload zshpulse/core\n\
          {body}\n",
         mp = mp.display()
     );
@@ -164,7 +164,7 @@ pub fn run_zsh(body: &str, env: &[(&str, &str)]) -> (bool, String) {
 
 /// Whether a usable `zsh` is on `PATH`.
 ///
-/// **Why a missing zsh is a skip and not a failure:** shell-pulse is a zsh
+/// **Why a missing zsh is a skip and not a failure:** zsh-pulse is a zsh
 /// plugin. The module is a zsh loadable module, the adapter is zsh code and
 /// the highlighting only exists inside a running zsh. Without a `zsh`
 /// binary there is nothing left to assert, so failing would report a
@@ -189,7 +189,7 @@ macro_rules! require_zsh {
     () => {
         if !crate::common::zsh_available() {
             eprintln!(
-                "SKIPPED: `zsh` is not on PATH. shell-pulse is a zsh plugin: \
+                "SKIPPED: `zsh` is not on PATH. zsh-pulse is a zsh plugin: \
                  without zsh there is no shell to load the module into, so the \
                  assertion could not be made at all."
             );

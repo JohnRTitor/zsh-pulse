@@ -9,7 +9,7 @@
 //! # Skipping
 //!
 //! Every test in this file needs a `zsh` binary. When there is none the
-//! test skips with a printed reason instead of failing: shell-pulse is a
+//! test skips with a printed reason instead of failing: zsh-pulse is a
 //! zsh plugin, so without zsh there is nothing to assert, and a failure
 //! would blame the project for a missing test dependency. See
 //! `common::zsh_available`.
@@ -32,13 +32,13 @@ fn module_loads_into_a_bare_zsh() {
 #[test]
 fn builtin_is_registered_under_its_exact_name() {
     require_zsh!();
-    // The name must be exactly `shell-pulse-highlight`: a Rust `&str` is not
+    // The name must be exactly `zsh-pulse-highlight`: a Rust `&str` is not
     // NUL-terminated, and getting that wrong once produced a builtin named
-    // `shell-pulse-SHELL_PULSE_DEBUG` and corrupted zsh's builtin table.
-    let (ok, out) = run_zsh("whence -w shell-pulse-highlight", &[]);
+    // `zsh-pulse-ZSH_PULSE_DEBUG` and corrupted zsh's builtin table.
+    let (ok, out) = run_zsh("whence -w zsh-pulse-highlight", &[]);
     assert!(ok, "zsh exited badly: {out}");
     assert!(
-        out.contains("shell-pulse-highlight: builtin"),
+        out.contains("zsh-pulse-highlight: builtin"),
         "builtin not registered; got: {out}"
     );
 }
@@ -47,13 +47,13 @@ fn builtin_is_registered_under_its_exact_name() {
 fn no_garbage_names_appear_in_the_builtin_table() {
     require_zsh!();
     // Regression guard for the NUL-termination bug.
-    let (ok, out) = run_zsh("print -rl -- ${(k)builtins} | grep -i shell-pulse", &[]);
+    let (ok, out) = run_zsh("print -rl -- ${(k)builtins} | grep -i zsh-pulse", &[]);
     assert!(ok, "zsh exited badly: {out}");
-    let mut lines: Vec<&str> = out.lines().filter(|l| l.contains("shell-pulse")).collect();
+    let mut lines: Vec<&str> = out.lines().filter(|l| l.contains("zsh-pulse")).collect();
     lines.sort_unstable();
     assert_eq!(
         lines,
-        vec!["shell-pulse-complete", "shell-pulse-highlight"],
+        vec!["zsh-pulse-complete", "zsh-pulse-highlight"],
         "unexpected entries in the builtin table: {lines:?}"
     );
 }
@@ -65,10 +65,10 @@ fn malformed_input_does_not_crash() {
     // silently produce a highlight it believes in.
     let (ok, out) = run_zsh(
         "for b in '' '\"unterminated' '$((' '`' '|||' 'a=b' '\\' '${'; do\n\
-             BUFFER=$b; CURSOR=0; shell-pulse-highlight\n\
+             BUFFER=$b; CURSOR=0; zsh-pulse-highlight\n\
          done\n\
          print -r -- SURVIVED",
-        &[("SHELL_PULSE_DEBUG", "1")],
+        &[("ZSH_PULSE_DEBUG", "1")],
     );
     assert!(ok, "zsh exited badly on malformed input: {out}");
     assert!(out.contains("SURVIVED"), "did not reach the end: {out}");
@@ -80,12 +80,12 @@ fn multiline_and_unicode_input_are_handled() {
     let (ok, out) = run_zsh(
         "BUFFER=$'line one\\nline two'\n\
          CURSOR=9\n\
-         shell-pulse-highlight\n\
+         zsh-pulse-highlight\n\
          BUFFER='echo \"héllo wörld ✓ 日本語\"'\n\
          CURSOR=3\n\
-         shell-pulse-highlight\n\
+         zsh-pulse-highlight\n\
          print -r -- SURVIVED",
-        &[("SHELL_PULSE_DEBUG", "1")],
+        &[("ZSH_PULSE_DEBUG", "1")],
     );
     assert!(ok, "zsh exited badly: {out}");
     assert!(out.contains("SURVIVED"), "did not reach the end: {out}");
@@ -98,7 +98,7 @@ fn repeated_invocation_is_stable() {
     let (ok, out) = run_zsh(
         "BUFFER='cargo build --release'\n\
          CURSOR=5\n\
-         for i in {1..5000}; do shell-pulse-highlight; done\n\
+         for i in {1..5000}; do zsh-pulse-highlight; done\n\
          print -r -- REPEATED_OK",
         &[],
     );
@@ -112,9 +112,9 @@ fn loading_twice_is_harmless() {
     let mp = install_module();
     let script = format!(
         "module_path=({mp} $module_path)\n\
-         zmodload shellpulse/highlight\n\
-         zmodload shellpulse/highlight\n\
-         whence -w shell-pulse-highlight\n",
+         zmodload zshpulse/core\n\
+         zmodload zshpulse/core\n\
+         whence -w zsh-pulse-highlight\n",
         mp = mp.display()
     );
     let out = Command::new("zsh").arg("-f").arg("-c").arg(&script).output().expect("zsh");
@@ -144,9 +144,9 @@ fn worker_thread_runs_inside_real_zsh_and_answers() {
         "print -r -- \"threads=$(ls /proc/$$/task | wc -l)\"\n\
          BUFFER='git commit'\n\
          CURSOR=3\n\
-         shell-pulse-highlight\n\
+         zsh-pulse-highlight\n\
          print -r -- WORKER_PATH_OK",
-        &[("SHELL_PULSE_DEBUG", "1")],
+        &[("ZSH_PULSE_DEBUG", "1")],
     );
     assert!(ok, "zsh exited badly with a worker thread running: {out}");
     assert!(
@@ -181,9 +181,9 @@ fn zsh_survives_signals_delivered_while_a_worker_is_alive() {
              kill -CONT  $$\n\
          done\n\
          print -r -- SIGNALS_SURVIVED\n\
-         shell-pulse-highlight\n\
+         zsh-pulse-highlight\n\
          print -r -- STILL_WORKS",
-        &[("SHELL_PULSE_DEBUG", "1")],
+        &[("ZSH_PULSE_DEBUG", "1")],
     );
     // `ok` is false for a signal death as well as a non-zero exit, so this
     // covers the crash case too.
@@ -196,12 +196,12 @@ fn zsh_survives_signals_delivered_while_a_worker_is_alive() {
 fn a_missing_module_fails_cleanly_and_the_shell_survives() {
     require_zsh!();
     // The fallback path the adapter depends on: no module, no damage.
-    let empty = std::env::temp_dir().join("shell-pulse-empty-module-path");
+    let empty = std::env::temp_dir().join("zsh-pulse-empty-module-path");
     std::fs::create_dir_all(&empty).expect("create empty module path");
     let out = Command::new("zsh")
         .arg("-f")
         .arg("-c")
-        .arg("zmodload shellpulse/definitelymissing; print -r -- SHELL_STILL_WORKS")
+        .arg("zmodload zshpulse/definitelymissing; print -r -- SHELL_STILL_WORKS")
         .env("module_path", &empty)
         .output()
         .expect("zsh");
@@ -216,21 +216,21 @@ fn zsh_rejects_the_wrong_module_path_forms() {
     // Guards the packaging assumption in `modname_ok()`
     // (`zsh-src/Src/module.c:2177-2186`): an absolute path, a `.so` suffix and a
     // dot-prefixed name are all invalid, so the module must be installed as
-    // `shellpulse/highlight.so` and loaded as `shellpulse/highlight`.
+    // `zshpulse/core.so` and loaded as `zshpulse/core`.
     //
     // zsh aborts the script on a bad name (exit status 1), which is expected and
     // harmless. What must never happen is a *signal* — that would mean we
     // corrupted the shell rather than merely being rejected.
     let mp = install_module();
-    let abs = mp.join("shellpulse").join("highlight.so");
-    for bad in [abs.display().to_string(), "shellpulse/highlight.so".to_string()] {
+    let abs = mp.join("zshpulse").join("core.so");
+    for bad in [abs.display().to_string(), "zshpulse/core.so".to_string()] {
         let out = Command::new("zsh")
             .arg("-f")
             .arg("-c")
             .arg(format!(
                 "module_path=({mp} $module_path)\n\
                  zmodload {bad}\n\
-                 whence -w shell-pulse-highlight\n",
+                 whence -w zsh-pulse-highlight\n",
                 mp = mp.display(),
             ))
             .output()
@@ -238,7 +238,7 @@ fn zsh_rejects_the_wrong_module_path_forms() {
         let text = String::from_utf8_lossy(&out.stdout).into_owned();
 
         assert!(
-            !text.contains("shell-pulse-highlight: builtin"),
+            !text.contains("zsh-pulse-highlight: builtin"),
             "`zmodload {bad}` unexpectedly loaded the module"
         );
         #[cfg(unix)]
@@ -255,8 +255,8 @@ fn reads_live_buffer_and_cursor_from_inside_zsh() {
     let (ok, out) = run_zsh(
         "BUFFER='git commit --amend --no-edit'\n\
          CURSOR=24\n\
-         shell-pulse-highlight",
-        &[("SHELL_PULSE_DEBUG", "1")],
+         zsh-pulse-highlight",
+        &[("ZSH_PULSE_DEBUG", "1")],
     );
     assert!(ok, "zsh exited badly: {out}");
     assert!(
@@ -283,16 +283,16 @@ fn a_parameter_written_repeatedly_is_readable_and_does_not_corrupt_the_shell() {
     // The observable failure is a `SIGSEGV` inside `sepjoin` when the
     // parameter is read back, or a glibc "free(): invalid size" abort.
     let (ok, out) = run_zsh(
-        "export SHELL_PULSE_ECHO=1\n\
+        "export ZSH_PULSE_ECHO=1\n\
          for i in {1..25}; do\n\
              BUFFER=\"value $i\"\n\
              CURSOR=3\n\
-             shell-pulse-highlight\n\
+             zsh-pulse-highlight\n\
          done\n\
          # A command between the write and the read: this is what triggers\n\
          # zsh's pushheap/popheap pair and recycles pool memory.\n\
          :\n\
-         print -r -- \"STATE=$SHELL_PULSE_STATE\"",
+         print -r -- \"STATE=$ZSH_PULSE_STATE\"",
         &[],
     );
     assert!(ok, "zsh died after repeated parameter writes: {out}");
@@ -308,15 +308,15 @@ fn a_parameter_written_repeatedly_keeps_the_shell_usable() {
     // The same bug, seen from the other side: the shell must remain able to
     // run commands, expand the parameter and exit cleanly after many writes.
     let (ok, out) = run_zsh(
-        "export SHELL_PULSE_ECHO=1\n\
+        "export ZSH_PULSE_ECHO=1\n\
          for i in {1..200}; do\n\
              BUFFER=\"value $i\"\n\
              CURSOR=1\n\
-             shell-pulse-highlight\n\
+             zsh-pulse-highlight\n\
          done\n\
          # `setaparam` always assigns an *array* (zsh-src/Src/params.c:3318),\n\
          # so the value is element 1 of a one-element array.\n\
-         print -r -- \"VALUE=${SHELL_PULSE_STATE[1]}\"\n\
+         print -r -- \"VALUE=${ZSH_PULSE_STATE[1]}\"\n\
          print -r -- STILL_USABLE",
         &[],
     );
@@ -346,7 +346,7 @@ fn the_highlighter_fills_region_highlight() {
          WIDGET=test-widget\n\
          BUFFER='echo hi'\n\
          CURSOR=3\n\
-         shell-pulse-highlight --region-highlight --command-known=echo\n\
+         zsh-pulse-highlight --region-highlight --command-known=echo\n\
          print -r -- \"REGIONS=<${(j:,:)region_highlight}>\"",
         &[],
     );
@@ -356,7 +356,7 @@ fn the_highlighter_fills_region_highlight() {
     // The assertion is on the *whole* array, so a duplicate or a missing
     // region would fail it.
     assert!(
-        out.contains("REGIONS=<0 4 fg=green memo=shell-pulse>"),
+        out.contains("REGIONS=<0 4 fg=green memo=zsh-pulse>"),
         "unexpected regions: {out}"
     );
     // `hi` is an ordinary argument: it is not highlighted at all.
@@ -381,7 +381,7 @@ fn the_highlighter_reports_character_offsets_not_byte_offsets() {
          WIDGET=test-widget\n\
          BUFFER=$'echo \\u00e9 | grep x'\n\
          CURSOR=3\n\
-         shell-pulse-highlight --region-highlight --command-known=echo --command-known=grep\n\
+         zsh-pulse-highlight --region-highlight --command-known=echo --command-known=grep\n\
          print -r -- \"REGIONS=<${(j:,:)region_highlight}>\"",
         &[],
     );
@@ -391,8 +391,8 @@ fn the_highlighter_reports_character_offsets_not_byte_offsets() {
     // would report 8.
     assert!(
         out.contains(
-            "REGIONS=<0 4 fg=green memo=shell-pulse,7 8 fg=red memo=shell-pulse,\
-             9 13 fg=green memo=shell-pulse>"
+            "REGIONS=<0 4 fg=green memo=zsh-pulse,7 8 fg=red memo=zsh-pulse,\
+             9 13 fg=green memo=zsh-pulse>"
         ),
         "the offsets must be characters, not bytes: {out}"
     );
@@ -408,7 +408,7 @@ fn the_highlighter_does_not_create_a_global_region_highlight() {
     let (ok, out) = run_zsh(
         "BUFFER='echo hi'\n\
          CURSOR=3\n\
-         shell-pulse-highlight --region-highlight\n\
+         zsh-pulse-highlight --region-highlight\n\
          print -r -- \"EXISTS=${+parameters[region_highlight]}\"",
         &[],
     );
@@ -435,7 +435,7 @@ fn the_regions_are_not_published_unless_the_caller_asks() {
          WIDGET=test-widget\n\
          BUFFER='echo hi'\n\
          CURSOR=3\n\
-         shell-pulse-highlight --command-known=echo\n\
+         zsh-pulse-highlight --command-known=echo\n\
          print -r -- \"REGIONS=${(j:,:)region_highlight}\"",
         &[],
     );
@@ -459,9 +459,9 @@ fn an_unchanged_line_is_not_pushed_again() {
          WIDGET=test-widget\n\
          BUFFER='echo hi'\n\
          CURSOR=3\n\
-         shell-pulse-highlight --region-highlight\n\
+         zsh-pulse-highlight --region-highlight\n\
          region_highlight=(SENTINEL)\n\
-         shell-pulse-highlight --region-highlight\n\
+         zsh-pulse-highlight --region-highlight\n\
          print -r -- \"REGIONS=${(j:,:)region_highlight}\"",
         &[],
     );
@@ -485,17 +485,17 @@ fn a_changed_line_is_pushed_again() {
          WIDGET=test-widget\n\
          BUFFER='echo hi'\n\
          CURSOR=3\n\
-         shell-pulse-highlight --region-highlight --command-known=echo\n\
+         zsh-pulse-highlight --region-highlight --command-known=echo\n\
          region_highlight=(SENTINEL)\n\
          BUFFER='echo there'\n\
          CURSOR=3\n\
-         shell-pulse-highlight --region-highlight --command-known=echo\n\
+         zsh-pulse-highlight --region-highlight --command-known=echo\n\
          print -r -- \"REGIONS=${(j:,:)region_highlight}\"",
         &[],
     );
     assert!(ok, "zsh exited badly: {out}");
     assert!(
-        out.contains("REGIONS=SENTINEL,0 4 fg=green memo=shell-pulse"),
+        out.contains("REGIONS=SENTINEL,0 4 fg=green memo=zsh-pulse"),
         "a changed line must be pushed again, keeping what another plugin \
          had: {out}"
     );
@@ -513,10 +513,10 @@ fn a_line_that_cannot_be_parsed_is_left_unhighlighted() {
          WIDGET=test-widget\n\
          BUFFER='echo hi'\n\
          CURSOR=3\n\
-         shell-pulse-highlight --region-highlight\n\
+         zsh-pulse-highlight --region-highlight\n\
          BUFFER=$'$(($(($(($(($(($(x)))))))))'\n\
          CURSOR=1\n\
-         shell-pulse-highlight --region-highlight\n\
+         zsh-pulse-highlight --region-highlight\n\
          print -r -- \"REGIONS=${(j:,:)region_highlight}\"\n\
          print -r -- SURVIVED",
         &[],
@@ -556,7 +556,7 @@ fn the_adapter_is_valid_zsh_and_does_not_break_the_shell() {
             "module_path=({mp} $module_path)\n\
              source {adapter}\n\
              print -r -- ADAPTER_OK\n\
-             whence -w shell-pulse-highlight",
+             whence -w zsh-pulse-highlight",
             mp = mp.display(),
             adapter = adapter.display(),
         ))
@@ -566,7 +566,7 @@ fn the_adapter_is_valid_zsh_and_does_not_break_the_shell() {
     assert!(out.status.success(), "sourcing the adapter failed: {text}");
     assert!(text.contains("ADAPTER_OK"), "the adapter broke the shell: {text}");
     assert!(
-        text.contains("shell-pulse-highlight: builtin"),
+        text.contains("zsh-pulse-highlight: builtin"),
         "the module was not loaded: {text}"
     );
 }
@@ -600,7 +600,7 @@ fn the_adapter_chains_an_existing_pre_redraw_hook() {
         "the hook that was already installed must be kept: {text}"
     );
     assert!(
-        text.contains("shell-pulse-highlight-redraw"),
+        text.contains("zsh-pulse-highlight-redraw"),
         "our widget must be registered too: {text}"
     );
 }
@@ -637,12 +637,12 @@ fn the_adapter_installs_both_hooks_and_does_not_chain_itself() {
         .find_map(|l| l.strip_prefix("INIT="))
         .unwrap_or_default();
     assert_eq!(
-        pre.matches("shell-pulse-highlight-redraw").count(),
+        pre.matches("zsh-pulse-highlight-redraw").count(),
         1,
         "the redraw hook must be installed exactly once: {text}"
     );
     assert_eq!(
-        init.matches("shell-pulse-highlight-line-init").count(),
+        init.matches("zsh-pulse-highlight-line-init").count(),
         1,
         "the line-init hook must be installed exactly once: {text}"
     );
@@ -682,13 +682,13 @@ fn another_plugins_entries_survive_our_publish() {
          WIDGET=test-widget\n\
          BUFFER='echo hi'\n\
          CURSOR=3\n\
-         shell-pulse-highlight --region-highlight --command-known=echo\n\
+         zsh-pulse-highlight --region-highlight --command-known=echo\n\
          print -r -- \"REGIONS=<${(j:,:)region_highlight}>\"",
         &[],
     );
     assert!(ok, "zsh exited badly: {out}");
     assert!(
-        out.contains("REGIONS=<SENTINEL,0 4 fg=green memo=shell-pulse>"),
+        out.contains("REGIONS=<SENTINEL,0 4 fg=green memo=zsh-pulse>"),
         "another plugin's entry must survive our publish: {out}"
     );
 }
@@ -704,14 +704,14 @@ fn our_own_previous_entries_are_replaced_not_accumulated() {
          for w in git gitx gitxx; do\n\
              BUFFER=\"$w commit\"\n\
              CURSOR=3\n\
-             shell-pulse-highlight --region-highlight --command-known=$w\n\
+             zsh-pulse-highlight --region-highlight --command-known=$w\n\
          done\n\
          print -r -- \"REGIONS=<${(j:,:)region_highlight}>\"",
         &[],
     );
     assert!(ok, "zsh exited badly: {out}");
     assert!(
-        out.contains("REGIONS=<0 5 fg=green memo=shell-pulse>"),
+        out.contains("REGIONS=<0 5 fg=green memo=zsh-pulse>"),
         "only our latest entry must be published: {out}"
     );
 }
@@ -754,7 +754,7 @@ fn regions_for(buffer: &str) -> String {
              WIDGET=test-widget\n\
              BUFFER={buffer}\n\
              CURSOR=1\n\
-             shell-pulse-highlight-redraw\n\
+             zsh-pulse-highlight-redraw\n\
              print -r -- \"REGIONS=<${{(j:,:)region_highlight}}>\"",
             widgets = widgets.display(),
             buffer = zsh_quote(buffer),
@@ -775,7 +775,7 @@ fn regions_for_with_cursor(buffer: &str, cursor: usize) -> String {
              WIDGET=test-widget\n\
              BUFFER={buffer}\n\
              CURSOR={cursor}\n\
-             shell-pulse-highlight-redraw\n\
+             zsh-pulse-highlight-redraw\n\
              print -r -- \"REGIONS=<${{(j:,:)region_highlight}}>\"",
             widgets = widgets.display(),
             buffer = zsh_quote(buffer),
@@ -802,7 +802,7 @@ fn regions_for_in(dir: &std::path::Path, buffer: &str) -> String {
              WIDGET=test-widget\n\
              BUFFER={buffer}\n\
              CURSOR=1\n\
-             shell-pulse-highlight-redraw\n\
+             zsh-pulse-highlight-redraw\n\
              print -r -- \"REGIONS=<${{(j:,:)region_highlight}}>\"",
             dir = zsh_quote(&dir.display().to_string()),
             widgets = widgets.display(),
@@ -828,7 +828,7 @@ fn regions_with_answer(buffer: &str, answer: &str) -> String {
              WIDGET=test-widget\n\
              BUFFER={buffer}\n\
              CURSOR=1\n\
-             shell-pulse-highlight --region-highlight {answer}\n\
+             zsh-pulse-highlight --region-highlight {answer}\n\
              print -r -- \"REGIONS=<${{(j:,:)region_highlight}}>\"",
             buffer = zsh_quote(buffer),
             answer = answer,
@@ -844,7 +844,7 @@ fn a_command_the_shell_knows_is_green() {
     require_zsh!();
     let out = regions_for("ls");
     assert!(
-        out.contains("REGIONS=<0 2 fg=green memo=shell-pulse>"),
+        out.contains("REGIONS=<0 2 fg=green memo=zsh-pulse>"),
         "a command the shell knows must be green: {out}"
     );
 }
@@ -875,7 +875,7 @@ fn the_shells_own_tables_decide_what_the_shell_knows() {
                  BUFFER=$w\n\
                  CURSOR=1\n\
                  region_highlight=()\n\
-                 shell-pulse-highlight-redraw\n\
+                 zsh-pulse-highlight-redraw\n\
                  print -r -- \"WORD=$w REGIONS=<${{(j:,:)region_highlight}}>\"\n\
              done",
             widgets = widgets.display(),
@@ -891,7 +891,7 @@ fn the_shells_own_tables_decide_what_the_shell_knows() {
         ("if", "fg=yellow"),
     ];
     for (word, attr) in cases {
-        let expected = format!("WORD={word} REGIONS=<0 {} {attr} memo=shell-pulse>", word.len());
+        let expected = format!("WORD={word} REGIONS=<0 {} {attr} memo=zsh-pulse>", word.len());
         assert!(
             out.contains(&expected),
             "the shell knows `{word}` through its own tables, so it must have attribute {attr}: {out}"
@@ -933,7 +933,7 @@ fn the_command_words_of_a_line_are_found_the_way_the_shell_finds_them() {
     for (line, expected) in cases {
         let out = regions_for(line);
         for word in *expected {
-            let green = "fg=green memo=shell-pulse";
+            let green = "fg=green memo=zsh-pulse";
             assert!(
                 out.contains(green),
                 "`{word}` of `{line}` is a command the shell knows, so it \
@@ -966,13 +966,13 @@ fn a_command_the_shell_cannot_be_asked_about_is_left_alone() {
     let (ok, out) = run_zsh(
         &format!(
             "source {widgets}\n\
-             shell-pulse-highlight-can-ask() {{ return 1 }}\n\
+             zsh-pulse-highlight-can-ask() {{ return 1 }}\n\
              typeset -ga region_highlight\n\
              region_highlight=()\n\
              WIDGET=test-widget\n\
              BUFFER='definitelynotacommand'\n\
              CURSOR=1\n\
-             shell-pulse-highlight-redraw\n\
+             zsh-pulse-highlight-redraw\n\
              print -r -- \"REGIONS=<${{(j:,:)region_highlight}}>\"",
             widgets = widgets.display(),
         ),
@@ -991,7 +991,7 @@ fn a_command_the_shell_does_not_know_is_red() {
     require_zsh!();
     let out = regions_for("definitelynotacommand");
     assert!(
-        out.contains("REGIONS=<0 21 fg=red,bold memo=shell-pulse>"),
+        out.contains("REGIONS=<0 21 fg=red,bold memo=zsh-pulse>"),
         "a command the shell does not know must be red: {out}"
     );
 }
@@ -1003,7 +1003,7 @@ fn a_builtin_is_green() {
     // there is no such file anywhere.
     let out = regions_for("echo");
     assert!(
-        out.contains("REGIONS=<0 4 fg=green memo=shell-pulse>"),
+        out.contains("REGIONS=<0 4 fg=green memo=zsh-pulse>"),
         "a builtin must be green: {out}"
     );
 }
@@ -1016,7 +1016,7 @@ fn a_leading_assignment_does_not_hide_the_command() {
     let out = regions_for("FOO=bar ls");
     assert!(
         out.contains(
-            "REGIONS=<0 7 fg=yellow memo=shell-pulse,8 10 fg=green memo=shell-pulse>"
+            "REGIONS=<0 7 fg=yellow memo=zsh-pulse,8 10 fg=green memo=zsh-pulse>"
         ),
         "the command word is the first word that is not an assignment: {out}"
     );
@@ -1028,8 +1028,8 @@ fn a_leading_assignment_does_not_hide_an_unknown_command() {
     let out = regions_for("FOO=bar definitelynotacommand");
     assert!(
         out.contains(
-            "REGIONS=<0 7 fg=yellow memo=shell-pulse,\
-             8 29 fg=red,bold memo=shell-pulse>"
+            "REGIONS=<0 7 fg=yellow memo=zsh-pulse,\
+             8 29 fg=red,bold memo=zsh-pulse>"
         ),
         "the command word is the first word that is not an assignment: {out}"
     );
@@ -1062,7 +1062,7 @@ fn the_shells_answer_is_applied_to_the_command_word() {
     // the lexer found, it is applied.
     let out = regions_with_answer("ls", "--command-unknown=ls");
     assert!(
-        out.contains("REGIONS=<0 2 fg=red,bold memo=shell-pulse>"),
+        out.contains("REGIONS=<0 2 fg=red,bold memo=zsh-pulse>"),
         "the answer must be applied to the command word: {out}"
     );
 }
@@ -1074,7 +1074,7 @@ fn the_arguments_are_not_coloured_as_commands() {
     // must not be coloured like one.
     let out = regions_for("echo ls");
     assert!(
-        out.contains("REGIONS=<0 4 fg=green memo=shell-pulse>"),
+        out.contains("REGIONS=<0 4 fg=green memo=zsh-pulse>"),
         "only the command word may be a command: {out}"
     );
 }
@@ -1106,11 +1106,11 @@ fn every_command_word_of_a_pipeline_is_coloured() {
     // The argument `x` is not a command and must not be coloured.
     let out = regions_for("ls | grep x");
     assert!(
-        out.contains("0 2 fg=green memo=shell-pulse"),
+        out.contains("0 2 fg=green memo=zsh-pulse"),
         "the first command of the pipeline must be green: {out}"
     );
     assert!(
-        out.contains("5 9 fg=green memo=shell-pulse"),
+        out.contains("5 9 fg=green memo=zsh-pulse"),
         "the second command of the pipeline must be green too: {out}"
     );
     assert!(
@@ -1130,11 +1130,11 @@ fn an_unknown_command_of_a_pipeline_is_red() {
     // so an unknown command in a pipeline looked like one the shell knew.
     let out = regions_for("ls | definitelynotacommand");
     assert!(
-        out.contains("0 2 fg=green memo=shell-pulse"),
+        out.contains("0 2 fg=green memo=zsh-pulse"),
         "the first command of the pipeline must be green: {out}"
     );
     assert!(
-        out.contains("5 26 fg=red,bold memo=shell-pulse"),
+        out.contains("5 26 fg=red,bold memo=zsh-pulse"),
         "the unknown command of the pipeline must be red: {out}"
     );
 }
@@ -1146,7 +1146,7 @@ fn a_redirection_does_not_hide_the_command() {
     // command, and the command word is still the command word.
     let out = regions_for("echo > out.txt");
     assert!(
-        out.contains("0 4 fg=green memo=shell-pulse"),
+        out.contains("0 4 fg=green memo=zsh-pulse"),
         "a redirection must not hide the command word: {out}"
     );
 }
@@ -1158,7 +1158,7 @@ fn a_file_descriptor_duplication_does_not_hide_the_command() {
     // number it duplicates must not be mistaken for the command word.
     let out = regions_for("echo 2>&1");
     assert!(
-        out.contains("REGIONS=<0 4 fg=green memo=shell-pulse,5 8 fg=red memo=shell-pulse>"),
+        out.contains("REGIONS=<0 4 fg=green memo=zsh-pulse,5 8 fg=red memo=zsh-pulse>"),
         "a file-descriptor duplication must not hide the command word, and \\
          the number it duplicates must not be coloured: {out}"
     );
@@ -1184,7 +1184,7 @@ fn an_option_is_cyan() {
     let out = regions_for("git commit --amend");
     assert!(
         out.contains(
-            "REGIONS=<0 3 fg=green memo=shell-pulse,11 18 fg=cyan memo=shell-pulse>"
+            "REGIONS=<0 3 fg=green memo=zsh-pulse,11 18 fg=cyan memo=zsh-pulse>"
         ),
         "an option must be cyan: {out}"
     );
@@ -1195,7 +1195,7 @@ fn words_after_double_dash_are_not_options_on_zsh() {
     require_zsh!();
     let out = regions_for("echo -n -- -n");
     assert!(
-        out.contains("5 7 fg=cyan memo=shell-pulse"),
+        out.contains("5 7 fg=cyan memo=zsh-pulse"),
         "first -n must be cyan: {out}"
     );
     assert!(
@@ -1215,7 +1215,7 @@ fn words_after_double_dash_are_not_options_on_zsh() {
 fn existing_paths() -> (std::path::PathBuf, std::path::PathBuf) {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("shell-pulse-path-test-{}-{count}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("zsh-pulse-path-test-{}-{count}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create the test directory");
     let file = dir.join("a-file");
@@ -1231,7 +1231,7 @@ fn an_existing_file_is_magenta() {
     let out = regions_for(&format!("cat {path}"));
     // The path starts after `cat ` and is as long as it is.
     let expected = format!(
-        "REGIONS=<0 3 fg=green memo=shell-pulse,4 {} fg=magenta memo=shell-pulse>",
+        "REGIONS=<0 3 fg=green memo=zsh-pulse,4 {} fg=magenta memo=zsh-pulse>",
         4 + path.len()
     );
     assert!(
@@ -1247,8 +1247,8 @@ fn an_existing_directory_is_magenta_and_underlined() {
     let path = dir.display().to_string();
     let out = regions_for(&format!("cat {path}"));
     let expected = format!(
-        "REGIONS=<0 3 fg=green memo=shell-pulse,\
-         4 {} fg=magenta,underline memo=shell-pulse>",
+        "REGIONS=<0 3 fg=green memo=zsh-pulse,\
+         4 {} fg=magenta,underline memo=zsh-pulse>",
         4 + path.len()
     );
     assert!(
@@ -1264,7 +1264,7 @@ fn a_word_that_does_not_exist_is_not_a_path() {
     // nothing there, so it keeps its ordinary style.
     let out = regions_for("cat ./no-such-file-here");
     assert!(
-        out.contains("REGIONS=<0 3 fg=green memo=shell-pulse>"),
+        out.contains("REGIONS=<0 3 fg=green memo=zsh-pulse>"),
         "a word that does not exist must not be highlighted: {out}"
     );
 }
@@ -1284,8 +1284,8 @@ fn a_tilde_is_the_home_directory() {
     let out = regions_for("cat ~");
     assert!(
         out.contains(
-            "REGIONS=<0 3 fg=green memo=shell-pulse,\
-             4 5 fg=magenta,underline memo=shell-pulse>"
+            "REGIONS=<0 3 fg=green memo=zsh-pulse,\
+             4 5 fg=magenta,underline memo=zsh-pulse>"
         ),
         "a tilde is the home directory, which is a directory: {out}"
     );
@@ -1299,11 +1299,11 @@ fn the_command_inside_a_substitution_is_coloured() {
     // the whole `$(cmd)`.
     let out = regions_for("echo $(ls)");
     assert!(
-        out.contains("0 4 fg=green memo=shell-pulse"),
+        out.contains("0 4 fg=green memo=zsh-pulse"),
         "the outer command must be green: {out}"
     );
     assert!(
-        out.contains("7 9 fg=green memo=shell-pulse"),
+        out.contains("7 9 fg=green memo=zsh-pulse"),
         "the command inside the substitution must be green too: {out}"
     );
 }
@@ -1316,7 +1316,7 @@ fn an_argument_that_names_nothing_is_not_highlighted() {
     // user typed it.
     let out = regions_for("echo hi");
     assert!(
-        out.contains("REGIONS=<0 4 fg=green memo=shell-pulse>"),
+        out.contains("REGIONS=<0 4 fg=green memo=zsh-pulse>"),
         "an argument that names nothing must not be highlighted: {out}"
     );
 }
@@ -1329,14 +1329,14 @@ fn a_bare_file_name_is_magenta() {
     // word up (`research/upstream/fsh/fast-highlight:1265-1295`), and so
     // does this one.
     let dir = std::env::temp_dir().join(format!(
-        "shell-pulse-bare-name-test-{}",
+        "zsh-pulse-bare-name-test-{}",
         std::process::id()
     ));
     std::fs::create_dir_all(&dir).expect("create the test directory");
     std::fs::write(dir.join("a-file"), b"a file\n").expect("write the test file");
     let out = regions_for_in(&dir, "cat a-file");
     assert!(
-        out.contains("4 10 fg=magenta memo=shell-pulse"),
+        out.contains("4 10 fg=magenta memo=zsh-pulse"),
         "a bare file name must be magenta: {out}"
     );
 }
@@ -1345,7 +1345,7 @@ fn a_bare_file_name_is_magenta() {
 fn a_bare_directory_name_is_magenta_and_underlined() {
     require_zsh!();
     let dir = std::env::temp_dir().join(format!(
-        "shell-pulse-bare-dir-test-{}",
+        "zsh-pulse-bare-dir-test-{}",
         std::process::id()
     ));
     // The directory is removed first: a run that left it behind would
@@ -1364,7 +1364,7 @@ fn a_bare_directory_name_is_magenta_and_underlined() {
     std::fs::create_dir_all(dir.join("a-dir")).expect("create the test directory");
     let out = regions_for_in(&dir, "ls a-dir");
     assert!(
-        out.contains("3 8 fg=magenta,underline memo=shell-pulse"),
+        out.contains("3 8 fg=magenta,underline memo=zsh-pulse"),
         "a bare directory name must be magenta and underlined: {out}"
     );
 }
@@ -1380,7 +1380,7 @@ fn an_append_assignment_does_not_hide_the_command() {
     // would never be coloured.
     let out = regions_for("FOO+=bar ls");
     assert!(
-        out.contains("9 11 fg=green memo=shell-pulse"),
+        out.contains("9 11 fg=green memo=zsh-pulse"),
         "an append assignment must not hide the command word: {out}"
     );
 }
@@ -1389,7 +1389,7 @@ fn an_append_assignment_does_not_hide_the_command() {
 fn complete_builtin_populates_matches_for_files() {
     require_zsh!();
     let (ok, out) = run_zsh(
-        "BUFFER='ls Cargo' CURSOR=8 shell-pulse-complete; print -rl -- \"${_shell_pulse_matches[@]}\"",
+        "BUFFER='ls Cargo' CURSOR=8 zsh-pulse-complete; print -rl -- \"${_zsh_pulse_matches[@]}\"",
         &[],
     );
     assert!(ok, "zsh exited badly: {out}");
@@ -1408,7 +1408,7 @@ fn complete_builtin_on_large_dir_does_not_hang() {
     }
     let start = std::time::Instant::now();
     let (ok, out) = run_zsh(
-        "BUFFER='ls /nix/store/m3y7' CURSOR=18 shell-pulse-complete; print -rl -- \"${_shell_pulse_matches[@]}\"",
+        "BUFFER='ls /nix/store/m3y7' CURSOR=18 zsh-pulse-complete; print -rl -- \"${_zsh_pulse_matches[@]}\"",
         &[],
     );
     let elapsed = start.elapsed();
@@ -1428,7 +1428,7 @@ fn unclosed_parenthesis_is_highlighted_as_error() {
     require_zsh!();
     let out = regions_for("echo (foo");
     assert!(
-        out.contains("5 6 fg=red,bold memo=shell-pulse"),
+        out.contains("5 6 fg=red,bold memo=zsh-pulse"),
         "unclosed parenthesis must be red,bold error: {out}"
     );
 }
@@ -1438,7 +1438,7 @@ fn unclosed_quote_is_highlighted_as_error() {
     require_zsh!();
     let out = regions_for("echo \"unclosed");
     assert!(
-        out.contains("5 6 fg=red,bold memo=shell-pulse"),
+        out.contains("5 6 fg=red,bold memo=zsh-pulse"),
         "unclosed double quote must be red,bold error: {out}"
     );
 }
@@ -1448,11 +1448,11 @@ fn paired_brackets_highlighted_when_cursor_touches() {
     require_zsh!();
     let out = regions_for_with_cursor("echo (foo)", 10);
     assert!(
-        out.contains("5 6 bg=blue memo=shell-pulse"),
+        out.contains("5 6 bg=blue memo=zsh-pulse"),
         "open bracket must be paired blue: {out}"
     );
     assert!(
-        out.contains("9 10 bg=blue memo=shell-pulse"),
+        out.contains("9 10 bg=blue memo=zsh-pulse"),
         "close bracket must be paired blue: {out}"
     );
 }
@@ -1488,8 +1488,8 @@ fn complete_builtin_tilde_expansion_preserves_tilde_slash() {
     let (ok, out) = run_zsh(
         "BUFFER='ls ~'\n\
          CURSOR=4\n\
-         shell-pulse-complete --paths-only --max=5\n\
-         print -r -- \"MATCHES=<${(j:,:)_shell_pulse_matches}>\"",
+         zsh-pulse-complete --paths-only --max=5\n\
+         print -r -- \"MATCHES=<${(j:,:)_zsh_pulse_matches}>\"",
         &[],
     );
     assert!(ok, "zsh exited badly: {out}");

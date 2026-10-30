@@ -73,7 +73,7 @@ pub struct Builtin {
 /// A Rust `&'static str` is a `(pointer, length)` pair; the bytes behind it are
 /// **not** NUL-terminated. Handing one to zsh as a `char *` makes zsh read past
 /// the end into whatever follows in `.rodata` — which during development
-/// produced a builtin literally named `shell-pulse-SHELL_PULSE_DEBUG` and
+/// produced a builtin literally named `zsh-pulse-ZSH_PULSE_DEBUG` and
 /// corrupted zsh's builtin hash table.
 ///
 /// Every string must therefore come from a C string literal (`c"…"`), which
@@ -83,7 +83,7 @@ pub struct Builtin {
 pub struct CStr(&'static core::ffi::CStr);
 
 impl CStr {
-    /// Wrap a C string literal such as `c"shell-pulse-"`.
+    /// Wrap a C string literal such as `c"zsh-pulse-"`.
     pub const fn new(s: &'static core::ffi::CStr) -> Self {
         Self(s)
     }
@@ -244,16 +244,16 @@ mod layout_tests {
         // This is the bug that corrupted zsh's builtin table: a Rust `&str`
         // is NOT NUL-terminated. Assert the byte after the name really is NUL
         // so the mistake cannot come back.
-        let s = CStr::new(c"shell-pulse-highlight");
+        let s = CStr::new(c"zsh-pulse-highlight");
         let bytes = s.as_cstr().to_bytes_with_nul();
         assert_eq!(*bytes.last().unwrap(), 0);
-        assert_eq!(&bytes[..bytes.len() - 1], b"shell-pulse-highlight");
+        assert_eq!(&bytes[..bytes.len() - 1], b"zsh-pulse-highlight");
     }
 
     #[test]
     fn cstr_length_matches_without_trailing_nul() {
-        let s = CStr::new(c"shell-pulse-");
-        assert_eq!(s.as_cstr().to_bytes().len(), "shell-pulse-".len());
-        assert_eq!(s.as_cstr().count_bytes(), 12);
+        let s = CStr::new(c"zsh-pulse-");
+        assert_eq!(s.as_cstr().to_bytes().len(), "zsh-pulse-".len());
+        assert_eq!(s.as_cstr().count_bytes(), 10);
     }
 }

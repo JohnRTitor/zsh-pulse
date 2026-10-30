@@ -1,4 +1,4 @@
-# shell-pulse — the zsh side of the plugin: the hooks.
+# zsh-pulse — the zsh side of the plugin: the hooks.
 #
 # Sourced by `init.zsh` once the module has been loaded.
 #
@@ -45,13 +45,13 @@ fi
 # high half, the answer in the low one.
 #
 # An answer is only trusted for a short while (see
-# `SHELL_PULSE_COMMAND_CACHE_TTL`). A word the shell knew may stop being
+# `ZSH_PULSE_COMMAND_CACHE_TTL`). A word the shell knew may stop being
 # known — the user may `unalias` it or remove the function — and an answer
 # that was trusted for ever would keep the word green after the shell had
 # forgotten it. The same is true in the other direction: a command may be
 # installed while the session runs, and a remembered "not known" would be
 # wrong until the answer expired.
-typeset -gA SHELL_PULSE_COMMAND_CACHE
+typeset -gA ZSH_PULSE_COMMAND_CACHE
 
 # How long an answer is trusted.
 #
@@ -61,24 +61,24 @@ typeset -gA SHELL_PULSE_COMMAND_CACHE
 #
 # The shell's own clock is used (`SECONDS`), which is always there: the
 # module that provides a wall clock would be one more thing to load.
-typeset -gi SHELL_PULSE_COMMAND_CACHE_TTL=2
+typeset -gi ZSH_PULSE_COMMAND_CACHE_TTL=2
 
 # How many answers are remembered.
 #
 # The cache must not grow without bound over a long session. When it is
 # full it is emptied, which costs one lookup per word again and nothing
 # more.
-typeset -gi SHELL_PULSE_COMMAND_CACHE_MAX=256
+typeset -gi ZSH_PULSE_COMMAND_CACHE_MAX=256
 
 # How deep the search into command substitutions goes.
 #
 # A substitution inside a substitution is already unusual; four levels is
 # more than a line of shell usually holds, and the bound is what keeps a
 # pathological line from recursing for ever.
-typeset -gi SHELL_PULSE_MAX_SUBSTITUTION_DEPTH=4
+typeset -gi ZSH_PULSE_MAX_SUBSTITUTION_DEPTH=4
 
 # How deep the search into command substitutions currently is.
-typeset -gi SHELL_PULSE_SUBSTITUTION_DEPTH=0
+typeset -gi ZSH_PULSE_SUBSTITUTION_DEPTH=0
 
 # The longest line the adapter will look at.
 #
@@ -87,13 +87,13 @@ typeset -gi SHELL_PULSE_SUBSTITUTION_DEPTH=0
 # for the split either: a pasted line of a megabyte would be split and
 # walked on *every* keystroke, for a line that is never highlighted — and
 # that is the difference between a slow line and an unresponsive shell.
-typeset -gi SHELL_PULSE_MAX_LINE=4096
+typeset -gi ZSH_PULSE_MAX_LINE=4096
 
 # The answers for the line being edited.
 #
 # One argument per command word: `--command-known=<word>` when the shell
 # knows the word, `--command-unknown=<word>` when it does not.
-typeset -ga SHELL_PULSE_COMMAND_ARGS
+typeset -ga ZSH_PULSE_COMMAND_ARGS
 
 # Can the shell be asked what it knows?
 #
@@ -102,7 +102,7 @@ typeset -ga SHELL_PULSE_COMMAND_ARGS
 # *nothing*, not "no": a word that was never asked about must not be
 # painted red, because red means "the shell does not know this command",
 # and the shell was never asked.
-shell-pulse-highlight-can-ask() {
+zsh-pulse-highlight-can-ask() {
   (( ${+aliases} && ${+galiases} && ${+functions} && ${+builtins} \
      && ${+commands} && ${+saliases} && ${+reswords} ))
 }
@@ -110,7 +110,7 @@ shell-pulse-highlight-can-ask() {
 # The command words of the line being edited, and what the shell knows
 # about them.
 #
-# The answers are left in `SHELL_PULSE_COMMAND_ARGS`, one argument per
+# The answers are left in `ZSH_PULSE_COMMAND_ARGS`, one argument per
 # command word. Every command word is answered, not just the first: in
 # `ls | grep x` there are two commands, and the second one is just as much
 # a command as the first.
@@ -126,19 +126,19 @@ shell-pulse-highlight-can-ask() {
 #
 # The answer is looked up in the shell's own tables, so the lookup does not
 # fork: a fork on every keystroke would be visible to the user.
-shell-pulse-highlight-command() {
+zsh-pulse-highlight-command() {
   emulate -L zsh
   setopt extendedglob noglob
 
   # No answers at all when the shell cannot be asked. The module then
   # leaves every command word alone.
-  SHELL_PULSE_COMMAND_ARGS=()
-  if ! shell-pulse-highlight-can-ask; then
+  ZSH_PULSE_COMMAND_ARGS=()
+  if ! zsh-pulse-highlight-can-ask; then
     return 0
   fi
 
   # A line the module will not highlight is not worth splitting either.
-  if (( ${#BUFFER} > SHELL_PULSE_MAX_LINE )); then
+  if (( ${#BUFFER} > ZSH_PULSE_MAX_LINE )); then
     return 0
   fi
 
@@ -152,7 +152,7 @@ shell-pulse-highlight-command() {
   local -a words
   words=( ${(z)BUFFER} )
 
-  shell-pulse-highlight-words "${words[@]}"
+  zsh-pulse-highlight-words "${words[@]}"
 }
 
 # Walk a list of words and answer for every command word among them.
@@ -179,7 +179,7 @@ shell-pulse-highlight-command() {
 # Rust lexer knows that (`crates/lexer/src/scanner.rs`, `looks_like_assignment`).
 # If the two sides disagreed about what an assignment is, the command
 # word after it would never be answered and would never be coloured.
-shell-pulse-highlight-words() {
+zsh-pulse-highlight-words() {
   # The options are set locally rather than emulated: the caller has
   # already emulated zsh, and `emulate` resets every option in the shell,
   # which is not free on the interactive thread.
@@ -212,7 +212,7 @@ shell-pulse-highlight-words() {
     # test is here rather than inside the function: a zsh function call is
     # not free, and this runs for every word of the line.
     if [[ $word == *'$('* || $word == *'`'* ]]; then
-      shell-pulse-highlight-inside "$word"
+      zsh-pulse-highlight-inside "$word"
     fi
     if [[ $word != ${~has_non_redirect_char} && $word == ${~has_redirect_char} ]]; then
       # A redirection: `<`, `>`, `2>`, `&>`, `2>&`...
@@ -247,7 +247,7 @@ shell-pulse-highlight-words() {
         continue
       fi
       # This is a command word.
-      shell-pulse-highlight-answer "$word"
+      zsh-pulse-highlight-answer "$word"
       want_command=0
       (( i++ ))
       continue
@@ -267,7 +267,7 @@ shell-pulse-highlight-words() {
 # Only a substitution that makes up the whole word is looked inside. The
 # text between the `$(` and the `)` is then exactly the command, and the
 # words of that text are found the same way the words of the line are.
-shell-pulse-highlight-inside() {
+zsh-pulse-highlight-inside() {
   local word=$1
   local inner
 
@@ -284,34 +284,34 @@ shell-pulse-highlight-inside() {
   # The nesting is bounded: a substitution inside a substitution inside a
   # substitution is already more than a line of shell usually holds, and an
   # unbounded recursion would be a way to hang the shell.
-  (( SHELL_PULSE_SUBSTITUTION_DEPTH >= SHELL_PULSE_MAX_SUBSTITUTION_DEPTH )) && return 0
-  (( SHELL_PULSE_SUBSTITUTION_DEPTH++ ))
+  (( ZSH_PULSE_SUBSTITUTION_DEPTH >= ZSH_PULSE_MAX_SUBSTITUTION_DEPTH )) && return 0
+  (( ZSH_PULSE_SUBSTITUTION_DEPTH++ ))
 
   local -a inner_words
   inner_words=( ${(z)inner} )
-  shell-pulse-highlight-words "${inner_words[@]}"
+  zsh-pulse-highlight-words "${inner_words[@]}"
 
-  (( SHELL_PULSE_SUBSTITUTION_DEPTH-- ))
+  (( ZSH_PULSE_SUBSTITUTION_DEPTH-- ))
 }
 
 # Record what the shell knows about one command word.
 #
-# The answer is put into `SHELL_PULSE_COMMAND_ARGS` as an argument for the
+# The answer is put into `ZSH_PULSE_COMMAND_ARGS` as an argument for the
 # module: `--command-known=<word>` or `--command-unknown=<word>`.
 #
 # The word is looked up without its quoting, because that is the word the
 # shell would actually run; the answer keeps the quoting, because that is
 # the text the module has to match against the line.
-shell-pulse-highlight-answer() {
+zsh-pulse-highlight-answer() {
   local word=$1
   local -i kind
-  shell-pulse-highlight-known "${(Q)word}"
+  zsh-pulse-highlight-known "${(Q)word}"
   kind=$?
   case $kind in
-    2) SHELL_PULSE_COMMAND_ARGS+=( "--command-reserved=$word" ) ;;
-    3) SHELL_PULSE_COMMAND_ARGS+=( "--command-global-alias=$word" ) ;;
-    1) SHELL_PULSE_COMMAND_ARGS+=( "--command-known=$word" ) ;;
-    *) SHELL_PULSE_COMMAND_ARGS+=( "--command-unknown=$word" ) ;;
+    2) ZSH_PULSE_COMMAND_ARGS+=( "--command-reserved=$word" ) ;;
+    3) ZSH_PULSE_COMMAND_ARGS+=( "--command-global-alias=$word" ) ;;
+    1) ZSH_PULSE_COMMAND_ARGS+=( "--command-known=$word" ) ;;
+    *) ZSH_PULSE_COMMAND_ARGS+=( "--command-unknown=$word" ) ;;
   esac
 }
 
@@ -325,7 +325,7 @@ shell-pulse-highlight-answer() {
 #
 # The answer comes from the shell's own tables, so it is exactly what the
 # shell would do.
-shell-pulse-highlight-known() {
+zsh-pulse-highlight-known() {
   # No `emulate` here: the function only looks names up in hash tables,
   # which no option changes, and it runs on every keystroke.
   local word=$1
@@ -336,9 +336,9 @@ shell-pulse-highlight-known() {
   fi
 
   # The answer that was worked out before, if it is still fresh.
-  if (( ${+SHELL_PULSE_COMMAND_CACHE[(e)$word]} )); then
-    local entry=${SHELL_PULSE_COMMAND_CACHE[(e)$word]}
-    if (( SECONDS - entry / 4 < SHELL_PULSE_COMMAND_CACHE_TTL )); then
+  if (( ${+ZSH_PULSE_COMMAND_CACHE[(e)$word]} )); then
+    local entry=${ZSH_PULSE_COMMAND_CACHE[(e)$word]}
+    if (( SECONDS - entry / 4 < ZSH_PULSE_COMMAND_CACHE_TTL )); then
       return $(( entry % 4 ))
     fi
   fi
@@ -356,10 +356,10 @@ shell-pulse-highlight-known() {
     kind=1
   fi
 
-  if (( ${#SHELL_PULSE_COMMAND_CACHE} >= SHELL_PULSE_COMMAND_CACHE_MAX )); then
-    SHELL_PULSE_COMMAND_CACHE=()
+  if (( ${#ZSH_PULSE_COMMAND_CACHE} >= ZSH_PULSE_COMMAND_CACHE_MAX )); then
+    ZSH_PULSE_COMMAND_CACHE=()
   fi
-  SHELL_PULSE_COMMAND_CACHE[(e)$word]=$(( SECONDS * 4 + kind ))
+  ZSH_PULSE_COMMAND_CACHE[(e)$word]=$(( SECONDS * 4 + kind ))
 
   return $kind
 }
@@ -384,13 +384,13 @@ shell-pulse-highlight-known() {
 # found is the word the shell was asked about, so a disagreement between the
 # shell and the lexer cannot end with the wrong word coloured red. A command
 # word the shell was not asked about is left alone entirely.
-typeset -g _SHELL_PULSE_IN_TYPEAHEAD=0
+typeset -g _ZSH_PULSE_IN_TYPEAHEAD=0
 
-shell-pulse-highlight-redraw() {
+zsh-pulse-highlight-redraw() {
   # When menu selection or completion is active, immediately unset ghost autosuggestions
   # and skip both typeahead and highlight mutation to prevent screen flicker and cursor desynchronization.
-  if [[ $KEYMAP == menuselect || -n $MENUSELECT || -n $MENUMODE || $_SHELL_PULSE_MENU_ACTIVE == 1 ]] ||
-     shell-pulse-complete --is-menu-active 2>/dev/null; then
+  if [[ $KEYMAP == menuselect || -n $MENUSELECT || -n $MENUMODE || $_ZSH_PULSE_MENU_ACTIVE == 1 ]] ||
+     zsh-pulse-complete --is-menu-active 2>/dev/null; then
     unset POSTDISPLAY
     return 0
   fi
@@ -402,20 +402,20 @@ shell-pulse-highlight-redraw() {
   # 3. A completion/menu/search widget is currently running or was the last widget.
   # Calling any completion widget while complist.so is in menu-select corrupts Zsh's C heap and causes SIGSEGV.
   if (( ! PENDING && ! KEYS_QUEUED_COUNT && ${+functions[compdef]} )); then
-    if (( _SHELL_PULSE_MENU_HIDDEN == 0 && _SHELL_PULSE_IN_TYPEAHEAD == 0 )); then
-      if [[ ${WIDGET##.} != (menu-select|*menu*|*complete*|shell-pulse-*|*select*|*search*) &&
-            ${LASTWIDGET##.} != (menu-select|*menu*|*complete*|shell-pulse-*|*select*|*search*) ]]; then
-        if [[ -n $BUFFER && "$BUFFER" != "$_SHELL_PULSE_LAST_TYPEAHEAD" ]]; then
-          _SHELL_PULSE_LAST_TYPEAHEAD="$BUFFER"
-          if [[ -n $widgets[shell-pulse-typeahead] ]]; then
+    if (( _ZSH_PULSE_MENU_HIDDEN == 0 && _ZSH_PULSE_IN_TYPEAHEAD == 0 )); then
+      if [[ ${WIDGET##.} != (menu-select|*menu*|*complete*|zsh-pulse-*|*select*|*search*) &&
+            ${LASTWIDGET##.} != (menu-select|*menu*|*complete*|zsh-pulse-*|*select*|*search*) ]]; then
+        if [[ -n $BUFFER && "$BUFFER" != "$_ZSH_PULSE_LAST_TYPEAHEAD" ]]; then
+          _ZSH_PULSE_LAST_TYPEAHEAD="$BUFFER"
+          if [[ -n $widgets[zsh-pulse-typeahead] ]]; then
             local -a _saved_rh=( "${region_highlight[@]}" )
-            _SHELL_PULSE_IN_TYPEAHEAD=1
-            zle shell-pulse-typeahead 2>/dev/null
-            _SHELL_PULSE_IN_TYPEAHEAD=0
+            _ZSH_PULSE_IN_TYPEAHEAD=1
+            zle zsh-pulse-typeahead 2>/dev/null
+            _ZSH_PULSE_IN_TYPEAHEAD=0
             region_highlight=( "${_saved_rh[@]}" )
           fi
-        elif [[ -z $BUFFER && -n $_SHELL_PULSE_LAST_TYPEAHEAD ]]; then
-          _SHELL_PULSE_LAST_TYPEAHEAD=""
+        elif [[ -z $BUFFER && -n $_ZSH_PULSE_LAST_TYPEAHEAD ]]; then
+          _ZSH_PULSE_LAST_TYPEAHEAD=""
           zle -Rc 2>/dev/null
         fi
       fi
@@ -425,20 +425,20 @@ shell-pulse-highlight-redraw() {
   # Native Rust syntax highlighting (sub-microsecond)
   # ALWAYS executed after typeahead so region_highlight is published freshly for ZLE redraw.
   local -a args
-  shell-pulse-highlight-command
-  args=( --region-highlight "${SHELL_PULSE_COMMAND_ARGS[@]}" )
+  zsh-pulse-highlight-command
+  args=( --region-highlight "${ZSH_PULSE_COMMAND_ARGS[@]}" )
   # The arguments are quoted: a command word may hold a character that is
   # a glob pattern — `*`, `?`, `[` — and with `GLOB_SUBST` set in the
   # user's configuration an unquoted expansion would be matched against
   # the filesystem, and a word with no match would abort the call.
-  shell-pulse-highlight "${args[@]}"
+  zsh-pulse-highlight "${args[@]}"
 
-  # Real-time ghost autosuggestion from shell-pulse (sub-10us latency)
+  # Real-time ghost autosuggestion from zsh-pulse (sub-10us latency)
   if (( ! PENDING && ! KEYS_QUEUED_COUNT )); then
     if [[ $CURSOR -ge $#BUFFER && -n $BUFFER ]]; then
-      shell-pulse-complete --autosuggest
-      if [[ -n $_shell_pulse_autosuggestion ]]; then
-        POSTDISPLAY="$_shell_pulse_autosuggestion"
+      zsh-pulse-complete --autosuggest
+      if [[ -n $_zsh_pulse_autosuggestion ]]; then
+        POSTDISPLAY="$_zsh_pulse_autosuggestion"
       else
         unset POSTDISPLAY
       fi
@@ -449,23 +449,23 @@ shell-pulse-highlight-redraw() {
 }
 
 # The end-of-line hook: cleanly tear down typeahead state when command is submitted.
-shell-pulse-highlight-line-finish() {
-  _SHELL_PULSE_LAST_TYPEAHEAD=""
-  _SHELL_PULSE_IN_TYPEAHEAD=0
-  _SHELL_PULSE_MENU_HIDDEN=0
-  _SHELL_PULSE_MENU_ACTIVE=0
+zsh-pulse-highlight-line-finish() {
+  _ZSH_PULSE_LAST_TYPEAHEAD=""
+  _ZSH_PULSE_IN_TYPEAHEAD=0
+  _ZSH_PULSE_MENU_HIDDEN=0
+  _ZSH_PULSE_MENU_ACTIVE=0
 }
 
 # The start-of-line hook.
-shell-pulse-highlight-line-init() {
-  if [[ -n $_SHELL_PULSE_LAST_TYPEAHEAD ]]; then
-    _SHELL_PULSE_LAST_TYPEAHEAD=""
+zsh-pulse-highlight-line-init() {
+  if [[ -n $_ZSH_PULSE_LAST_TYPEAHEAD ]]; then
+    _ZSH_PULSE_LAST_TYPEAHEAD=""
     zle -Rc 2>/dev/null
   fi
-  _SHELL_PULSE_MENU_HIDDEN=0
-  _SHELL_PULSE_IN_TYPEAHEAD=0
-  _SHELL_PULSE_MENU_ACTIVE=0
-  shell-pulse-highlight --reset
+  _ZSH_PULSE_MENU_HIDDEN=0
+  _ZSH_PULSE_IN_TYPEAHEAD=0
+  _ZSH_PULSE_MENU_ACTIVE=0
+  zsh-pulse-highlight --reset
 }
 
 # Install the hooks.
@@ -480,20 +480,20 @@ if ! autoload -Uz add-zle-hook-widget 2>/dev/null; then
   # No `add-zle-hook-widget` (a very old zsh): fall back to registering the
   # widgets directly. Another plugin's hook for the same name is lost, which
   # is the behaviour we are trying to avoid, but there is no better option.
-  zle -N zle-line-pre-redraw shell-pulse-highlight-redraw
-  zle -N zle-line-init shell-pulse-highlight-line-init
-  zle -N zle-line-finish shell-pulse-highlight-line-finish
+  zle -N zle-line-pre-redraw zsh-pulse-highlight-redraw
+  zle -N zle-line-init zsh-pulse-highlight-line-init
+  zle -N zle-line-finish zsh-pulse-highlight-line-finish
 else
   # `add-zle-hook-widget` *autoloads* a widget it has not seen before, on
   # the assumption that the widget is a file in `$fpath`. Our functions are
   # already defined, and autoloading them would throw their bodies away and
-  # leave the shell looking for a file called `shell-pulse-highlight-redraw`.
+  # leave the shell looking for a file called `zsh-pulse-highlight-redraw`.
   # Registering them as widgets first makes it leave them alone.
-  zle -N shell-pulse-highlight-redraw shell-pulse-highlight-redraw
-  zle -N shell-pulse-highlight-line-init shell-pulse-highlight-line-init
-  zle -N shell-pulse-highlight-line-finish shell-pulse-highlight-line-finish
+  zle -N zsh-pulse-highlight-redraw zsh-pulse-highlight-redraw
+  zle -N zsh-pulse-highlight-line-init zsh-pulse-highlight-line-init
+  zle -N zsh-pulse-highlight-line-finish zsh-pulse-highlight-line-finish
 
-  add-zle-hook-widget zle-line-pre-redraw shell-pulse-highlight-redraw
-  add-zle-hook-widget zle-line-init shell-pulse-highlight-line-init
-  add-zle-hook-widget line-finish shell-pulse-highlight-line-finish
+  add-zle-hook-widget zle-line-pre-redraw zsh-pulse-highlight-redraw
+  add-zle-hook-widget zle-line-init zsh-pulse-highlight-line-init
+  add-zle-hook-widget line-finish zsh-pulse-highlight-line-finish
 fi

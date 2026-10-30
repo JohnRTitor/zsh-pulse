@@ -1,5 +1,5 @@
 {
-  description = "shell-pulse — incremental syntax highlighting for zsh, in Rust";
+  description = "zsh-pulse — incremental syntax highlighting for zsh, in Rust";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -10,12 +10,12 @@
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; };
-        shell-pulse = pkgs.callPackage ./nix { };
+        zsh-pulse = pkgs.callPackage ./nix { };
       in
       {
         packages = {
-          default = shell-pulse;
-          shell-pulse = shell-pulse;
+          default = zsh-pulse;
+          zsh-pulse = zsh-pulse;
         };
 
         devShells.default = pkgs.mkShell {

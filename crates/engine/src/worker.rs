@@ -61,7 +61,7 @@ pub const DEFAULT_TIMEOUT: Duration = Duration::from_millis(50);
 
 /// Name of the worker thread. Linux truncates thread names to 15 bytes, so
 /// this must stay under that or tests cannot find the thread again.
-pub const WORKER_THREAD_NAME: &str = "shellpulse-wrk";
+pub const WORKER_THREAD_NAME: &str = "zshpulse-wrk";
 
 /// A unit of work handed to the worker.
 #[derive(Debug)]

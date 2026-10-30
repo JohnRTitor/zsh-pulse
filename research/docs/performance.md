@@ -1,4 +1,4 @@
-# Performance report — `shell-pulse`
+# Performance report — `zsh-pulse`
 
 Every number in this document was produced by a command that is quoted next to
 it. Where a number comes from the Stage A research rather than from this
@@ -284,7 +284,7 @@ spawned *while the highlighting builtin runs*.
 [1] load cost -- wall clock of a fresh zsh -f, per arm
   zsh -f (baseline)                              : 2.951 ms  (min 2.897 ms, max 3.124 ms)
   zsh -f + module_path assignment                : 2.947 ms
-  zsh -f + zmodload shellpulse/highlight         : 3.165 ms  (min 3.094 ms, max 3.301 ms)
+  zsh -f + zmodload zshpulse/core         : 3.165 ms  (min 3.094 ms, max 3.301 ms)
   zsh -f + source zsh/init.zsh                   : 3.608 ms
 
   module load cost (loaded - path)               : 0.207 ms
@@ -328,7 +328,7 @@ spawned *while the highlighting builtin runs*.
   `clone3` when the kernel offers it, and a harness that traced only `clone`
   would report "no thread was created" and be wrong.
 - Every call must be shown to have reached the native code, counted from the
-  module's own `SHELL_PULSE_DEBUG` diagnostics: 50 of 50.
+  module's own `ZSH_PULSE_DEBUG` diagnostics: 50 of 50.
 
 **What the startup numbers do not cover.** The hot-path run uses `zsh -f -c`,
 so there is no ZLE widget and no `region_highlight` special parameter: the
@@ -714,7 +714,7 @@ cargo test --workspace
 ```
 
 `bench/install.sh` puts the module where the harnesses and the zsh adapter
-expect it: `bench/mp/shellpulse/highlight.so`. The nested directory and the
+expect it: `bench/mp/zshpulse/core.so`. The nested directory and the
 dotless name are mandatory, because zsh's `modname_ok()`
 ([`zsh-src/Src/module.c:2177-2186`](../upstream/zsh-src/Src/module.c#L2177))
 accepts only slash-separated identifiers — absolute paths and `.so` suffixes

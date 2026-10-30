@@ -28,6 +28,6 @@ completion = { path = "crates/completion" }
 
 [profile.release]
 opt-level = 3
-lto = "thin"
+lto = "thin"        # Thin LTO is needed for testing and benchmarks: allows linking the rlib into test/bench targets without LTO crate-type conflicts, while keeping fast parallel linking
 codegen-units = 1
 panic = "unwind"   # must stay unwind: entry points rely on catch_unwind

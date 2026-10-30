@@ -109,7 +109,7 @@ typeset -g SKIP_MARKER='SKIP-PTY'
 
 # The marker the widget under the pty prints when the harness asks the
 # shell how many regions it holds.
-typeset -g REGION_MARKER='SHELL-PULSE-REGIONS'
+typeset -g REGION_MARKER='ZSH-PULSE-REGIONS'
 
 # The key that runs that widget: Ctrl-X.
 typeset -g REGION_KEY=$'\x18'
@@ -245,7 +245,7 @@ else
 polled instead of waited on, so every measurement includes the poll interval \
 and the numbers are an upper bound."
 fi
-if [[ ! -f $MP/shellpulse/highlight.so ]]; then
+if [[ ! -f $MP/zshpulse/core.so ]]; then
   skip_pty "the module is not installed at $MP"
   print -u2 "ERROR: the module is not installed at $MP. Run: ./bench/install.sh"
   exit 1
@@ -259,7 +259,7 @@ fi
 # The interactive shell reads its configuration from $ZDOTDIR, so the
 # harness decides what it loads and the user's own configuration cannot
 # influence the measurement.
-ZDOT_TMP="${TMPDIR:-/tmp}/shell-pulse-bench-$$"
+ZDOT_TMP="${TMPDIR:-/tmp}/zsh-pulse-bench-$$"
 if ! mkdir -p $ZDOT_TMP; then
   print -u2 "ERROR: cannot create the temporary directory $ZDOT_TMP"
   exit 1
@@ -270,12 +270,12 @@ export ZDOTDIR=$ZDOT_TMP
   print -r -- "PS1='BENCHPROMPT> '"
   print -r -- "RPROMPT="
   print -r -- "PROMPT_EOL_MARK=''"
-  print -r -- "export SHELL_PULSE_MODULE_PATH='$MP'"
+  print -r -- "export ZSH_PULSE_MODULE_PATH='$MP'"
   if [[ $ARM == default ]]; then
     print -r -- "source '$ADAPTER'"
   elif [[ $ARM == control ]]; then
     # The module, but no hook: the plugin exists and does nothing.
-    print -r -- "zmodload shellpulse/highlight"
+    print -r -- "zmodload zshpulse/core"
   fi
   # The widget that reports how many regions zsh holds for the line.
   #
@@ -283,9 +283,9 @@ export ZDOTDIR=$ZDOT_TMP
   # widget, and its value is the list of regions zsh currently has. The
   # widget is scaffolding of this harness, not part of the plugin, and it
   # is only ever run after the measurement.
-  print -r -- "shell-pulse-bench-regions() { print -r -- '$REGION_MARKER: '\"\${#region_highlight}\" }"
-  print -r -- 'zle -N shell-pulse-bench-regions'
-  print -r -- "bindkey '^X' shell-pulse-bench-regions"
+  print -r -- "zsh-pulse-bench-regions() { print -r -- '$REGION_MARKER: '\"\${#region_highlight}\" }"
+  print -r -- 'zle -N zsh-pulse-bench-regions'
+  print -r -- "bindkey '^X' zsh-pulse-bench-regions"
 } > $ZDOT_TMP/.zshrc
 
 typeset -g CAP=''

@@ -1,4 +1,4 @@
-//! The zsh boundary for `shell-pulse`.
+//! The zsh boundary for `zsh-pulse`.
 //!
 //! This crate contains **all** unsafe code in the project. Everything above it
 //! (`engine`, and later `lexer`, `highlight`, `ranking`) is plain safe Rust.
@@ -41,9 +41,9 @@ pub use api::{Api, CappedRead, GetAparamFn};
 pub use raw::{Builtin, CStr, HashNode, Module, Options};
 
 /// Name this module registers its builtins under.
-pub const BUILTIN_PREFIX: &str = "shell-pulse-";
+pub const BUILTIN_PREFIX: &str = "zsh-pulse-";
 
-/// The builtin name registered inside the `shell-pulse-` namespace.
+/// The builtin name registered inside the `zsh-pulse-` namespace.
 ///
 /// C string literals (`c"…"`) are NUL-terminated; `&str` is not. Getting this
 /// wrong corrupts zsh's builtin hash table.
@@ -52,10 +52,10 @@ pub const BUILTIN_NAME: &core::ffi::CStr = c"highlight";
 /// Build the `zmodload` path used by the zsh adapter.
 ///
 /// zsh requires slash-separated identifiers with no dots, so this yields
-/// `shellpulse/highlight`, which resolves to `shellpulse/highlight.so` on
+/// `zshpulse/core`, which resolves to `zshpulse/core.so` on
 /// `$module_path`.
 pub const fn zmodload_name() -> &'static str {
-    "shellpulse/highlight"
+    "zshpulse/core"
 }
 
 #[cfg(test)]
