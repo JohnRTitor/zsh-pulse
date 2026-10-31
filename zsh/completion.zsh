@@ -172,6 +172,7 @@ fi
 # -----------------------------------------------------------------------------
 
 if (( has_history )); then
+  typeset -g _ZSH_PULSE_SAVED_ACTIVE=0
   typeset -g _ZSH_PULSE_SAVED_BUFFER=""
   typeset -g _ZSH_PULSE_SAVED_CURSOR=0
 
@@ -183,6 +184,7 @@ if (( has_history )); then
     typeset -g _ZSH_PULSE_MENU_ACTIVE=1
     _ZSH_PULSE_SAVED_BUFFER="$BUFFER"
     _ZSH_PULSE_SAVED_CURSOR=$CURSOR
+    _ZSH_PULSE_SAVED_ACTIVE=1
     zsh-pulse-complete --history-only --max=32
     if (( ${#_zsh_pulse_matches[@]} > 0 )); then
       IPREFIX=""
@@ -336,29 +338,26 @@ if (( has_history )); then
   # If fzf is not present (or when ZSH_PULSE_USE_FZF=0), shell-pulse binds its
   # native sub-microsecond in-memory history search widget (zsh-pulse-history-search).
   local use_fzf=0
-  if [[ ${ZSH_PULSE_USE_FZF:-1} != (0|[fF][aA][lL][sS][eE]|[oO][fF][fF]|[nN][oO]) ]]; then
+  if [[ ${ZSH_PULSE_USE_FZF:-1} != (0|[fF][aA][lL][sS][eE]|[oO][fF][fF]|[nN][oO]) && -z ${ZSH_PULSE_TEST:-} ]]; then
     if (( $+widgets[fzf-history-widget] )); then
       use_fzf=1
-    elif (( $+commands[fzf] )) && [[ -z ${ZSH_PULSE_TEST:-} && -z ${SP_READY_FILE:-} ]]; then
-      if eval "$(fzf --zsh 2>/dev/null)" 2>/dev/null && (( $+widgets[fzf-history-widget] )); then
-        use_fzf=1
-      elif (( $+commands[fzf] )); then
-        use_fzf=2
-      fi
+    elif (( $+commands[fzf] )); then
+      use_fzf=2
     fi
   fi
 
   if (( use_fzf == 1 )); then
     _zsh_pulse_bind_all fzf-history-widget '^R'
+    bindkey -M vicmd '^R' fzf-history-widget 2>/dev/null
   elif (( use_fzf == 2 )); then
     _zsh_pulse_fzf_history_widget() {
+      setopt localoptions noglobsubst noposixbuiltins pipefail no_aliases extendedglob 2>/dev/null
       local selected
-      setopt localoptions noglobsubst noposixbuiltins pipefail no_aliases 2>/dev/null
       selected=$(fc -rl 1 | awk '{ cmd=$0; sub(/^[ \t]*[0-9]+\*?[ \t]+/, "", cmd); if (!seen[cmd]++) print $0 }' |
         fzf --height 40% --tiebreak=index --query="$LBUFFER" +m)
       local ret=$?
       if [[ $ret -eq 0 && -n "$selected" ]]; then
-        BUFFER="${selected#*[0-9]#[[:space:]]##}"
+        BUFFER="${selected##[[:space:]]#[0-9]##\*#[[:space:]]##}"
         CURSOR=$#BUFFER
       fi
       zle reset-prompt
@@ -366,8 +365,10 @@ if (( has_history )); then
     }
     zle -N _zsh_pulse_fzf_history_widget
     _zsh_pulse_bind_all _zsh_pulse_fzf_history_widget '^R'
+    bindkey -M vicmd '^R' _zsh_pulse_fzf_history_widget 2>/dev/null
   else
     _zsh_pulse_bind_all zsh-pulse-history-search '^R'
+    bindkey -M vicmd '^R' zsh-pulse-history-search 2>/dev/null
   fi
 fi
 
@@ -376,19 +377,21 @@ if (( has_autocomplete || has_history )); then
   # Safe abort & accept widgets for menu selection to reset _ZSH_PULSE_MENU_ACTIVE
   # and restore original command line buffer on cancellation (Esc / Ctrl-C / Tab).
   _zsh_pulse_menuselect_abort() {
-    if [[ -n $_ZSH_PULSE_SAVED_BUFFER ]]; then
+    if (( _ZSH_PULSE_SAVED_ACTIVE )); then
       BUFFER="$_ZSH_PULSE_SAVED_BUFFER"
       CURSOR=$_ZSH_PULSE_SAVED_CURSOR
       _ZSH_PULSE_SAVED_BUFFER=""
+      _ZSH_PULSE_SAVED_ACTIVE=0
     fi
     typeset -g _ZSH_PULSE_MENU_ACTIVE=0
-    zle send-break
+    zle -Rc 2>/dev/null
   }
   zle -N _zsh_pulse_menuselect_abort
 
   _zsh_pulse_menuselect_accept() {
     typeset -g _ZSH_PULSE_MENU_ACTIVE=0
     _ZSH_PULSE_SAVED_BUFFER=""
+    _ZSH_PULSE_SAVED_ACTIVE=0
     zle .accept-line
   }
   zle -N _zsh_pulse_menuselect_accept

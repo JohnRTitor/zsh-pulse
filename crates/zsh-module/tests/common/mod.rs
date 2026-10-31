@@ -37,7 +37,9 @@ pub fn adapter_path() -> PathBuf {
 /// the only end-to-end evidence there is, would happily pass.
 fn newest_source_mtime(dir: &std::path::Path) -> Option<std::time::SystemTime> {
     let mut newest: Option<std::time::SystemTime> = None;
-    let Ok(entries) = std::fs::read_dir(dir) else { return None };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return None;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         let mtime = if path.is_dir() {
@@ -48,9 +50,10 @@ fn newest_source_mtime(dir: &std::path::Path) -> Option<std::time::SystemTime> {
             // reason to rebuild would make every edit to a test trigger a
             // `cargo build` from *inside* a test — and that build blocks on
             // the build lock the `cargo test` running it already holds.
-            if path.file_name().is_some_and(|n| {
-                n == "target" || n == "tests" || n == "benches" || n == "examples"
-            }) {
+            if path
+                .file_name()
+                .is_some_and(|n| n == "target" || n == "tests" || n == "benches" || n == "examples")
+            {
                 None
             } else {
                 newest_source_mtime(&path)
@@ -110,10 +113,11 @@ pub fn module_so() -> PathBuf {
         Err(_) => true,
     };
 
-    let stale = feature_changed || match std::fs::metadata(&so).and_then(|m| m.modified()) {
-        Ok(built) => built < newest,
-        Err(_) => true,
-    };
+    let stale = feature_changed
+        || match std::fs::metadata(&so).and_then(|m| m.modified()) {
+            Ok(built) => built < newest,
+            Err(_) => true,
+        };
     if stale {
         // The target directory has to be passed explicitly: the default one
         // is not where the test executable lives when `CARGO_TARGET_DIR` or

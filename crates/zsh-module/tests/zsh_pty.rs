@@ -726,6 +726,7 @@ fn write_child_rc_extra(dir: &Path, load_module: bool, extra_rc: &str) {
     rc.push_str("HISTSIZE=1000\n");
     rc.push_str("SAVEHIST=1000\n");
     rc.push_str("setopt EXTENDED_HISTORY 2>/dev/null\n");
+    rc.push_str("export ZSH_PULSE_USE_FZF=0\n");
     rc.push_str(extra_rc);
     if load_module {
         rc.push_str("autoload -Uz compinit && compinit -D 2>/dev/null\n");
@@ -1865,6 +1866,7 @@ fn ctrl_r_preserves_fzf_history_widget_when_present() {
 
     let history = b": 1700000000:0;echo regular_history\n";
     let extra_rc = r#"
+export ZSH_PULSE_USE_FZF=1
 fzf-history-widget() {
   BUFFER="echo FZF_HISTORY_INVOKED"
   CURSOR=$#BUFFER
@@ -1901,6 +1903,166 @@ zle -N fzf-history-widget
     assert!(
         capture.contains(b"FZF_HISTORY_INVOKED\r\n"),
         "fzf-history-widget was not preserved on Ctrl-R.\n{}",
+        capture.dump()
+    );
+}
+
+#[test]
+#[cfg(any(feature = "history", feature = "history-navigation"))]
+fn history_search_abort_cancels_cleanly() {
+    require_zsh_pty!();
+    let Some(term) = colour_terminal() else {
+        skip("no terminal type with standard xterm colour capabilities was found");
+        return;
+    };
+
+    let history = b": 1700000000:0;echo first_candidate\n: 1700000001:0;echo second_candidate\n: 1700000002:0;echo my_history_match\n";
+    let capture = match capture_with_history(
+        &Scenario {
+            // Type matching prefix "echo my_", press Ctrl-R (opens menu on my_history_match),
+            // cancel with Ctrl-C (\x03), press Enter (\r)
+            typed: "echo my_\x12\x03\r".to_string(),
+            wait_for: PROMPT.as_bytes(),
+            load_module: true,
+            count: 2,
+        },
+        term.name,
+        "abort_clean",
+        history,
+    ) {
+        Ok(capture) => capture,
+        Err(reason) => {
+            skip(&reason);
+            return;
+        }
+    };
+
+    assert!(
+        capture.contains(MODULE_LOADED.as_bytes()),
+        "the module did not load"
+    );
+
+    // Verify history candidate was NOT executed on Ctrl-C cancellation
+    assert!(
+        !capture.contains(b"my_history_match\r\n"),
+        "history candidate executed despite Ctrl-C cancellation.\n{}",
+        capture.dump()
+    );
+    assert!(
+        !capture.contains(b"first_candidate\r\n"),
+        "candidate executed despite Ctrl-C cancellation.\n{}",
+        capture.dump()
+    );
+}
+
+#[test]
+#[cfg(any(feature = "history", feature = "history-navigation"))]
+fn history_search_abort_on_empty_line_cleans_up() {
+    require_zsh_pty!();
+    let Some(term) = colour_terminal() else {
+        skip("no terminal type with standard xterm colour capabilities was found");
+        return;
+    };
+
+    let history = b": 1700000000:0;echo first_candidate\n: 1700000001:0;echo second_candidate\n: 1700000002:0;echo third_candidate\n";
+    let capture = match capture_with_history(
+        &Scenario {
+            // Press Ctrl-R on empty buffer, cancel with Ctrl-G (\x07), press Enter (\r)
+            typed: "\x12\x07\r".to_string(),
+            wait_for: PROMPT.as_bytes(),
+            load_module: true,
+            count: 2,
+        },
+        term.name,
+        "abort_empty",
+        history,
+    ) {
+        Ok(capture) => capture,
+        Err(reason) => {
+            skip(&reason);
+            return;
+        }
+    };
+
+    assert!(
+        capture.contains(MODULE_LOADED.as_bytes()),
+        "the module did not load"
+    );
+
+    // Verify nothing executed when aborted from an empty buffer
+    assert!(
+        !capture.contains(b"third_candidate\r\n"),
+        "third candidate executed after abort on empty line.\n{}",
+        capture.dump()
+    );
+    assert!(
+        !capture.contains(b"second_candidate\r\n"),
+        "second candidate executed after abort on empty line.\n{}",
+        capture.dump()
+    );
+}
+
+#[test]
+#[cfg(any(feature = "history", feature = "history-navigation"))]
+fn ctrl_r_fzf_fallback_strips_history_numbers() {
+    require_zsh_pty!();
+    let Some(term) = colour_terminal() else {
+        skip("no terminal type with standard xterm colour capabilities was found");
+        return;
+    };
+
+    // Create a mock fzf script that simulates fzf returning a formatted history line
+    let mock_dir = temp_dir("mock_fzf");
+    let mock_fzf = mock_dir.join("fzf");
+    let mock_script = "#!/bin/sh\nprintf '  123* echo FZF_FALLBACK_STRIPPED_OK\\n'\n";
+    fs::write(&mock_fzf, mock_script).expect("write mock fzf");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&mock_fzf).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&mock_fzf, perms).expect("chmod mock fzf");
+    }
+
+    let history = b": 1700000000:0;echo dummy\n";
+    let extra_rc = format!(
+        "export PATH=\"{}:$PATH\"\nexport ZSH_PULSE_USE_FZF=1\n",
+        mock_dir.display()
+    );
+
+    let capture = match capture_with_history_extra(
+        &Scenario {
+            // Ctrl-R triggers _zsh_pulse_fzf_history_widget (mock fzf), then Enter accepts and executes
+            typed: "\x12\r".to_string(),
+            wait_for: PROMPT.as_bytes(),
+            load_module: true,
+            count: 3,
+        },
+        term.name,
+        "fzf_strip",
+        history,
+        &extra_rc,
+    ) {
+        Ok(capture) => capture,
+        Err(reason) => {
+            skip(&reason);
+            return;
+        }
+    };
+
+    assert!(
+        capture.contains(MODULE_LOADED.as_bytes()),
+        "the module did not load"
+    );
+
+    assert!(
+        capture.contains(b"FZF_FALLBACK_STRIPPED_OK\r\n"),
+        "fzf fallback did not cleanly strip history line numbers or execute command.\n{}",
+        capture.dump()
+    );
+    assert!(
+        !capture.contains(b"123"),
+        "raw history number 123 leaked into executed buffer.\n{}",
         capture.dump()
     );
 }
