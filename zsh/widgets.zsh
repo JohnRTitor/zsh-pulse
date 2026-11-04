@@ -414,6 +414,11 @@ zsh-pulse-highlight-redraw() {
     return 0
   fi
 
+  # Reset history searching state if any non-history-search widget was invoked
+  if [[ ${LASTWIDGET##.} != (up-line-or-search|down-line-or-select) ]]; then
+    _zsh_pulse_hist_searching=0
+  fi
+
   # Real-time type-ahead completion auto-listing below prompt (like zsh-autocomplete).
   # MUST NEVER run if:
   # 1. We are already inside a typeahead widget call (prevent re-entrancy recursion).
@@ -458,7 +463,7 @@ zsh-pulse-highlight-redraw() {
 
   # Real-time ghost autosuggestion from zsh-pulse (sub-10us latency)
   if [[ ${ZSH_PULSE_AUTOSUGGEST:-1} != (0|[fF][aA][lL][sS][eE]|[oO][fF][fF]|[nN][oO]) ]]; then
-    if (( ! PENDING && ! KEYS_QUEUED_COUNT )); then
+    if (( ! PENDING && ! KEYS_QUEUED_COUNT && ! _zsh_pulse_hist_searching )); then
       if [[ $CURSOR -ge $#BUFFER && -n $BUFFER ]] && (( $+builtins[zsh-pulse-complete] )); then
         zsh-pulse-complete --autosuggest 2>/dev/null
         if [[ -n $_zsh_pulse_autosuggestion ]]; then
@@ -469,6 +474,8 @@ zsh-pulse-highlight-redraw() {
       else
         unset POSTDISPLAY
       fi
+    else
+      unset POSTDISPLAY
     fi
   else
     unset POSTDISPLAY
@@ -481,6 +488,10 @@ zsh-pulse-highlight-line-finish() {
   _ZSH_PULSE_IN_TYPEAHEAD=0
   _ZSH_PULSE_MENU_HIDDEN=0
   _ZSH_PULSE_MENU_ACTIVE=0
+  _zsh_pulse_hist_searching=0
+  _zsh_pulse_hist_orig_buffer=""
+  _zsh_pulse_hist_orig_no=0
+  _zsh_pulse_hist_cursor=0
 }
 
 # The start-of-line hook.
@@ -492,6 +503,10 @@ zsh-pulse-highlight-line-init() {
   _ZSH_PULSE_MENU_HIDDEN=0
   _ZSH_PULSE_IN_TYPEAHEAD=0
   _ZSH_PULSE_MENU_ACTIVE=0
+  _zsh_pulse_hist_searching=0
+  _zsh_pulse_hist_orig_buffer=""
+  _zsh_pulse_hist_orig_no=0
+  _zsh_pulse_hist_cursor=0
   zsh-pulse-highlight --reset
 }
 

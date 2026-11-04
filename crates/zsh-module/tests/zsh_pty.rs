@@ -2066,3 +2066,126 @@ fn ctrl_r_fzf_fallback_strips_history_numbers() {
         capture.dump()
     );
 }
+
+#[test]
+#[cfg(any(feature = "history", feature = "history-navigation"))]
+fn history_navigation_up_and_down_across_multiline_entries() {
+    require_zsh_pty!();
+    let Some(term) = colour_terminal() else {
+        skip("no terminal type with standard xterm colour capabilities was found");
+        return;
+    };
+
+    let history = b": 1700000000:0;echo cmd_one\n: 1700000001:0;printf 'multiline_target\\n'\n: 1700000002:0;echo cmd_three\n";
+    let capture = match capture_with_history(
+        &Scenario {
+            // Up (cmd_three), Up (multiline_target), Up (cmd_one), Down (multiline_target), Enter
+            typed: "\x1b[A\x1b[A\x1b[A\x1b[B\r".to_string(),
+            wait_for: PROMPT.as_bytes(),
+            load_module: true,
+            count: 2,
+        },
+        term.name,
+        "hist_multiline_nav",
+        history,
+    ) {
+        Ok(capture) => capture,
+        Err(reason) => {
+            skip(&reason);
+            return;
+        }
+    };
+
+    assert!(
+        capture.contains(MODULE_LOADED.as_bytes()),
+        "the module did not load"
+    );
+
+    assert!(
+        capture.contains(b"multiline_target\r\n"),
+        "multiline entry was not cleanly traversed and executed on Up/Down sequence.\n{}",
+        capture.dump()
+    );
+}
+
+#[test]
+#[cfg(any(feature = "history", feature = "history-navigation"))]
+fn history_prefix_search_up_down_restores_original_buffer() {
+    require_zsh_pty!();
+    let Some(term) = colour_terminal() else {
+        skip("no terminal type with standard xterm colour capabilities was found");
+        return;
+    };
+
+    let history = b": 1700000000:0;echo match_old\n: 1700000001:0;ls other\n: 1700000002:0;echo match_new\n";
+    let capture = match capture_with_history(
+        &Scenario {
+            // Type "echo match_", Up (match_new), Up (match_old), Down (match_new), Down (echo match_), type "custom_tail", Enter
+            typed: "echo match_\x1b[A\x1b[A\x1b[B\x1b[Bcustom_tail\r".to_string(),
+            wait_for: PROMPT.as_bytes(),
+            load_module: true,
+            count: 2,
+        },
+        term.name,
+        "hist_prefix_restore",
+        history,
+    ) {
+        Ok(capture) => capture,
+        Err(reason) => {
+            skip(&reason);
+            return;
+        }
+    };
+
+    assert!(
+        capture.contains(MODULE_LOADED.as_bytes()),
+        "the module did not load"
+    );
+
+    assert!(
+        capture.contains(b"match_custom_tail\r\n"),
+        "original prefix was not restored when traversing down to start of search.\n{}",
+        capture.dump()
+    );
+}
+
+#[test]
+#[cfg(any(feature = "history", feature = "history-navigation"))]
+fn history_navigation_multiline_with_backslash_continuations() {
+    require_zsh_pty!();
+    let Some(term) = colour_terminal() else {
+        skip("no terminal type with standard xterm colour capabilities was found");
+        return;
+    };
+
+    let history = b": 1700000000:0;echo cmd_old\n: 1700000001:0;echo multiline_part1; \\\n  echo multiline_part2; \\\n  echo multiline_part3\n: 1700000002:0;echo cmd_new\n";
+    let capture = match capture_with_history(
+        &Scenario {
+            // Up to cmd_new, Up to multiline command, Up to cmd_old, Down to multiline command, Enter
+            typed: "\x1b[A\x1b[A\x1b[A\x1b[B\r".to_string(),
+            wait_for: PROMPT.as_bytes(),
+            load_module: true,
+            count: 2,
+        },
+        term.name,
+        "hist_backslash_multiline",
+        history,
+    ) {
+        Ok(capture) => capture,
+        Err(reason) => {
+            skip(&reason);
+            return;
+        }
+    };
+
+    assert!(
+        capture.contains(MODULE_LOADED.as_bytes()),
+        "the module did not load"
+    );
+
+    assert!(
+        capture.contains(b"multiline_part1\r\nmultiline_part2\r\nmultiline_part3\r\n"),
+        "multiline command with continuations was not cleanly navigated and executed.\n{}",
+        capture.dump()
+    );
+}

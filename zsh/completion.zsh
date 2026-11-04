@@ -209,26 +209,65 @@ if (( has_history )); then
 
   # Fish-style prefix search on Up/Down arrows:
   # - Searches backward/forward in history matching the prefix currently in BUFFER.
-  # - If BUFFER is empty or multiline, navigates lines/history cleanly.
+  # - Seamlessly navigates across multiline history entries without getting trapped.
+  # - Restores original typed prefix when navigating back to the start of history.
+  # - When actively editing within a multiline command, navigates lines until top/bottom.
   autoload -Uz up-line-or-beginning-search down-line-or-beginning-search 2>/dev/null
   zle -N up-line-or-beginning-search
   zle -N down-line-or-beginning-search
 
+  typeset -g _zsh_pulse_hist_searching=0
+  typeset -g _zsh_pulse_hist_orig_buffer=""
+  typeset -gi _zsh_pulse_hist_orig_no=0
+  typeset -gi _zsh_pulse_hist_cursor=0
+
   _zsh_pulse_up_line_or_search() {
-    if [[ $LBUFFER == *$'\n'* ]]; then
+    if (( _zsh_pulse_hist_searching )); then
+      local -i saved_cursor=$CURSOR
+      CURSOR=$_zsh_pulse_hist_cursor
+      if zle .history-beginning-search-backward; then
+        CURSOR=$#BUFFER
+      else
+        CURSOR=$saved_cursor
+      fi
+    elif [[ $LBUFFER == *$'\n'* ]]; then
+      _zsh_pulse_hist_searching=0
       zle .up-line
     else
-      zle up-line-or-beginning-search 2>/dev/null || zle .up-line-or-history
+      _zsh_pulse_hist_orig_buffer="$BUFFER"
+      _zsh_pulse_hist_cursor=$CURSOR
+      _zsh_pulse_hist_orig_no=$HISTNO
+      _ZSH_PULSE_LAST_TYPEAHEAD=""
+      _zsh_pulse_matches=()
+      zle -Rc 2>/dev/null
+      if zle .history-beginning-search-backward; then
+        _zsh_pulse_hist_searching=1
+        CURSOR=$#BUFFER
+      else
+        zle up-line-or-beginning-search 2>/dev/null || zle .up-line-or-history
+      fi
     fi
   }
 
   zle -N up-line-or-search _zsh_pulse_up_line_or_search
 
   _zsh_pulse_down_line_or_select() {
-    if [[ $RBUFFER == *$'\n'* ]]; then
+    if (( _zsh_pulse_hist_searching )); then
+      CURSOR=$_zsh_pulse_hist_cursor
+      if zle .history-beginning-search-forward && (( HISTNO < _zsh_pulse_hist_orig_no )); then
+        CURSOR=$#BUFFER
+      else
+        BUFFER="$_zsh_pulse_hist_orig_buffer"
+        CURSOR=$_zsh_pulse_hist_cursor
+        _zsh_pulse_hist_searching=0
+      fi
+    elif [[ $RBUFFER == *$'\n'* ]]; then
+      _zsh_pulse_hist_searching=0
       zle .down-line
     else
-      if [[ -n $_ZSH_PULSE_LAST_TYPEAHEAD ]]; then
+      _zsh_pulse_hist_searching=0
+      if (( _ZSH_PULSE_MENU_HIDDEN == 0 && ${#_zsh_pulse_matches[@]} > 0 )) &&
+         [[ -n $_ZSH_PULSE_LAST_TYPEAHEAD && "$BUFFER" == "$_ZSH_PULSE_LAST_TYPEAHEAD" ]]; then
         zle menu-select -w 2>/dev/null || zle down-line-or-beginning-search 2>/dev/null || zle .down-line-or-history
       else
         zle down-line-or-beginning-search 2>/dev/null || zle .down-line-or-history
@@ -384,6 +423,7 @@ if (( has_autocomplete || has_history )); then
       _ZSH_PULSE_SAVED_ACTIVE=0
     fi
     typeset -g _ZSH_PULSE_MENU_ACTIVE=0
+    _zsh_pulse_hist_searching=0
     zle -Rc 2>/dev/null
   }
   zle -N _zsh_pulse_menuselect_abort
@@ -392,6 +432,7 @@ if (( has_autocomplete || has_history )); then
     typeset -g _ZSH_PULSE_MENU_ACTIVE=0
     _ZSH_PULSE_SAVED_BUFFER=""
     _ZSH_PULSE_SAVED_ACTIVE=0
+    _zsh_pulse_hist_searching=0
     zle .accept-line
   }
   zle -N _zsh_pulse_menuselect_accept
