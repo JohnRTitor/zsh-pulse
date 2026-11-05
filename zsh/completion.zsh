@@ -81,10 +81,11 @@ if (( has_autocomplete )); then
     emulate -L zsh
     setopt extendedglob noglob
     local curcontext="list-choices:::"
+    local MENUSELECT MENUMODE
 
     # Never run typeahead if menu selection is already active or in progress.
-    if [[ $KEYMAP == menuselect || -n $MENUSELECT || -n $MENUMODE || $_ZSH_PULSE_MENU_ACTIVE == 1 ]] ||
-       zsh-pulse-complete --is-menu-active 2>/dev/null; then
+    if [[ $KEYMAP == menuselect || $_ZSH_PULSE_MENU_ACTIVE == 1 ]] ||
+       { (( $+builtins[zsh-pulse-complete] )) && zsh-pulse-complete --is-menu-active 2>/dev/null; }; then
       return 0
     fi
 
@@ -331,10 +332,8 @@ if (( has_autocomplete )); then
       zle -Rc 2>/dev/null
     else
       _ZSH_PULSE_MENU_HIDDEN=0
-      _ZSH_PULSE_LAST_TYPEAHEAD="$BUFFER"
-      local -a _saved_rh=( "${region_highlight[@]}" )
-      zle zsh-pulse-typeahead 2>/dev/null || zle expand-or-complete
-      region_highlight=( "${_saved_rh[@]}" )
+      _ZSH_PULSE_LAST_TYPEAHEAD=""
+      zle expand-or-complete
     fi
   }
 

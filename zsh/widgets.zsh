@@ -400,7 +400,7 @@ typeset -g _ZSH_PULSE_IN_TYPEAHEAD=0
 
 zsh-pulse-highlight-redraw() {
   # Self-heal menu active state if complist has exited or aborted
-  if [[ $KEYMAP != menuselect && -z $MENUSELECT && -z $MENUMODE ]]; then
+  if [[ $KEYMAP != menuselect ]]; then
     if (( ! $+builtins[zsh-pulse-complete] )) || ! zsh-pulse-complete --is-menu-active 2>/dev/null; then
       _ZSH_PULSE_MENU_ACTIVE=0
     fi
@@ -408,7 +408,7 @@ zsh-pulse-highlight-redraw() {
 
   # When menu selection or completion is active, immediately unset ghost autosuggestions
   # and skip both typeahead and highlight mutation to prevent screen flicker and cursor desynchronization.
-  if [[ $KEYMAP == menuselect || -n $MENUSELECT || -n $MENUMODE || $_ZSH_PULSE_MENU_ACTIVE == 1 ]] ||
+  if [[ $KEYMAP == menuselect || $_ZSH_PULSE_MENU_ACTIVE == 1 ]] ||
      { (( $+builtins[zsh-pulse-complete] )) && zsh-pulse-complete --is-menu-active 2>/dev/null; }; then
     unset POSTDISPLAY
     return 0
@@ -422,7 +422,7 @@ zsh-pulse-highlight-redraw() {
   # Real-time type-ahead completion auto-listing below prompt (like zsh-autocomplete).
   # MUST NEVER run if:
   # 1. We are already inside a typeahead widget call (prevent re-entrancy recursion).
-  # 2. We are in menu selection (KEYMAP == menuselect, MENUSELECT / MENUMODE, or localkeymap/menucmp).
+  # 2. We are in menu selection (KEYMAP == menuselect, or localkeymap/menucmp).
   # 3. A completion/menu/search widget is currently running or was the last widget.
   # Calling any completion widget while complist.so is in menu-select corrupts Zsh's C heap and causes SIGSEGV.
   if [[ ${ZSH_PULSE_COMPLETION:-1} != (0|[fF][aA][lL][sS][eE]|[oO][fF][fF]|[nN][oO]) ]]; then

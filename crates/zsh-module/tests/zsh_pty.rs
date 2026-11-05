@@ -1176,6 +1176,57 @@ fn the_highlighting_survives_a_second_command_line() {
     );
 }
 
+/// A shell completion via Tab must never kill syntax highlighting on subsequent lines or commands.
+/// Previously, Zsh's `_main_complete` set global `MENUSELECT=0`, causing `zsh-pulse-highlight-redraw`
+/// to permanently bail out on `-n $MENUSELECT`.
+#[test]
+#[cfg(feature = "highlight")]
+fn the_highlighting_survives_tab_completion() {
+    require_zsh_pty!();
+    let Some(term) = colour_terminal() else {
+        skip("no terminal type with standard xterm colour capabilities was found");
+        return;
+    };
+    let capture = match capture(
+        &Scenario {
+            // Type command, trigger tab completion, accept/submit with newlines, then type a command on next line.
+            typed: "echo SPARGXYZ\t\r\recho SPARGZULU".to_string(),
+            wait_for: SECOND_ARGUMENT.as_bytes(),
+            load_module: true,
+            count: 1,
+        },
+        term.name,
+        "tab-highlight",
+    ) {
+        Ok(capture) => capture,
+        Err(reason) => {
+            skip(&reason);
+            return;
+        }
+    };
+
+    assert!(
+        capture.contains(MODULE_LOADED.as_bytes()),
+        "the module did not load in the shell under the pty.\n{}",
+        capture.dump()
+    );
+
+    let second = capture.screen_occurrences(SECOND_ARGUMENT.as_bytes());
+    assert!(
+        !second.is_empty(),
+        "the argument {SECOND_ARGUMENT} of the second line was never drawn.\n{}",
+        capture.dump()
+    );
+
+    let green = capture.screen_positions_with(Attrs::of(&term.palette.green));
+    let second_at = second[0];
+    assert!(
+        green.iter().any(|at| *at < second_at),
+        "highlighting was killed after tab completion: no green command word drawn on the second line.\n{}",
+        capture.dump()
+    );
+}
+
 #[test]
 fn without_the_module_nothing_is_highlighted() {
     require_zsh_pty!();
