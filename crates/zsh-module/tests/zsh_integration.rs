@@ -1408,6 +1408,44 @@ fn complete_builtin_populates_matches_for_files() {
 }
 
 #[test]
+#[cfg(feature = "autocomplete")]
+fn typeahead_line_cap_follows_the_terminal_and_buffer_height() {
+    require_zsh!();
+    // zsh-autocomplete's real-time list is capped by rendered lines, not by
+    // matches: `min(16, LINES - BUFFERLINES - 1)`. The `(MORE)` marker and
+    // each group heading count toward the cap. This test pins the formula;
+    // the pty tests pin that the widget actually applies it.
+    let adapter = adapter_path();
+    let (ok, out) = run_zsh(
+        &format!(
+            "source {adapter}\n\
+             for spec in '40 1' '10 1' '10 5' '3 1' '2 1'; do\n\
+                 _zsh_pulse_typeahead_max_lines ${{=spec}}\n\
+                 print -r -- \"$spec -> $?/$_ZSH_PULSE_MAX_LINES\"\n\
+             done\n\
+             ZSH_PULSE_TYPEAHEAD_LINES=4 _zsh_pulse_typeahead_max_lines 40 1\n\
+             print -r -- \"override -> $?/$_ZSH_PULSE_MAX_LINES\"",
+            adapter = adapter.display(),
+        ),
+        &[("ZSH_PULSE_AUTOSUGGEST", "0")],
+    );
+    assert!(ok, "zsh exited badly: {out}");
+    for expected in [
+        "40 1 -> 0/16",
+        "10 1 -> 0/8",
+        "10 5 -> 0/4",
+        "3 1 -> 0/1",
+        "2 1 -> 1/0",
+        "override -> 0/4",
+    ] {
+        assert!(
+            out.contains(expected),
+            "expected `{expected}` in the line-cap results: {out}"
+        );
+    }
+}
+
+#[test]
 #[cfg(any(feature = "autocomplete", feature = "history", feature = "history-navigation"))]
 fn complete_builtin_on_large_dir_does_not_hang() {
     require_zsh!();

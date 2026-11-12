@@ -314,6 +314,8 @@ typeset -g READY=$(<${SP_READY_FILE})
 typeset -g DONE=$(<${SP_DONE_FILE})
 typeset -g COUNT=${SP_DONE_COUNT:-1}
 typeset -g TYPED=${SP_TYPE-}
+typeset -g KEYS=${SP_KEYS_FILE-}
+typeset -g SNAPSHOTS=${SP_SNAPSHOTS-}
 typeset -g OUT=${SP_OUT-}
 typeset -g TIMEOUT=${SP_TIMEOUT:-10}
 typeset -g PTY=zshpulse-pty
@@ -369,7 +371,56 @@ done
 # line matters -- a plugin that works on the first line and then goes quiet
 # looks exactly like one that works.
 typeset -i typed=0
-if (( ready )); then
+if (( ready )) && [[ -n $KEYS ]]; then
+  # Paced key mode. The keys are separated by ASCII unit separator (0x1f),
+  # not by newline: a key may itself be Enter.
+  #
+  # The input has to be paced. zsh-pulse skips the typeahead preview while
+  # `KEYS_QUEUED_COUNT` is non-zero, so writing a whole line at once would
+  # suppress the very previews these tests exist to observe. After each key
+  # the harness reads until the terminal has been quiet for a few ticks,
+  # then records the capture length: that offset is the snapshot the test
+  # inspects for this key's output.
+  typeset -g rest=$(<${KEYS})
+  # The file ends with a sentinel byte, not a newline. Without it, command
+  # substitution would strip a trailing Enter key: the key *is* a newline.
+  rest=${rest%$'\x1e'}
+  typeset -a keys=()
+  while [[ -n $rest ]]; do
+    keys+=("${rest%%$'\x1f'*}")
+    if [[ $rest == *$'\x1f'* ]]; then
+      rest=${rest#*$'\x1f'}
+    else
+      rest=''
+    fi
+  done
+
+  [[ -n $SNAPSHOTS ]] && : > $SNAPSHOTS
+  typeset -i ki quiet ticks
+  for ki in {1..${#keys}}; do
+    zpty -wn $PTY "$keys[ki]"
+    quiet=0
+    ticks=0
+    # Wait for output, and for it to stop again. The quiet window is
+    # deliberately longer than the gap before a synchronous completion
+    # starts drawing; a shorter one would snapshot the previous screen and
+    # attribute the next key's preview to the following key. The tick cap
+    # is a safety net for a completion function that never stops writing.
+    while (( quiet < 20 && ticks < 300 )); do
+      typeset chunk=''
+      if zpty -rt $PTY chunk 2>/dev/null; then
+        CAP+=$chunk
+        quiet=0
+      else
+        (( quiet++ ))
+      fi
+      (( ticks++ ))
+      sleep 0.02
+    done
+    [[ -n $SNAPSHOTS ]] && print -r -- ${#CAP} >> $SNAPSHOTS
+  done
+  typed=1
+elif (( ready )); then
   # The text is split on *newlines*, with the `f` flag of the `(@)`
   # parameter expansion flag.
   #
@@ -408,6 +459,12 @@ print -r -- "ready=$ready typed=$typed seen=$OCCURRENCES bytes=${#CAP}"
 struct Capture {
     /// Every byte the shell under the pty wrote to the terminal.
     bytes: Vec<u8>,
+    /// Capture lengths after each paced key, in order.
+    ///
+    /// Empty for runs that typed a whole line at once. For a paced run,
+    /// `snapshots[i]` is where the output produced by key `i` ends, so
+    /// `segment(i)` is exactly what that key drew.
+    snapshots: Vec<usize>,
     /// The harness's own status line, for the failure message.
     status: String,
 }
@@ -418,6 +475,32 @@ impl Capture {
         self.bytes
             .windows(needle.len())
             .any(|window| window == needle)
+    }
+
+    /// The bytes written while one paced key was processed.
+    ///
+    /// The segment runs from the end of the previous key's output to the
+    /// end of this key's output. It is the snapshot that makes it possible
+    /// to tell a preview drawn before Tab from the list drawn by Tab.
+    fn segment(&self, index: usize) -> &[u8] {
+        let start = if index == 0 {
+            0
+        } else {
+            self.snapshots.get(index - 1).copied().unwrap_or(0)
+        };
+        let end = self
+            .snapshots
+            .get(index)
+            .copied()
+            .unwrap_or(self.bytes.len())
+            .min(self.bytes.len());
+        self.bytes.get(start..end).unwrap_or_default()
+    }
+
+    /// Whether one paced key's output contains `needle`.
+    fn segment_contains(&self, index: usize, needle: &[u8]) -> bool {
+        let segment = self.segment(index);
+        segment.windows(needle.len()).any(|window| window == needle)
     }
 
     /// The captured bytes, escaped so that a failure message is readable.
@@ -713,11 +796,12 @@ fn temp_dir(label: &str) -> PathBuf {
 /// `ZDOTDIR` points at this directory, so the interactive shell reads
 /// `.zshrc` from here and from nowhere else: the user's own configuration
 /// cannot influence the result.
-fn write_child_rc(dir: &Path, load_module: bool) {
-    write_child_rc_extra(dir, load_module, "");
-}
-
-fn write_child_rc_extra(dir: &Path, load_module: bool, extra_rc: &str) {
+///
+/// `extra_rc` runs before the adapter, `after_rc` after it. Completion
+/// fixtures need the latter: they register with `compdef`, which only
+/// exists after `compinit` and the plugin have installed the completion
+/// system.
+fn write_child_rc_full(dir: &Path, load_module: bool, extra_rc: &str, after_rc: &str) {
     let mut rc = String::new();
     rc.push_str(&format!("PS1='{PROMPT}'\n"));
     rc.push_str("RPROMPT=\n");
@@ -737,6 +821,7 @@ fn write_child_rc_extra(dir: &Path, load_module: bool, extra_rc: &str) {
             install_module().display()
         ));
         rc.push_str(&format!("source '{}'\n", adapter_path().display()));
+        rc.push_str(after_rc);
     }
     // Proof that the module really loaded. Without it, "nothing was
     // highlighted" would prove nothing at all.
@@ -753,7 +838,7 @@ fn capture_with_history(
     label: &str,
     history: &[u8],
 ) -> Result<Capture, String> {
-    capture_with_history_extra(scenario, term, label, history, "")
+    capture_full(scenario, term, label, history, "", "", None)
 }
 
 #[allow(dead_code)]
@@ -764,62 +849,7 @@ fn capture_with_history_extra(
     history: &[u8],
     extra_rc: &str,
 ) -> Result<Capture, String> {
-    let dir = temp_dir(label);
-
-    let harness = dir.join("harness.zsh");
-    fs::write(&harness, HARNESS).expect("write the pty harness");
-    let ready = dir.join("ready.bin");
-    fs::write(&ready, PROMPT.as_bytes()).expect("write the ready marker");
-    let done = dir.join("done.bin");
-    fs::write(&done, scenario.wait_for).expect("write the wait marker");
-    let out = dir.join("capture.bin");
-
-    let rc_dir = dir.join("rc");
-    fs::create_dir_all(&rc_dir).expect("create the rc directory");
-    fs::write(rc_dir.join(".zsh_history"), history).expect("write history");
-    write_child_rc_extra(&rc_dir, scenario.load_module, extra_rc);
-
-    let child = Command::new("zsh")
-        .arg("-f")
-        .arg(&harness)
-        .env("SP_READY_FILE", &ready)
-        .env("SP_DONE_FILE", &done)
-        .env("SP_DONE_COUNT", scenario.count.to_string())
-        .env("SP_TYPE", &scenario.typed)
-        .env("SP_OUT", &out)
-        .env("SP_TIMEOUT", "10")
-        .env("ZDOTDIR", &rc_dir)
-        .env("TERM", term)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn the pty harness");
-    let mut guard = ChildGuard(child);
-
-    let status = wait_with_timeout(&mut guard.0, Duration::from_secs(30))
-        .expect("wait for the pty harness")
-        .unwrap_or_else(|| {
-            panic!(
-                "the pty harness timed out after 30s. Captured bytes:\n{}",
-                String::from_utf8_lossy(&fs::read(&out).unwrap_or_default())
-            );
-        });
-
-    if status.code() == Some(3) {
-        let mut stderr = String::new();
-        let _ = guard.0.stderr.take().unwrap().read_to_string(&mut stderr);
-        return Err(stderr.trim().to_string());
-    }
-
-    assert!(
-        status.success(),
-        "pty harness exited with status {status:?}"
-    );
-    let bytes = fs::read(&out).unwrap_or_default();
-    Ok(Capture {
-        bytes,
-        status: status.to_string(),
-    })
+    capture_full(scenario, term, label, history, extra_rc, "", None)
 }
 
 /// Run one scenario under a pseudo-terminal.
@@ -833,6 +863,47 @@ fn capture_with_history_extra(
 /// so that the skip markers come from the test itself and a caller
 /// cannot forget to print them.
 fn capture(scenario: &Scenario, term: &str, label: &str) -> Result<Capture, String> {
+    capture_full(scenario, term, label, b"", "", "", None)
+}
+
+/// Run one scenario with paced key input.
+///
+/// `keys` are sent one at a time, with the harness draining the terminal
+/// between them. That is required for typeahead: the plugin skips the
+/// preview while `KEYS_QUEUED_COUNT` is non-zero, so typing a whole line
+/// at once would suppress it. The returned [`Capture`] carries one
+/// snapshot offset per key.
+fn capture_keys(
+    scenario: &Scenario,
+    term: &str,
+    label: &str,
+    keys: &[&[u8]],
+    after_rc: &str,
+) -> Result<Capture, String> {
+    let mut key_file = Vec::new();
+    for (index, key) in keys.iter().enumerate() {
+        if index > 0 {
+            key_file.push(0x1f);
+        }
+        key_file.extend_from_slice(key);
+    }
+    // A sentinel byte (ASCII record separator) keeps command substitution
+    // from stripping a final Enter key's newline. The harness removes it
+    // before splitting on the unit separators.
+    key_file.push(0x1e);
+    capture_full(scenario, term, label, b"", "", after_rc, Some(&key_file))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn capture_full(
+    scenario: &Scenario,
+    term: &str,
+    label: &str,
+    history: &[u8],
+    before_rc: &str,
+    after_rc: &str,
+    keys: Option<&[u8]>,
+) -> Result<Capture, String> {
     let dir = temp_dir(label);
 
     let harness = dir.join("harness.zsh");
@@ -842,26 +913,37 @@ fn capture(scenario: &Scenario, term: &str, label: &str) -> Result<Capture, Stri
     let done = dir.join("done.bin");
     fs::write(&done, scenario.wait_for).expect("write the wait marker");
     let out = dir.join("capture.bin");
+    let keys_file = dir.join("keys.bin");
+    let snapshots_file = dir.join("snapshots.txt");
 
     let rc_dir = dir.join("rc");
     fs::create_dir_all(&rc_dir).expect("create the rc directory");
-    write_child_rc(&rc_dir, scenario.load_module);
+    fs::write(rc_dir.join(".zsh_history"), history).expect("write history");
+    write_child_rc_full(&rc_dir, scenario.load_module, before_rc, after_rc);
 
-    let child = Command::new("zsh")
+    let mut command = Command::new("zsh");
+    command
         .arg("-f")
         .arg(&harness)
         .env("SP_READY_FILE", &ready)
         .env("SP_DONE_FILE", &done)
         .env("SP_DONE_COUNT", scenario.count.to_string())
-        .env("SP_TYPE", &scenario.typed)
         .env("SP_OUT", &out)
         .env("SP_TIMEOUT", "10")
         .env("ZDOTDIR", &rc_dir)
         .env("TERM", term)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn the pty harness");
+        .stderr(Stdio::piped());
+    if let Some(keys) = keys {
+        fs::write(&keys_file, keys).expect("write the paced keys");
+        command
+            .env("SP_KEYS_FILE", &keys_file)
+            .env("SP_SNAPSHOTS", &snapshots_file);
+    } else {
+        command.env("SP_TYPE", &scenario.typed);
+    }
+
+    let child = command.spawn().expect("spawn the pty harness");
     let mut guard = ChildGuard(child);
 
     let status = wait_with_timeout(&mut guard.0, Duration::from_secs(30))
@@ -894,11 +976,21 @@ fn capture(scenario: &Scenario, term: &str, label: &str) -> Result<Capture, Stri
     );
 
     let bytes = fs::read(&out).expect("read the captured bytes");
+    let snapshots = if keys.is_some() {
+        fs::read_to_string(&snapshots_file)
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| line.trim().parse::<usize>().ok())
+            .collect()
+    } else {
+        Vec::new()
+    };
     // The scratch directory is not needed any more; the bytes it held are
     // in memory now.
     let _ = fs::remove_dir_all(&dir);
     Ok(Capture {
         bytes,
+        snapshots,
         status: stdout.trim().to_string(),
     })
 }
@@ -1808,6 +1900,236 @@ fn menu_select_down_arrow_accept_line_does_not_segfault() {
     assert!(
         capture.contains(b"test_clean_exec"),
         "command was not executed cleanly after menu-select.\n{}",
+        capture.dump()
+    );
+}
+
+/// A deterministic completion fixture for the typeahead tests.
+///
+/// Thirty candidates with a shared prefix make both halves of the contract
+/// visible: the preview must stop at the line cap and leave `(MORE)`, and
+/// Tab must show the rest of the same native set. `sp-test` prints its
+/// arguments, so a test can tell whether a keystroke inserted a candidate
+/// into the buffer.
+///
+/// It is installed *after* the adapter, because `compdef` only exists
+/// after `compinit`.
+const TYPEAHEAD_RC: &str = r#"
+_sp_test_candidates() {
+  local -a values
+  integer i
+  for i in {1..30}; do
+    values+=("SPCANDA${(l:2::0:)i}")
+  done
+  _describe 'sp candidates' values
+}
+sp-test() { print -r -- "ARGS=$*" }
+compdef _sp_test_candidates sp-test
+"#;
+
+/// The keys that type `sp-test ` one character at a time.
+fn typeahead_keys() -> Vec<&'static [u8]> {
+    b"sp-test "
+        .iter()
+        .map(std::slice::from_ref)
+        .collect::<Vec<_>>()
+}
+
+/// The number of times `needle` occurs in one paced key's output.
+fn segment_count(capture: &Capture, index: usize, needle: &[u8]) -> usize {
+    capture
+        .segment(index)
+        .windows(needle.len())
+        .filter(|window| *window == needle)
+        .count()
+}
+
+#[test]
+#[cfg(feature = "autocomplete")]
+fn typeahead_preview_is_capped_without_tab() {
+    require_zsh_pty!();
+    let Some(term) = colour_terminal() else {
+        skip("no terminal type with standard xterm colour capabilities was found");
+        return;
+    };
+
+    let keys = typeahead_keys();
+    let last = keys.len() - 1;
+    let capture = match capture_keys(
+        &Scenario {
+            typed: String::new(),
+            wait_for: b"SPCANDA01",
+            load_module: true,
+            count: 1,
+        },
+        term.name,
+        "typeahead_preview_cap",
+        &keys,
+        TYPEAHEAD_RC,
+    ) {
+        Ok(capture) => capture,
+        Err(reason) => {
+            skip(&reason);
+            return;
+        }
+    };
+
+    assert!(
+        capture.contains(MODULE_LOADED.as_bytes()),
+        "the module did not load"
+    );
+    assert!(
+        capture.segment_contains(last, b"SPCANDA01"),
+        "the preview did not list the first candidate without Tab.\n{}",
+        capture.dump()
+    );
+    assert!(
+        capture.segment_contains(last, b"(MORE)"),
+        "the preview was not capped, so it has no (MORE) marker.\n{}",
+        capture.dump()
+    );
+    assert!(
+        !capture.segment_contains(last, b"SPCANDA30"),
+        "the preview must not list candidates past the line cap.\n{}",
+        capture.dump()
+    );
+    let previewed = segment_count(&capture, last, b"SPCANDA");
+    assert!(
+        previewed > 0 && previewed <= 16,
+        "the preview drew {previewed} candidate lines, not a capped list.\n{}",
+        capture.dump()
+    );
+}
+
+#[test]
+#[cfg(feature = "autocomplete")]
+fn first_tab_shows_the_full_native_list() {
+    require_zsh_pty!();
+    let Some(term) = colour_terminal() else {
+        skip("no terminal type with standard xterm colour capabilities was found");
+        return;
+    };
+
+    let mut keys = typeahead_keys();
+    let preview_index = keys.len() - 1;
+    keys.push(b"\t");
+    let tab_index = keys.len() - 1;
+
+    let capture = match capture_keys(
+        &Scenario {
+            typed: String::new(),
+            wait_for: b"SPCANDA30",
+            load_module: true,
+            count: 1,
+        },
+        term.name,
+        "typeahead_tab_full_list",
+        &keys,
+        TYPEAHEAD_RC,
+    ) {
+        Ok(capture) => capture,
+        Err(reason) => {
+            skip(&reason);
+            return;
+        }
+    };
+
+    assert!(
+        !capture.segment_contains(preview_index, b"SPCANDA30"),
+        "the capped preview should not contain the last candidate.\n{}",
+        capture.dump()
+    );
+    assert!(
+        capture.segment_contains(tab_index, b"SPCANDA30"),
+        "the first Tab did not expand the full native list.\n{}",
+        capture.dump()
+    );
+}
+
+#[test]
+#[cfg(feature = "autocomplete")]
+fn the_preview_does_not_insert_a_candidate() {
+    require_zsh_pty!();
+    let Some(term) = colour_terminal() else {
+        skip("no terminal type with standard xterm colour capabilities was found");
+        return;
+    };
+
+    let mut keys = typeahead_keys();
+    keys.push(b"\n");
+
+    let capture = match capture_keys(
+        &Scenario {
+            typed: String::new(),
+            wait_for: b"ARGS=",
+            load_module: true,
+            count: 1,
+        },
+        term.name,
+        "typeahead_no_insert",
+        &keys,
+        TYPEAHEAD_RC,
+    ) {
+        Ok(capture) => capture,
+        Err(reason) => {
+            skip(&reason);
+            return;
+        }
+    };
+
+    assert!(
+        capture.contains(b"ARGS=\r\n"),
+        "accepting the line should run the command with no arguments.\n{}",
+        capture.dump()
+    );
+    assert!(
+        !capture.contains(b"ARGS=SPCANDA"),
+        "a preview candidate was inserted into the buffer.\n{}",
+        capture.dump()
+    );
+}
+
+#[test]
+#[cfg(feature = "autocomplete")]
+fn down_arrow_enters_menu_selection_from_the_preview() {
+    require_zsh_pty!();
+    let Some(term) = colour_terminal() else {
+        skip("no terminal type with standard xterm colour capabilities was found");
+        return;
+    };
+
+    let mut keys = typeahead_keys();
+    keys.push(b"\x1b[B");
+    let down_index = keys.len() - 1;
+    keys.push(b"\n");
+
+    let capture = match capture_keys(
+        &Scenario {
+            typed: String::new(),
+            wait_for: b"ARGS=",
+            load_module: true,
+            count: 1,
+        },
+        term.name,
+        "typeahead_down_select",
+        &keys,
+        TYPEAHEAD_RC,
+    ) {
+        Ok(capture) => capture,
+        Err(reason) => {
+            skip(&reason);
+            return;
+        }
+    };
+
+    assert!(
+        capture.segment_contains(down_index, b"\x1b[7mSPCANDA01"),
+        "Down-Arrow did not enter menu selection with the first candidate highlighted.\n{}",
+        capture.dump()
+    );
+    assert!(
+        capture.contains(b"ARGS=SPCANDA01"),
+        "Enter after Down-Arrow did not accept the selected candidate.\n{}",
         capture.dump()
     );
 }
