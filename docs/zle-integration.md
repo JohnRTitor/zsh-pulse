@@ -22,26 +22,27 @@ As documented in Zsh's manual (`zsh-src/Doc/Zsh/zle.yo:1164-1168`), this hook is
 ### 1.2 Redraw Hook Responsibilities
 On each invocation of `zsh-pulse-highlight-redraw`:
 1. **Menu Guard**: If menu completion is currently active (`KEYMAP == menuselect` or `zsh-pulse-complete --is-menu-active`), unsets `$POSTDISPLAY` and returns immediately.
-2. **Typeahead Auto-Listing**: If completion is enabled and keys are not pending, invokes `_zsh_pulse_typeahead_widget` to display up to 16 completion matches below the prompt.
+2. **Typeahead Preview**: If completion is enabled, not in a history search, `PENDING == 0`, `KEYS_QUEUED_COUNT == 0`, and `_ZSH_PULSE_IN_TYPEAHEAD == 0`, invokes `_zsh_pulse_typeahead_widget` when the buffer changed to preview native compsys candidates below the prompt. The preview is synchronous and runs on the ZLE thread.
 3. **Native Syntax Highlighting**: Invokes `zsh-pulse-highlight --region-highlight` with cached command status arguments, publishing updated spans into `region_highlight`.
 4. **Inline Autosuggestions**: If autosuggestions are enabled and cursor is at end of line, invokes `zsh-pulse-complete --autosuggest` and populates `$POSTDISPLAY`.
 
 ---
 
-## 2. Real-Time Typeahead Auto-Listing
+## 2. Native Compsys Typeahead Preview
 
 ### 2.1 The `list-choices` Completion Widget
 - **Widget**: `_zsh_pulse_typeahead_widget` bound to `zle -C zsh-pulse-typeahead list-choices`
-- **Behavior**: Provides instant preview of completions beneath the prompt as the user types, without waiting for `Tab`.
-- **Latency**: Executes in < 10 µs by querying `zsh-pulse-complete --max=16` directly in Rust, avoiding Zsh's complex `compsys` shell script cascades.
+- **Behavior**: Provides a preview of Zsh's own completion candidates beneath the prompt as the user types, without waiting for `Tab`.
+- **Candidate Source**: Runs `_main_complete` synchronously in `curcontext="list-choices:::"` with `compstate[insert]=''`, `compstate[old_list]=''`, `compstate[pattern_insert]=''`, `compstate[list]='list force packed'`, and `compstate[list_max]=0`. This yields the same native compsys results (commands, options, subcommands, descriptions, and group headings) that Tab shows, while guaranteeing the preview never inserts text into `$BUFFER`.
+- **Line Cap & Truncation**: The preview is capped by rendered lines: `min(ZSH_PULSE_TYPEAHEAD_LINES (default 16), LINES - BUFFERLINES - 1)`. Group headings and the `(MORE)` marker count toward the cap. A `compadd`/`_describe` wrapper (adapted from zsh-autocomplete's `.autocomplete__async`, see [ATTRIBUTION.md](../ATTRIBUTION.md)) trims matches, stops further tags once full, and adds `(MORE)` when truncated.
+- **Cost**: This path is synchronous native completion, not the Rust candidate engine. Latency depends on the active completion functions/tags and may be milliseconds or more; native completion functions may fork, and the truncation wrapper uses command substitution. Zero-fork/sub-microsecond claims apply only to Rust highlighting/autosuggest/history paths.
 
 ### 2.2 Re-Entrancy & Corruption Guards
 Calling completion widgets while Zsh is already in menu selection (`complist.so`) causes memory corruption in Zsh's internal heap and triggers `SIGSEGV`.
-To ensure safety, `_zsh_pulse_typeahead_widget` is guarded:
-- Verifies `$_ZSH_PULSE_IN_TYPEAHEAD == 0`.
-- Verifies `! PENDING && ! KEYS_QUEUED_COUNT`.
-- Exits immediately if `is_menu_active` is true.
-- Sets `compstate[insert]=''` to strictly guarantee that auto-listing never inserts text into `$BUFFER`.
+To ensure safety, the redraw hook and widget are guarded:
+- The redraw hook only invokes typeahead when `_ZSH_PULSE_IN_TYPEAHEAD == 0`, `! PENDING`, and `! KEYS_QUEUED_COUNT`.
+- The widget exits immediately if `KEYMAP == menuselect`, `_ZSH_PULSE_MENU_ACTIVE == 1`, or `zsh-pulse-complete --is-menu-active` reports an active menu.
+- `_ZSH_PULSE_TYPEAHEAD_VISIBLE` is set only when a preview is actually shown, and is cleared on accept/abort/line-init/line-finish/reset paths.
 
 ---
 
@@ -72,13 +73,13 @@ In `menuselect`, navigation and lifecycle events require distinct handling:
 
 ## 4. Keybinding Integration & Widgets
 
-### 4.1 Tab Toggle Ergonomics (`_zsh_pulse_tab`)
-- **Normal state**: Pressing `Tab` toggles completion preview. If the typeahead menu is visible, `Tab` dismisses it (`_ZSH_PULSE_MENU_HIDDEN=1`). If hidden, `Tab` re-expands completions.
+### 4.1 Tab Full-List Expansion (`_zsh_pulse_tab`)
+- **Normal state**: The list shown while typing is a capped preview. Pressing `Tab` clears preview state (`_ZSH_PULSE_LAST_TYPEAHEAD`, `_ZSH_PULSE_TYPEAHEAD_VISIBLE`) and `_lastcomp=()` so `expand-or-complete` does not reuse the preview as the current list, then expands the full, uncapped native completion list on the first press. There is no hide/show toggle.
 - **Inside `menuselect`**: Pressing `Tab` invokes `_zsh_pulse_menuselect_abort`, restoring the original buffer and cleanly closing the menu without inserting unwanted characters.
 
 ### 4.2 Down-Arrow Selection (`down-line-or-select`)
-- If a typeahead preview menu is currently visible below the prompt, pressing `Down-Arrow` (`^[[B`, `^[OB`, `^N`, Vi `j`) immediately enters `menu-select`, highlighting the first candidate for rapid navigation.
-- If no completion list is visible, performs prefix history search forward.
+- If `_ZSH_PULSE_TYPEAHEAD_VISIBLE=1` and the buffer still matches the previewed buffer, pressing `Down-Arrow` (`^[[B`, `^[OB`, `^N`, Vi `j`) immediately enters menu selection, highlighting the first candidate for rapid navigation.
+- If no preview is eligible, performs prefix history search forward.
 
 ### 4.3 History Search Navigation (`up-line-or-search` & `Ctrl-R`)
 - `Up-Arrow` (`^[[A`, `^[OA`, `^P`, Vi `k`) performs Fish-style prefix history search (`up-line-or-beginning-search`) matching the text currently in `$BUFFER`.

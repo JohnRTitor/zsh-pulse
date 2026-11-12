@@ -15,7 +15,7 @@ During the research and design phases of `zsh-pulse`, the following upstream pro
 | **`fish-shell`** | [github.com/fish-shell/fish-shell](https://github.com/fish-shell/fish-shell) | GPL-2.0 / Dual | `35c290272cc9` | Semantic syntax roles, `--` option delimiters, ghost text autosuggestions, word-by-word accept ergonomics. |
 | **`fzf`** | [github.com/junegunn/fzf](https://github.com/junegunn/fzf) | MIT | `b1be3a8be1b8` | Pure Rust Smith-Waterman fuzzy scoring algorithm and exact scoring constants. |
 | **`ble.sh`** | [github.com/akinomyoga/ble.sh](https://github.com/akinomyoga/ble.sh) | BSD-3-Clause | `d81fd54feb0d` | Incremental syntax highlighting state checkpoints and convergence-based tail splicing. |
-| **`zsh-autocomplete`** | [github.com/marlonrichert/zsh-autocomplete](https://github.com/marlonrichert/zsh-autocomplete) | MIT | `77706d4cf248` | Completion menu layouts, `list-choices` typeahead widgets, complist safety. |
+| **`zsh-autocomplete`** | [github.com/marlonrichert/zsh-autocomplete](https://github.com/marlonrichert/zsh-autocomplete) | MIT | `77706d4cf248` | Completion menu layouts, `list-choices` typeahead widgets, complist safety, and real-time listing truncation/line-cap patterns. |
 | **`zasync`** | [github.com/marlonrichert/zasync](https://github.com/marlonrichert/zasync) | MIT | `dcdc53e2ab17` | Safe file descriptor lifecycle and `zle -F` handler patterns. |
 | **`zsh-autosuggestions`** | [github.com/zsh-users/zsh-autosuggestions](https://github.com/zsh-users/zsh-autosuggestions) | MIT | `85919cd1ffa7` | Ghost text rendering via `$POSTDISPLAY` and cursor retreat handling. |
 | **`fast-syntax-highlighting`** | [github.com/zdharma-continuum/fast-syntax-highlighting](https://github.com/zdharma-continuum/fast-syntax-highlighting) | BSD-3-Clause | `4672ad5dd9ad` | Command-first/filesystem-second lookup precedence and ZLE `region_highlight` mechanics. |
@@ -81,7 +81,8 @@ During the research and design phases of `zsh-pulse`, the following upstream pro
 ### 6. `zsh-autocomplete` & `zsh-src` — Menu Safety & Native Builtin Calling
 - **Implementation**: [`zsh/completion.zsh`](zsh/completion.zsh), [`crates/zsh-abi/src/api.rs`](crates/zsh-abi/src/api.rs)
 - **Borrowed Elements**:
-  - `list-choices` widget architecture for displaying typeahead completion previews below the prompt.
+  - `list-choices` widget architecture for displaying native compsys typeahead completion previews below the prompt.
+  - Real-time listing line-cap and truncation logic adapted from `Functions/Init/.autocomplete__async` (MIT): the `min(16, LINES - BUFFERLINES - 1)` rendered-line cap, `_describe` group/heading accounting, `compadd` wrapping/trimming (`_displ_`/`_matches_` arrays), early tag cutoff once the preview is full, and `(MORE)` marker behavior.
   - Interfacing with `complist`'s internal `domenu()` dispatcher via standard builtins (`up-line-or-history`, `down-line-or-history`, etc.) and delegating to dot-prefixed `.accept-line` on Enter to bypass user hooks and prevent premature menu cancellation.
   - Direct inspection of C global symbols (`localkeymap` and `menucmp`) to accurately detect active `complist` menu selection states and prevent re-entrant crashes.
 

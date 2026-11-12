@@ -25,7 +25,8 @@ Companion documents: [architecture](architecture.md) ·
 | **In-Memory History Lookup** | **< 10 µs** | Linear disk scans | `cargo test -p history` |
 | **Plugin Startup Latency (with `.zwc`)** | **0.17 ms** (module: 0.12 ms) | 50–200 ms (script plugins) | `bench/bench_startup.zsh` |
 | **Load-Time Syscalls** | **62** (505 → 567) | Minimal | `bench/bench_startup.zsh` |
-| **Process Spawns on Keystroke** | **0** (strictly 0 forks) | 0 | `bench/bench_startup.zsh` (strace `clone`/`execve`) |
+| **Process Spawns on Rust Keystroke Paths** | **0** (strictly 0 forks) | 0 | `bench/bench_startup.zsh` (strace `clone`/`execve`, highlighting/autosuggest/history) |
+| **Native Compsys Typeahead Preview** | **~4–30+ ms** (completion-dependent) | n/a (synchronous native `_main_complete`) | Manual `EPOCHREALTIME` probe in `list-choices` context |
 | **Keystroke → Screen Redraw (PTY)** | **68.0 µs** median | 45.1 µs (bare Zsh control) | `bench/bench_zpty.zsh 200` |
 
 ---
@@ -83,17 +84,34 @@ Measured via `bench/bench_startup.zsh`:
 
 ---
 
-## 6. Zero-Subshell Verification
+## 6. Zero-Subshell Verification (Rust Keystroke Paths)
 
-To guarantee that typing remains free of stutter, `zsh-pulse` asserts that zero processes are spawned on the keystroke path.
+To guarantee that the Rust hot paths remain free of stutter, `zsh-pulse` asserts that zero processes are spawned on the highlighting, autosuggest, and history keystroke paths.
 Running `bench/bench_startup.zsh` with `strace -f -e trace=clone,fork,vfork,execve` verifies:
 - Keystroke redraws: **0 spawns**.
 - Path lookups: **0 spawns** (in-process `stat` calls with 2-second LRU caching).
 - Autosuggestion matching: **0 spawns** (in-memory history log).
 
+This does **not** apply to the native-compsys typeahead preview: that path runs Zsh's completion system synchronously (`_main_complete`) and native completion functions/wrappers may fork or use subshells.
+
+## 7. Native Compsys Typeahead Latency
+
+The typeahead preview is intentionally synchronous and uses Zsh's own completion system so the preview matches Tab exactly. Its cost is therefore completion-function dependent, not bounded by the Rust microsecond budgets above.
+
+Representative manual measurements on zsh 5.9 in a devcontainer (`EPOCHREALTIME` around `_main_complete` in a `list-choices` context, warmed):
+- `git `: ~27 ms
+- `git ch`: ~23–30 ms
+- `ls Car`: ~4–8 ms
+
+Observed characteristics:
+- Complex/tag-heavy contexts can be much slower than simple path contexts.
+- A `compadd`/`_describe` truncation wrapper (adapted from zsh-autocomplete) caps rendered lines to `min(ZSH_PULSE_TYPEAHEAD_LINES, LINES - BUFFERLINES - 1)` and adds `(MORE)`, but it still executes completion logic and uses command substitution in places.
+- Native completion functions may fork; zero-fork claims are scoped to Rust paths only.
+- Previews are skipped while `PENDING`/`KEYS_QUEUED_COUNT` is non-zero or menu selection is active to avoid queuing synchronous work behind rapid input. Set `ZSH_PULSE_COMPLETION=0` to disable the preview.
+
 ---
 
-## 7. Reproducing Benchmark Results
+## 8. Reproducing Benchmark Results
 
 Execute the following commands from the repository root:
 

@@ -42,6 +42,12 @@ Companion documents: [architecture](architecture.md) ·
 - `ZSH_PULSE_MAX_LINE` (4 KiB): Input buffers exceeding 4,096 bytes are bypassed prior to word splitting.
 - `MAX_ANSWER_BYTES` (4 KiB): Command resolution argument strings exceeding 4 KiB are truncated to protect scratch buffer reuse.
 
+### 1.7 Native Compsys Typeahead Runs Synchronously
+- **Behavior**: The typeahead preview runs Zsh's native completion system (`_main_complete` in a `list-choices` context) synchronously on the ZLE thread so the preview matches Tab exactly.
+- **Cost**: Latency is determined by the active completion functions and tags, not by the Rust engine. Simple contexts may complete in milliseconds, while complex or tag-heavy completions can take much longer; the line-cap/truncation wrapper reduces rendered output but still executes completion logic and uses command substitution in places.
+- **Forks**: Native completion functions may fork/subshell; zero-fork guarantees apply only to the Rust highlighting, autosuggest, and history paths.
+- **Suppression**: To avoid queuing work behind rapid input, the preview is skipped while `PENDING` or `KEYS_QUEUED_COUNT` is non-zero and while menu selection/typeahead re-entrancy guards are active. Disable with `ZSH_PULSE_COMPLETION=0` if a specific completion context is too expensive interactively.
+
 ---
 
 ## 2. Measurement Context & Methodology
@@ -87,6 +93,7 @@ The following features were evaluated during design and are explicitly **out of 
 | Keystroke cost scales with line length | Performance | Low at typical command lengths | Sub-linear scanning; 0.5 µs at 1,389 bytes |
 | PTY harness resolution limited by IPC | Testing | Medium | Validated with direct microsecond benchmarks |
 | Emergency reset clears third-party highlights | Correctness | Low (emergency paths only) | Steady-state path merges with `memo=zsh-pulse` |
+| Native compsys typeahead is synchronous | Completion / Performance | Context-dependent (ms to slow on heavy completers) | Capped rendered lines, queued-key/menu suppression, `ZSH_PULSE_COMPLETION=0` toggle |
 | Bounded filesystem traversal (1,024 items) | Completion | Intended Design | Eliminates multi-second freezes on `/nix/store` |
 | Hard-coded syntax color defaults | Configuration | Medium | Standard ANSI colors chosen for universal contrast |
 | Zsh-specific loadable module ABI | Portability | Intended Design | Focuses entirely on first-class Zsh performance |

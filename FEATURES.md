@@ -147,6 +147,7 @@ This document provides the authoritative, complete catalog of all features imple
   zstyle ':completion:*' completer _zsh_pulse_completer _complete
   ```
 - **Behavior**: `_zsh_pulse_completer` handles path, command, and history completions via Rust. If the context represents tool-specific subcommands or flags (e.g. `git checkout <tab>`, `cargo build --<tab>`, `docker run <tab>`, `nix flake <tab>`), completion automatically falls through to Zsh's native `_complete` and standard completion functions.
+- **Relationship to Typeahead**: The typeahead preview does not call this completer. It runs `_main_complete` directly in the `list-choices` context (see §5.1), so the preview and Tab both use native compsys candidates.
 
 ### 4.2 Bounded Filesystem Traversal
 - **Implementation**: [`crates/completion/src/lib.rs`](crates/completion/src/lib.rs)
@@ -184,23 +185,25 @@ This document provides the authoritative, complete catalog of all features imple
 
 ## 5. Menu Navigation & Real-Time Typeahead
 
-### 5.1 Sub-10 µs Typeahead Auto-Listing
-- **Implementation**: `_zsh_pulse_typeahead_widget` in [`zsh/completion.zsh`](zsh/completion.zsh)
-- Displays up to 16 matching candidates below the prompt without requiring the user to press `Tab`.
-- Bypasses Zsh compsys shell scripts entirely by invoking `zsh-pulse-complete --max=16` directly.
-- Uses `compstate[insert]=''` to strictly guarantee that no text or characters are inserted into `$BUFFER` during preview.
+### 5.1 Native Compsys Typeahead Preview
+- **Implementation**: `_zsh_pulse_typeahead_widget` in [`zsh/completion.zsh`](zsh/completion.zsh), registered with `zle -C zsh-pulse-typeahead list-choices`.
+- **Candidate Source**: Zsh's own completion system. The widget runs `_main_complete` synchronously in the `list-choices` context (`curcontext="list-choices:::"`), so the preview shows the same commands, options, subcommands, descriptions, and group headings that Tab would show. The Rust candidate engine is not on this path.
+- **No Insertion**: The widget sets `compstate[insert]=''`, `compstate[old_list]=''`, `compstate[pattern_insert]=''`, `compstate[list]='list force packed'`, and `compstate[list_max]=0`, guaranteeing that a preview never modifies `$BUFFER`.
+- **Line Cap**: The preview is capped by rendered lines, not candidate count: `min(ZSH_PULSE_TYPEAHEAD_LINES (default 16), LINES - BUFFERLINES - 1)`. Group headings and the `(MORE)` marker count toward the cap. The `compadd`/`_describe` truncation wrapper is adapted from zsh-autocomplete (see [ATTRIBUTION.md](ATTRIBUTION.md)).
+- **Cost**: The preview runs native completion synchronously on the ZLE thread. Its latency is therefore the native completion function's latency—milliseconds for simple contexts, potentially much longer for completion functions that evaluate many tags—not the Rust engine's sub-microsecond budget. Native completion functions may also fork. See [docs/performance.md](docs/performance.md) and [docs/known-limitations.md](docs/known-limitations.md).
+- **Suppression**: The preview is skipped while `PENDING` or `KEYS_QUEUED_COUNT` is non-zero, while menu selection is active, and while the typeahead widget is already running.
 
-### 5.2 Tab Toggle Widget (`_zsh_pulse_tab`)
+### 5.2 First-Tab Full-List Expansion (`_zsh_pulse_tab`)
 - **Keybinding**: `Tab` (`^I`)
-- **Toggle Ergonomics**:
-  - When the completion preview is visible below the prompt, pressing `Tab` hides/clears the menu.
-  - When the menu is hidden, pressing `Tab` opens/expands completions.
-  - When navigating inside an active `menuselect` menu, pressing `Tab` immediately breaks out of the menu (`send-break`).
+- **Behavior**:
+  - The typeahead preview is a capped preview only. The first `Tab` clears the previous completion state (`_lastcomp=()`, `_ZSH_PULSE_LAST_TYPEAHEAD=""`, `_ZSH_PULSE_TYPEAHEAD_VISIBLE=0`) and runs `expand-or-complete`, immediately showing the full, uncapped native completion list.
+  - There is no hide/show toggle: `Tab` never spends a press dismissing the preview first.
+  - When navigating inside an active `menuselect` menu, `Tab` immediately breaks out of the menu (`_zsh_pulse_menuselect_abort`).
 
 ### 5.3 Down-Arrow Menu Entry (`down-line-or-select`)
 - **Keybinding**: `Down-Arrow` (`^[[B`, `^[OB`, `^N`, Vi `j`)
-- If typeahead completions are visible below the prompt, pressing `Down-Arrow` immediately activates the `menuselect` cursor on the first candidate, enabling rapid arrow-key selection.
-- If no completions are visible, performs prefix history search forward.
+- If `_ZSH_PULSE_TYPEAHEAD_VISIBLE=1` and the buffer still matches the previewed buffer, pressing `Down-Arrow` immediately activates the `menuselect` cursor on the first candidate, enabling rapid arrow-key selection.
+- If no preview is visible, performs prefix history search forward.
 
 ### 5.4 Menu Navigation & Safe Lifecycle Handlers
 - **Grid Navigation**: In `menuselect`, single-keystroke navigation bindings (`^[[A`, `^[OA`, `^P`, `k` for Up; `^[[B`, `^[OB`, `^N`, `j` for Down; `^[[C`, `^[OC`, `^F`, `l` for Forward; `^[[D`, `^[OD`, `^B`, `h` for Backward) are bound directly to standard movement builtins (`up-line-or-history`, `down-line-or-history`, `forward-char`, `backward-char`). This ensures that Zsh's `complist` internal `domenu()` loop recognizes and intercepts candidate stepping without exiting menu mode.
@@ -226,8 +229,11 @@ Users can independently toggle features on or off in `.zshrc` without recompilin
 # Syntax Highlighting
 export ZSH_PULSE_HIGHLIGHT=1      # 1/0, true/false, on/off
 
-# Completion & Bounded Scanner
+# Completion: native compsys typeahead preview & bounded path scanner
 export ZSH_PULSE_COMPLETION=1     # 1/0, true/false, on/off
+
+# Maximum rendered lines in the typeahead preview (default: 16)
+export ZSH_PULSE_TYPEAHEAD_LINES=16
 
 # History Prefix & Menu Search
 export ZSH_PULSE_HISTORY=1        # 1/0, true/false, on/off

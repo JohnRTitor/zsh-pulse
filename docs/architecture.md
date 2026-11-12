@@ -17,15 +17,15 @@ Companion documents:
 
 ## 1. Executive Summary
 
-`zsh-pulse` is a high-performance shell enhancement engine for Zsh. It delivers real-time syntax highlighting, bounded filesystem path completions, Fish-style inline autosuggestions, and interactive history navigation.
+`zsh-pulse` is a high-performance shell enhancement engine for Zsh. It delivers real-time syntax highlighting, bounded filesystem path completions, Fish-style inline autosuggestions, interactive history navigation, and a native-compsys typeahead preview.
 
 The core constraints that shaped this architecture:
 
 | Constraint | Consequence |
 |---|---|
 | **Runs inside interactive shell** | A crash terminates the user's session. Every FFI boundary is probed, guarded with `catch_unwind`, and validated via isolated subprocess tests. |
-| **Zero forks on keystrokes** | Keystroke execution happens in-process in pure Rust. Zero calls to `fork`, `clone`, or `execve`. |
-| **Sub-microsecond budget** | All buffers are reused; memory allocations on steady-state typing are bounded to ≤ 1 per edit. |
+| **Zero forks on Rust keystroke paths** | Highlighting, autosuggest, and history matching execute in-process in pure Rust with no `fork`, `clone`, or `execve`. The native-compsys typeahead preview is a deliberate exception: it runs Zsh completion synchronously and native completion functions may fork. |
+| **Sub-microsecond budget (Rust paths)** | Rust highlighting/autosuggest paths reuse buffers; steady-state allocations on typing are bounded to ≤ 1 per edit. Native typeahead latency is governed by the completion system. |
 | **Zsh distribution variance** | Zero Zsh C symbols are linked at compile time. All internal symbols (`localkeymap`, `menucmp`, `getsparam_u`, `setaparam`) are resolved at load time via `dlsym`. |
 | **Isolated testability** | Lexing, styling, fuzzy ranking, and history crates have zero Zsh dependencies and forbid `unsafe`. |
 
@@ -146,9 +146,10 @@ Executed immediately following syntax highlighting on the redraw hook:
 4. If `$CURSOR` moves back or buffer changes, dangling ghost text is immediately unset.
 
 ### 3.3 Typeahead Completion Preview Pipeline
-1. `_zsh_pulse_typeahead_widget` runs under `zle-line-pre-redraw` (debounced and guarded).
-2. Calls `zsh-pulse-complete --max=16` directly (< 10 µs latency).
-3. If matches exist, populates `compadd -Q -U -d descs` with `compstate[insert]=''` to display up to 16 lines below the prompt without modifying user text.
+1. `_zsh_pulse_typeahead_widget` runs under `zle-line-pre-redraw` when completion is enabled, the buffer changed, and guards allow it (`_ZSH_PULSE_IN_TYPEAHEAD == 0`, `! PENDING`, `! KEYS_QUEUED_COUNT`, no active menu).
+2. Runs Zsh's native completion system synchronously via `_main_complete` in `curcontext="list-choices:::"` with `compstate[insert]=''`/`compstate[list]='list force packed'`, so candidates, tags, and headings match Tab exactly without modifying `$BUFFER`.
+3. A `compadd`/`_describe` truncation wrapper (adapted from zsh-autocomplete) caps the preview to `min(ZSH_PULSE_TYPEAHEAD_LINES, LINES - BUFFERLINES - 1)` rendered lines and appends `(MORE)` when truncated.
+4. If a list is shown, `_ZSH_PULSE_TYPEAHEAD_VISIBLE` is set for Down-Arrow menu entry; the first Tab clears `_lastcomp` and runs `expand-or-complete` to show the full, uncapped native list. This path is synchronous and may incur completion-function forks/subshell cost.
 
 ---
 
@@ -156,7 +157,7 @@ Executed immediately following syntax highlighting on the redraw hook:
 
 ### 4.1 Single-Threaded Interaction Guarantees
 - The interactive shell main thread is the **only** thread that executes Zsh code or touches Zsh C structures.
-- Rust builtins execute synchronously on the main thread during redraw and completion widgets, taking sub-microsecond slices without yielding control.
+- Rust builtins execute synchronously on the main thread during redraw and completion widgets. Highlighting/autosuggest builtins take sub-microsecond slices; the native-compsys typeahead widget is also synchronous on this thread but runs `_main_complete`, so its duration is completion-function dependent.
 
 ### 4.2 Background Worker Thread (`zshpulse-wrk`)
 - **Location**: [`crates/engine/src/worker.rs`](../crates/engine/src/worker.rs)
@@ -175,7 +176,7 @@ Executed immediately following syntax highlighting on the redraw hook:
 ### 5.1 Native Loadable Module vs Process Spawns
 - **Decision**: In-process Rust `cdylib` loaded via `zmodload zshpulse/core`.
 - **Alternative**: Spawning external CLI helpers (e.g. `$(my-highlighter)`).
-- **Rationale**: Forking a child process costs ~1–3 ms; a native module call costs **~276 ns** (over 3,600× faster). Zero child processes are spawned on keystrokes.
+- **Rationale**: Forking a child process costs ~1–3 ms; a native module call costs **~276 ns** (over 3,600× faster). The Rust highlighting, autosuggest, and history paths spawn no child processes on keystrokes. The native-compsys typeahead preview is a separate synchronous path and may trigger forks/subshells inside Zsh's completion functions or wrappers.
 
 ### 5.2 Dynamic Symbol Probe (`dlsym`) vs Static Linkage
 - **Decision**: All Zsh symbols are resolved at runtime via `dlsym(RTLD_DEFAULT, ...)`.
@@ -207,7 +208,7 @@ Executed immediately following syntax highlighting on the redraw hook:
 3. **Autosuggestions**: Sub-microsecond ghost text via `$POSTDISPLAY`, word-by-word accept (`Alt-Right`).
 4. **History Engine**: Dual plain/extended timestamp parser, Up/Down prefix search, `Ctrl-R` multi-line menu.
 5. **Completion Engine**: Preserved native completion pipeline (`_complete`), bounded path scanner, `fzf` fuzzy ranking.
-6. **Menu Navigation**: Tab toggle widget, Down-Arrow direct selection, single-keystroke grid navigation, and safe accept/abort lifecycle handlers.
+6. **Menu Navigation**: Native-compsys typeahead preview with first-Tab full-list expansion, Down-Arrow direct selection, single-keystroke grid navigation, and safe accept/abort lifecycle handlers.
 
 ### 6.2 Feature Modularity
 The engine supports granular compile-time and runtime toggles:

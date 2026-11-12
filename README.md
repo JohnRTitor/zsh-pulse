@@ -5,9 +5,9 @@
 [![Rust: 1.85+](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
 [![Zsh: 5.8+](https://img.shields.io/badge/zsh-5.8%2B-lightgrey.svg)](https://www.zsh.org)
 
-**zsh-pulse** is a high-performance, zero-subshell shell enhancement engine for [Zsh](https://www.zsh.org), implemented in pure Rust.
+**zsh-pulse** is a high-performance shell enhancement engine for [Zsh](https://www.zsh.org), implemented in Rust with native Zsh completion integration.
 
-It provides real-time incremental syntax highlighting, bounded filesystem completions, Fish-style inline autosuggestions, and interactive history navigation—operating with **sub-microsecond keystroke latency** (~276 ns module call, ~0.8 µs re-lexing) and **zero process forks**.
+It provides real-time incremental syntax highlighting, bounded filesystem completions, Fish-style inline autosuggestions, interactive history navigation, and a typeahead preview of Zsh's own completion candidates. The Rust highlighting and autosuggest paths run in-process with **sub-microsecond keystroke latency** (~276 ns module call, ~0.8 µs re-lexing) and **zero process forks**. The typeahead preview deliberately runs Zsh's native completion system synchronously, so it pays that system's cost rather than the Rust path's (see [performance](docs/performance.md)).
 
 ---
 
@@ -21,13 +21,16 @@ Traditional Zsh plugins (such as `fast-syntax-highlighting`, `zsh-autocomplete`,
 |---|---|---|
 | **Keystroke Highlighting Latency** | **~0.86 µs** (incremental Rust lexer) | **~40–200 µs** (Zsh script AST walk) |
 | **Native Module Invocation** | **~276 ns** (direct C ABI call via `dlsym`) | N/A (runs shell functions) |
-| **Subshells on Keystroke** | **0** (strictly zero forks / `clone` / `execve`) | 1 or more per keystroke or completion |
+| **Subshells on the Rust Keystroke Path** | **0** (strictly zero forks / `clone` / `execve`) | 1 or more per keystroke or completion |
+| **Typeahead Completion Preview** | Native `compsys` candidates, synchronously listed while typing | Async worker subprocess or no preview |
 | **Large Directory Scan (`/nix/store`)** | **20 ms** (bounded Rust scanner) | **1.6 s – 3.3 s lockup** (unbounded shell glob) |
 | **Ghost Text Autosuggestions** | In-memory history matching (< 10 µs) | Linear disk/history scan in shell script |
 | **Suggestion Word-Accept** | `Alt-Right` / `Alt-F` word-by-word accept | Line-only accept or complex shell hooks |
 | **History Menu Search** | Instant multi-line fuzzy menu on `Ctrl-R` | External binary spawn (e.g. `fzf`, `fzy`) |
 | **Memory Allocation on Keystroke** | Single reused buffer, ≤ 1 allocation/edit | Significant heap churn in Zsh parameter tables |
 | **Shell Startup Overhead** | **0.17 ms** (with `.zwc` wordcode compilation) | Often 50–200 ms |
+
+The zero-fork and sub-microsecond figures describe the Rust highlighting, autosuggest, and history paths. The typeahead preview is intentionally a different path: it runs Zsh's own completion system synchronously so that the preview matches Tab exactly. Native completion functions may fork, and their latency is measured in milliseconds; the numbers are in [docs/performance.md](docs/performance.md).
 
 ---
 
@@ -87,10 +90,10 @@ echo 'source "'$(pwd)'/zsh/init.zsh"' >> ~/.zshrc
 
 | Keybinding | Context | Action | Behavior |
 |---|---|---|---|
-| `Tab` (`^I`) | Buffer editing | `zsh-pulse-tab` | Toggles completion auto-listing menu (hides when visible, expands when hidden). |
+| `Tab` (`^I`) | Buffer editing | `zsh-pulse-tab` | Expands the full, uncapped native completion list on the first press. The list shown while typing is a capped preview. |
 | `Tab` (`^I`), `Esc`, `^C`, `^G` | `menuselect` | `_zsh_pulse_menuselect_abort` | Restores original buffer and cursor, resets menu active state, and aborts menu via `send-break`. |
 | `Shift-Tab` / `^[[Z` | Any | `reverse-menu-complete` | Cycles backwards through completion candidates. |
-| `Down` (`↓`, `^N`, `j`) | Buffer editing | `down-line-or-select` | Enters visible completion menu if open; otherwise prefix history search forward. |
+| `Down` (`↓`, `^N`, `j`) | Buffer editing | `down-line-or-select` | Enters menu selection when a typeahead preview is visible; otherwise prefix history search forward. |
 | `Up` (`↑`, `^P`, `k`) | Buffer editing | `up-line-or-search` | Fish-style prefix history search backward for matching commands. |
 | `Ctrl-R` | Any | `fzf-history-widget` / `zsh-pulse-history-search` | Non-destructive interactive history search. Preserves and invokes `fzf` when installed; falls back to native sub-microsecond in-memory menu. |
 | `Right` (`→`, `^F`), `End` (`^E`) | End of buffer | `forward-char` | Accepts the entire autosuggestion ghost text (`$POSTDISPLAY`). |
@@ -111,7 +114,7 @@ Disable specific subsystems without breaking other features (accepts `0`, `false
 # Disable syntax highlighting (default: 1)
 export ZSH_PULSE_HIGHLIGHT=1
 
-# Disable typeahead auto-listing & bounded path completion (default: 1)
+# Disable native-compsys typeahead preview & bounded path completion (default: 1)
 export ZSH_PULSE_COMPLETION=1
 
 # Disable Up/Down prefix history search & Ctrl-R menu (default: 1)
@@ -133,6 +136,7 @@ export ZSH_PULSE_USE_FZF=1
 | `ZSH_PULSE_MODULE_PATH` | `<repo>/bench/mp` | Directory containing `zshpulse/core.so`. |
 | `ZSH_PULSE_COMMAND_CACHE_TTL` | `2` | Cache TTL in seconds for shell command lookups (aliases, functions, builtins). |
 | `ZSH_PULSE_COMMAND_CACHE_MAX` | `256` | Maximum entries retained in the command validation cache. |
+| `ZSH_PULSE_TYPEAHEAD_LINES` | `16` | Maximum rendered lines in the typeahead preview. The effective cap is `min(value, LINES - BUFFERLINES - 1)`; headings and `(MORE)` count toward it. |
 | `ZSH_PULSE_MAX_SUBSTITUTION_DEPTH`| `4` | Maximum recursion depth for nested command substitutions `$(...)`. |
 | `ZSH_PULSE_MAX_LINE` | `4096` | Byte length ceiling; lines beyond this bypass highlighting to prevent editor lag. |
 
