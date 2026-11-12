@@ -1533,13 +1533,29 @@ fn brackets_inside_double_quotes_do_not_break_outer_brackets_on_zsh() {
 #[cfg(any(feature = "autocomplete", feature = "history", feature = "history-navigation"))]
 fn complete_builtin_tilde_expansion_preserves_tilde_slash() {
     require_zsh!();
+
+    let home = std::env::temp_dir().join(format!(
+        "zsh-pulse-tilde-home-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("time")
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(home.join("docs")).expect("create temp home contents");
+    std::fs::write(home.join("note.txt"), b"hello").expect("create temp home file");
+    let home_str = home.to_string_lossy().to_string();
+
     let (ok, out) = run_zsh(
         "BUFFER='ls ~'\n\
          CURSOR=4\n\
          zsh-pulse-complete --paths-only --max=5\n\
          print -r -- \"MATCHES=<${(j:,:)_zsh_pulse_matches}>\"",
-        &[],
+        &[("HOME", home_str.as_str())],
     );
+
+    let _ = std::fs::remove_dir_all(&home);
+
     assert!(ok, "zsh exited badly: {out}");
     assert!(
         out.contains("MATCHES=<~/"),
