@@ -586,15 +586,20 @@ fn the_adapter_chains_an_existing_pre_redraw_hook() {
     // replaced would stop working — silently, and only after the first
     // command line, because that is when the other plugin installs its own
     // wrapper.
+    require_zsh!();
     let adapter = adapter_path();
+    let mp = install_module();
     let out = Command::new("zsh")
         .arg("-f")
         .arg("-c")
         .arg(format!(
             "zle -N zle-line-pre-redraw my-own-hook\n\
+             module_path=({mp} $module_path)\n\
              source {adapter}\n\
+             autoload -Uz add-zle-hook-widget\n\
              print -r -- \"WIDGET=${{widgets[zle-line-pre-redraw]}}\"\n\
-             print -r -- \"LIST=$(zstyle -a zle-line-pre-redraw widgets 2>/dev/null; print -r -- ${{(j:,:)widgets}})\"",
+             print -r -- \"LIST=$(add-zle-hook-widget -L zle-line-pre-redraw 2>/dev/null)\"",
+            mp = mp.display(),
             adapter = adapter.display(),
         ))
         .output()
@@ -618,23 +623,28 @@ fn the_adapter_installs_both_hooks_and_does_not_chain_itself() {
     // starting; without it a recalled command would be drawn with no
     // highlighting at all. Sourcing the adapter twice must not make the hook
     // call itself.
+    require_zsh!();
     let adapter = adapter_path();
+    let mp = install_module();
     let out = Command::new("zsh")
         .arg("-f")
         .arg("-c")
         .arg(format!(
-            "source {adapter}\n\
+            "module_path=({mp} $module_path)\n\
              source {adapter}\n\
-             print -r -- \"PRE=$(zstyle -a zle-line-pre-redraw widgets 2>/dev/null; print -r -- ${{(j:,:)widgets}})\"\n\
-             print -r -- \"INIT=$(zstyle -a zle-line-init widgets 2>/dev/null; print -r -- ${{(j:,:)widgets}})\"",
+             source {adapter}\n\
+             autoload -Uz add-zle-hook-widget\n\
+             print -r -- \"PRE=$(add-zle-hook-widget -L zle-line-pre-redraw 2>/dev/null)\"\n\
+             print -r -- \"INIT=$(add-zle-hook-widget -L zle-line-init 2>/dev/null)\"",
+            mp = mp.display(),
             adapter = adapter.display(),
         ))
         .output()
         .expect("run zsh");
     let text = String::from_utf8_lossy(&out.stdout).into_owned();
     assert!(out.status.success(), "sourcing the adapter failed: {text}");
-    // The style's default value is every built-in ZLE widget, so the list is
-    // long; what matters is that our widget is in it, exactly once.
+    // `add-zle-hook-widget -L` lists the widgets registered for the hook,
+    // which is stable across zsh versions (unlike `zstyle -a ... widgets`).
     let pre = text
         .lines()
         .find_map(|l| l.strip_prefix("PRE="))

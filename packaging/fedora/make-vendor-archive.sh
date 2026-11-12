@@ -22,7 +22,14 @@ output=${1:-"$srcdir/packaging/fedora/zsh-pulse-$version-vendor.tar.xz"}
 workdir=$(mktemp -d)
 trap 'rm -rf "$workdir"' EXIT INT HUP TERM
 
-cargo vendor --locked --versioned-dirs "$workdir/vendor" >/dev/null
+# When there are no crates.io dependencies, `cargo vendor` prints a message
+# and does not create the output directory, but still exits successfully.
+# Ensure the expected layout exists so packaging always gets a valid archive.
+mkdir -p "$workdir/vendor"
+if ! cargo vendor --locked --versioned-dirs "$workdir/vendor" >/dev/null; then
+    echo "make-vendor-archive: cargo vendor failed" >&2
+    exit 1
+fi
 
 cat >"$workdir/vendor-config.toml" <<'EOF'
 [source.crates-io]
