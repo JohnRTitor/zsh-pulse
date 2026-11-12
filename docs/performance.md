@@ -1,4 +1,4 @@
-# Performance Report — `shell-pulse`
+# Performance Report — `zsh-pulse`
 
 Every number in this document is produced by an automated test harness or reproducible benchmark command quoted alongside it.
 
@@ -67,7 +67,7 @@ Traditional Zsh completion frameworks like `zsh-autocomplete` execute unbounded 
 
 ### Bounded Traversal vs Unbounded Globs
 - In `/nix/store` with **81,141 directory entries**, `zsh-autocomplete` times out at 1.6 to 3.3 seconds.
-- `shell-pulse`'s bounded scanner (`complete_paths`) stops traversing after reaching `MAX_FILTERED_DIR_SCAN = 1024` and returns up to `MAX_FS_MATCHES = 32` matches.
+- `zsh-pulse`'s bounded scanner (`complete_paths`) stops traversing after reaching `MAX_FILTERED_DIR_SCAN = 1024` and returns up to `MAX_FS_MATCHES = 32` matches.
 - Total execution time drops to **20.7 ms** in release mode—over **160× faster**, completely eliminating typing stutter.
 - Traversing `/bin` completes in **47 µs**, running over **34,000× faster** than external subshell spawns.
 
@@ -85,7 +85,7 @@ Measured via `bench/bench_startup.zsh`:
 
 ## 6. Zero-Subshell Verification
 
-To guarantee that typing remains free of stutter, `shell-pulse` asserts that zero processes are spawned on the keystroke path.
+To guarantee that typing remains free of stutter, `zsh-pulse` asserts that zero processes are spawned on the keystroke path.
 Running `bench/bench_startup.zsh` with `strace -f -e trace=clone,fork,vfork,execve` verifies:
 - Keystroke redraws: **0 spawns**.
 - Path lookups: **0 spawns** (in-process `stat` calls with 2-second LRU caching).

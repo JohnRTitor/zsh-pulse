@@ -1,6 +1,6 @@
-# ZLE Integration Design — `shell-pulse`
+# ZLE Integration Design — `zsh-pulse`
 
-How `shell-pulse` interfaces with the Zsh Line Editor (ZLE), manages redraw hooks, displays real-time typeahead completion, and guarantees menu-selection stability.
+How `zsh-pulse` interfaces with the Zsh Line Editor (ZLE), manages redraw hooks, displays real-time typeahead completion, and guarantees menu-selection stability.
 
 Companion documents: [architecture](architecture.md) ·
 [performance](performance.md) ·
@@ -17,7 +17,7 @@ Companion documents: [architecture](architecture.md) ·
 ZLE provides a dedicated hook executed immediately before the input buffer is drawn to the terminal screen: `zle-line-pre-redraw`.
 As documented in Zsh's manual (`zsh-src/Doc/Zsh/zle.yo:1164-1168`), this hook is specifically provided as the canonical opportunity to update the `region_highlight` array.
 
-`shell-pulse` hooks `zle-line-pre-redraw` using Zsh's standard `add-zle-hook-widget`. This ensures that existing widgets registered by other plugins (e.g. `zsh-autocomplete` or custom prompts) are chained rather than clobbered.
+`zsh-pulse` hooks `zle-line-pre-redraw` using Zsh's standard `add-zle-hook-widget`. This ensures that existing widgets registered by other plugins (e.g. `zsh-autocomplete` or custom prompts) are chained rather than clobbered.
 
 ### 1.2 Redraw Hook Responsibilities
 On each invocation of `zsh-pulse-highlight-redraw`:
@@ -49,7 +49,7 @@ To ensure safety, `_zsh_pulse_typeahead_widget` is guarded:
 
 ### 3.1 C-Level Menu-Active State Inspection
 Standard Zsh scripts often check `[[ $KEYMAP == menuselect ]]`. However, during menu transitions, `$KEYMAP` may lag or report `"main"` / `"emacs"`.
-`shell-pulse` resolves this by querying internal Zsh C global symbols via `Api::is_menu_active`:
+`zsh-pulse` resolves this by querying internal Zsh C global symbols via `Api::is_menu_active`:
 - `localkeymap`: verifies if a local keymap override is set.
 - `menucmp`: checks if the internal `struct menu_info` pointer is non-null.
 
@@ -92,7 +92,7 @@ In `menuselect`, navigation and lifecycle events require distinct handling:
 
 ## 5. Lifecycle Hooks
 
-`shell-pulse` installs three core ZLE lifecycle hooks via `add-zle-hook-widget`:
+`zsh-pulse` installs three core ZLE lifecycle hooks via `add-zle-hook-widget`:
 
 | Hook | Widget | Role |
 |---|---|---|

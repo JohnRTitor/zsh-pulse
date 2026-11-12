@@ -1,6 +1,6 @@
-# shell-pulse: Feature Catalog & Technical Specifications
+# zsh-pulse: Feature Catalog & Technical Specifications
 
-This document provides the authoritative, complete catalog of all features implemented in `shell-pulse`. Each feature is documented with its technical architecture, relevant crates and files, configuration environment toggles, and keybindings.
+This document provides the authoritative, complete catalog of all features implemented in `zsh-pulse`. Each feature is documented with its technical architecture, relevant crates and files, configuration environment toggles, and keybindings.
 
 ---
 
@@ -17,7 +17,7 @@ This document provides the authoritative, complete catalog of all features imple
 
 ## 1. Real-Time Syntax Highlighting
 
-`shell-pulse` provides high-performance, real-time syntax highlighting for the Zsh command line editor (ZLE), running entirely in-process on the redraw hook with sub-microsecond latency.
+`zsh-pulse` provides high-performance, real-time syntax highlighting for the Zsh command line editor (ZLE), running entirely in-process on the redraw hook with sub-microsecond latency.
 
 ### 1.1 Incremental Lexer with Checkpoint Serialization
 - **Implementation**: [`crates/lexer`](crates/lexer), [`crates/lexer/src/incremental.rs`](crates/lexer/src/incremental.rs)
@@ -61,14 +61,14 @@ This document provides the authoritative, complete catalog of all features imple
 ### 1.6 Direct C `region_highlight` Integration
 - **Implementation**: [`crates/zsh-module/src/region.rs`](crates/zsh-module/src/region.rs)
 - **Zero Subshells**: Directly writes to Zsh's C `region_highlight` special array using `zalloc` and `ztrdup` pointers owned by ZLE. No `$(...)` forks or inter-process communication occurs.
-- **Coexistence**: Preserves entries created by other plugins by attaching `memo=zsh-pulse`. On each redraw, `shell-pulse` strips only its own memoized spans and appends updated highlights.
+- **Coexistence**: Preserves entries created by other plugins by attaching `memo=zsh-pulse`. On each redraw, `zsh-pulse` strips only its own memoized spans and appends updated highlights.
 - **Guard Rails**: Capped at 32 highlight regions per line (`MAX_ENTRIES`) and 4 KiB buffer length (`MAX_LINE`) to prevent pathological input freezes.
 
 ---
 
 ## 2. Fish-Style Autosuggestions
 
-`shell-pulse` brings the signature Fish shell inline suggestion experience to Zsh, operating directly from an in-memory history index with zero disk I/O.
+`zsh-pulse` brings the signature Fish shell inline suggestion experience to Zsh, operating directly from an in-memory history index with zero disk I/O.
 
 ### 2.1 In-Memory History Matching
 - **Implementation**: [`crates/history`](crates/history), [`crates/completion/src/lib.rs`](crates/completion/src/lib.rs)
@@ -119,7 +119,7 @@ This document provides the authoritative, complete catalog of all features imple
 - **Widget**: `fzf-history-widget` (when `fzf` is available) / `zsh-pulse-history-search` (native fallback)
 - **`fzf` Preservation**:
   - Automatically detects if `fzf-history-widget` is already defined (e.g. from `fzf --zsh` in `.zshrc`) or if `fzf` is available in `$PATH`.
-  - When detected, `shell-pulse` preserves and binds the official `fzf-history-widget` without clobbering the user's `fzf` setup. This provides exact `fzf` semantics: interactive query filtering, `$BUFFER` untouched upon opening, selection on Enter, and clean cancellation on `Esc` / `Ctrl-C`.
+  - When detected, `zsh-pulse` preserves and binds the official `fzf-history-widget` without clobbering the user's `fzf` setup. This provides exact `fzf` semantics: interactive query filtering, `$BUFFER` untouched upon opening, selection on Enter, and clean cancellation on `Esc` / `Ctrl-C`.
   - Can be toggled via `export ZSH_PULSE_USE_FZF=0` to force the native widget.
 - **Native Fallback Widget**:
   - For environments without `fzf`, provides an in-memory history search menu directly under the prompt containing the top 32 fuzzy-ranked matches (<10 µs latency).
@@ -129,7 +129,7 @@ This document provides the authoritative, complete catalog of all features imple
 
 ### 3.4 Literal Command Unescaping (`compadd -Q`)
 - **Fix**: Standard Zsh completion escapes spaces and special characters when inserting history entries into the line (e.g. turning `git diff HEAD~1` into `git\ diff\ HEAD\~1`).
-- `shell-pulse` passes the `-Q` quote-inhibition flag to `compadd`, guaranteeing that commands are inserted with pristine literal whitespace and quoting.
+- `zsh-pulse` passes the `-Q` quote-inhibition flag to `compadd`, guaranteeing that commands are inserted with pristine literal whitespace and quoting.
 
 ### 3.5 Display Sanitization & Single-Line Bounding
 - Multiline history items have embedded newlines replaced with spaces during menu display to avoid breaking pager layout.
@@ -139,7 +139,7 @@ This document provides the authoritative, complete catalog of all features imple
 
 ## 4. Hybrid Completion Engine
 
-`shell-pulse` combines a high-speed native Rust completion core with full fallthrough preservation of native Zsh completers.
+`zsh-pulse` combines a high-speed native Rust completion core with full fallthrough preservation of native Zsh completers.
 
 ### 4.1 Native Completer Preservation (1,000+ Tools)
 - **Configuration**:

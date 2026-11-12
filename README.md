@@ -1,23 +1,23 @@
-# shell-pulse
+# zsh-pulse
 
-[![CI](https://github.com/JohnRTitor/shell-pulse/actions/workflows/ci.yml/badge.svg)](https://github.com/JohnRTitor/shell-pulse/actions)
+[![CI](https://github.com/JohnRTitor/zsh-pulse/actions/workflows/ci.yml/badge.svg)](https://github.com/JohnRTitor/zsh-pulse/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Rust: 1.85+](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
 [![Zsh: 5.8+](https://img.shields.io/badge/zsh-5.8%2B-lightgrey.svg)](https://www.zsh.org)
 
-**shell-pulse** is a high-performance, zero-subshell shell enhancement engine for [Zsh](https://www.zsh.org), implemented in pure Rust.
+**zsh-pulse** is a high-performance, zero-subshell shell enhancement engine for [Zsh](https://www.zsh.org), implemented in pure Rust.
 
 It provides real-time incremental syntax highlighting, bounded filesystem completions, Fish-style inline autosuggestions, and interactive history navigation—operating with **sub-microsecond keystroke latency** (~276 ns module call, ~0.8 µs re-lexing) and **zero process forks**.
 
 ---
 
-## Why shell-pulse?
+## Why zsh-pulse?
 
 Traditional Zsh plugins (such as `fast-syntax-highlighting`, `zsh-autocomplete`, and `zsh-autosuggestions`) rely heavily on shell-script loops, frequent subshell forks (`$(...)`), and unconstrained filesystem walks. As your shell configuration and history grow, this results in noticeable typing stutter, cursor desynchronization, and multi-second freezes when navigating large directories like `/nix/store` or `/usr`.
 
-`shell-pulse` solves this by executing natively inside Zsh as a loadable C-compatible dynamic module (`zshpulse/core.so`), backed by modular Rust crates.
+`zsh-pulse` solves this by executing natively inside Zsh as a loadable C-compatible dynamic module (`zshpulse/core.so`), backed by modular Rust crates.
 
-| Metric / Capability | `shell-pulse` | Traditional Zsh Plugins (`fsh`, `zsh-autocomplete`, `zsh-autosuggestions`) |
+| Metric / Capability | `zsh-pulse` | Traditional Zsh Plugins (`fsh`, `zsh-autocomplete`, `zsh-autosuggestions`) |
 |---|---|---|
 | **Keystroke Highlighting Latency** | **~0.86 µs** (incremental Rust lexer) | **~40–200 µs** (Zsh script AST walk) |
 | **Native Module Invocation** | **~276 ns** (direct C ABI call via `dlsym`) | N/A (runs shell functions) |
@@ -35,28 +35,28 @@ Traditional Zsh plugins (such as `fast-syntax-highlighting`, `zsh-autocomplete`,
 
 ### Option 1: Nix Flake / Home Manager (Recommended)
 
-`shell-pulse` provides a complete Nix Flake with pre-compiled `.zwc` wordcode and automatic module path wiring.
+`zsh-pulse` provides a complete Nix Flake with pre-compiled `.zwc` wordcode and automatic module path wiring.
 
 #### Try without installing:
 ```bash
-nix run github:JohnRTitor/shell-pulse
+nix run github:JohnRTitor/zsh-pulse
 ```
 
 #### Home Manager configuration:
 ```nix
 # flake.nix inputs:
-inputs.shell-pulse.url = "github:JohnRTitor/shell-pulse";
+inputs.zsh-pulse.url = "github:JohnRTitor/zsh-pulse";
 
 # In your home-manager configuration:
 { inputs, pkgs, ... }: {
   home.packages = [
-    inputs.shell-pulse.packages.${pkgs.system}.default
+    inputs.zsh-pulse.packages.${pkgs.system}.default
   ];
 
   programs.zsh = {
     enable = true;
     initExtra = ''
-      source ${inputs.shell-pulse.packages.${pkgs.system}.default}/share/zsh-pulse/init.zsh
+      source ${inputs.zsh-pulse.packages.${pkgs.system}.default}/share/zsh-pulse/init.zsh
     '';
   };
 }
@@ -68,8 +68,8 @@ Prerequisites: Rust 1.85+ (`cargo`), Zsh 5.8+, and a C compiler (`clang` or `gcc
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/JohnRTitor/shell-pulse.git
-cd shell-pulse
+git clone https://github.com/JohnRTitor/zsh-pulse.git
+cd zsh-pulse
 
 # 2. Build release module and compile Zsh wordcode
 cargo build --release
@@ -83,7 +83,7 @@ echo 'source "'$(pwd)'/zsh/init.zsh"' >> ~/.zshrc
 
 ## Keybindings Reference
 
-`shell-pulse` integrates smoothly into both Emacs and Vi keymaps (`main`, `emacs`, `viins`, `vicmd`, `menuselect`).
+`zsh-pulse` integrates smoothly into both Emacs and Vi keymaps (`main`, `emacs`, `viins`, `vicmd`, `menuselect`).
 
 | Keybinding | Context | Action | Behavior |
 |---|---|---|---|
@@ -102,7 +102,7 @@ echo 'source "'$(pwd)'/zsh/init.zsh"' >> ~/.zshrc
 
 ## Configuration & Environment Toggles
 
-Configure `shell-pulse` by setting environment variables in your `.zshrc` **before** sourcing `init.zsh`.
+Configure `zsh-pulse` by setting environment variables in your `.zshrc` **before** sourcing `init.zsh`.
 
 ### Feature Toggles
 Disable specific subsystems without breaking other features (accepts `0`, `false`, `off`, or `no`):
@@ -121,7 +121,7 @@ export ZSH_PULSE_HISTORY=1
 export ZSH_PULSE_AUTOSUGGEST=1
 
 # Disable automatic fzf preservation/integration on Ctrl-R (default: 1)
-# (When set to 0, shell-pulse always uses its built-in native menu search)
+# (When set to 0, zsh-pulse always uses its built-in native menu search)
 export ZSH_PULSE_USE_FZF=1
 ```
 
@@ -140,7 +140,7 @@ export ZSH_PULSE_USE_FZF=1
 
 ## Architecture Overview
 
-`shell-pulse` is organized as an 8-crate Cargo workspace designed for strict memory safety, zero build-time C header dependencies, and modular reuse:
+`zsh-pulse` is organized as an 8-crate Cargo workspace designed for strict memory safety, zero build-time C header dependencies, and modular reuse:
 
 ```
                          ┌───────────────────────┐

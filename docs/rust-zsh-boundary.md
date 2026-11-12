@@ -1,4 +1,4 @@
-# Rust↔Zsh Boundary and Ownership Rules — `shell-pulse`
+# Rust↔Zsh Boundary and Ownership Rules — `zsh-pulse`
 
 Everything in this document is about one thing: **which side of the Rust↔Zsh boundary owns which byte of memory, and what must be true for the shell not to crash or corrupt memory.**
 

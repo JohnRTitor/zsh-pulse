@@ -370,10 +370,10 @@ if (( has_history )); then
   # Interactive history search (Ctrl-R):
   # If fzf or fzf-history-widget is present:
   # Shell-pulse checks if fzf-history-widget is defined (e.g. sourced via 'fzf --zsh'
-  # in ~/.zshrc) or if fzf is available in PATH. When detected, shell-pulse preserves
+  # in ~/.zshrc) or if fzf is available in PATH. When detected, zsh-pulse preserves
   # and invokes the official fzf-history-widget (or non-destructive fzf wrapper),
   # guaranteeing that the user's fzf setup is never clobbered.
-  # If fzf is not present (or when ZSH_PULSE_USE_FZF=0), shell-pulse binds its
+  # If fzf is not present (or when ZSH_PULSE_USE_FZF=0), zsh-pulse binds its
   # native sub-microsecond in-memory history search widget (zsh-pulse-history-search).
   local use_fzf=0
   if [[ ${ZSH_PULSE_USE_FZF:-1} != (0|[fF][aA][lL][sS][eE]|[oO][fF][fF]|[nN][oO]) && -z ${ZSH_PULSE_TEST:-} ]]; then

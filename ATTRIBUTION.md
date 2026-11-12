@@ -1,16 +1,16 @@
 # Upstream Attribution & Acknowledgments
 
-`shell-pulse` builds upon years of research, design patterns, and algorithmic breakthroughs developed across the open-source shell and terminal emulator ecosystem.
+`zsh-pulse` builds upon years of research, design patterns, and algorithmic breakthroughs developed across the open-source shell and terminal emulator ecosystem.
 
-We believe in rigorous and transparent attribution. This document formally attributes every upstream project, algorithm, constant, architectural concept, and design pattern that informed or was incorporated into `shell-pulse`.
+We believe in rigorous and transparent attribution. This document formally attributes every upstream project, algorithm, constant, architectural concept, and design pattern that informed or was incorporated into `zsh-pulse`.
 
 ---
 
 ## Upstream Repositories Under Study
 
-During the research and design phases of `shell-pulse`, the following upstream projects were cloned, inspected, and profiled at specific revisions:
+During the research and design phases of `zsh-pulse`, the following upstream projects were cloned, inspected, and profiled at specific revisions:
 
-| Project | Remote Repository | Upstream License | Commit SHA | Primary Role in shell-pulse |
+| Project | Remote Repository | Upstream License | Commit SHA | Primary Role in zsh-pulse |
 |---|---|---|---|---|
 | **`fish-shell`** | [github.com/fish-shell/fish-shell](https://github.com/fish-shell/fish-shell) | GPL-2.0 / Dual | `35c290272cc9` | Semantic syntax roles, `--` option delimiters, ghost text autosuggestions, word-by-word accept ergonomics. |
 | **`fzf`** | [github.com/junegunn/fzf](https://github.com/junegunn/fzf) | MIT | `b1be3a8be1b8` | Pure Rust Smith-Waterman fuzzy scoring algorithm and exact scoring constants. |
@@ -117,7 +117,7 @@ During technical reconnaissance, two architectural approaches were carefully ana
    `ble.sh` creates its own terminal line editor canvas over Bash's `bind -x`, bypassing readline entirely. While its incremental parsing algorithm was adapted into Rust, its rendering pipeline cannot transfer directly to Zsh, which provides its own native line editor (ZLE) and `region_highlight` interfaces.
 
 2. **Full Shell Reimplementations (`zshrs`)**:
-   `zshrs` attempts a complete from-scratch Rust reimplementation of Zsh with a custom plugin ABI (`zmodload -R`). It does not run against stock Zsh C source trees. `shell-pulse` instead preserves 100% compatibility with standard Zsh by targeting the official C loadable module ABI (`struct builtin`, `struct features`).
+   `zshrs` attempts a complete from-scratch Rust reimplementation of Zsh with a custom plugin ABI (`zmodload -R`). It does not run against stock Zsh C source trees. `zsh-pulse` instead preserves 100% compatibility with standard Zsh by targeting the official C loadable module ABI (`struct builtin`, `struct features`).
 
 ---
 

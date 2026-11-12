@@ -1928,7 +1928,7 @@ zle -N fzf-history-widget
 
     let capture = match capture_with_history_extra(
         &Scenario {
-            // Ctrl-R should invoke fzf-history-widget without being clobbered by shell-pulse
+            // Ctrl-R should invoke fzf-history-widget without being clobbered by zsh-pulse
             typed: "\x12".to_string(),
             wait_for: PROMPT.as_bytes(),
             load_module: true,

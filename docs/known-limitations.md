@@ -1,4 +1,4 @@
-# Known Limitations & Explicit Design Boundaries — `shell-pulse`
+# Known Limitations & Explicit Design Boundaries — `zsh-pulse`
 
 An honest list of what this plugin does **not** do, what is measured but not optimized, and current architectural boundaries. Every entry details what the limitation is, how it is observed, and the trade-offs involved.
 
@@ -23,7 +23,7 @@ Companion documents: [architecture](architecture.md) ·
 - **Latency Resolution**: In [`bench/bench_zpty.zsh`](../bench/bench_zpty.zsh), the median interactive round-trip is **68.0 µs per keystroke** (versus 45.1 µs without the plugin). The 23 µs difference is dominated by Zsh line editor redraw routines and PTY IPC round-trips. The native Rust module execution itself accounts for ~0.86 µs.
 
 ### 1.3 `region_highlight` Merge and Clearing
-- **Behavior**: `shell-pulse` tags its regions with `memo=zsh-pulse`. On each redraw, it retains third-party highlight entries, drops only its own previous regions, and appends updated spans ([`crates/zsh-module/src/region.rs`](../crates/zsh-module/src/region.rs)).
+- **Behavior**: `zsh-pulse` tags its regions with `memo=zsh-pulse`. On each redraw, it retains third-party highlight entries, drops only its own previous regions, and appends updated spans ([`crates/zsh-module/src/region.rs`](../crates/zsh-module/src/region.rs)).
 - **Limitation**: On fatal parsing bailout (e.g. lines exceeding 4 KiB or 1 ms timeout), the module clears the entire `region_highlight` array to prevent stale visual artifacts. Third-party highlights are cleared during this emergency reset.
 
 ### 1.4 Incremental Lexer Crossover Threshold
@@ -72,8 +72,8 @@ The following features were evaluated during design and are explicitly **out of 
 
 | Feature / Proposal | Status | Rationale |
 |---|---|---|
-| **Replacing Native Zsh Completion** | **Out of Scope** | Zsh possesses over 1,000 highly mature tool completion functions (`git`, `cargo`, `docker`, `nix`). Reimplementing these in Rust would introduce maintenance burden without benefit. `shell-pulse` instead accelerates path traversal and candidate ranking while preserving `_complete`. |
-| **Bash / Fish Support** | **Out of Scope** | `shell-pulse` is specifically engineered for Zsh's C loadable module ABI (`struct builtin`, `struct features`, `region_highlight`). Porting to Bash would require completely different architectures (e.g. `ble.sh` canvas model). |
+| **Replacing Native Zsh Completion** | **Out of Scope** | Zsh possesses over 1,000 highly mature tool completion functions (`git`, `cargo`, `docker`, `nix`). Reimplementing these in Rust would introduce maintenance burden without benefit. `zsh-pulse` instead accelerates path traversal and candidate ranking while preserving `_complete`. |
+| **Bash / Fish Support** | **Out of Scope** | `zsh-pulse` is specifically engineered for Zsh's C loadable module ABI (`struct builtin`, `struct features`, `region_highlight`). Porting to Bash would require completely different architectures (e.g. `ble.sh` canvas model). |
 | **External Background Daemon** | **Rejected** | A persistent daemon communicating over UNIX domain sockets introduces process supervision complexity and 20–60 µs IPC latency. In-process execution achieves 276 ns calls with zero socket overhead. |
 | **Tokio / Heavy Async Runtimes** | **Rejected** | Standard library threads (`std::thread`) and lightweight channels (`mpsc`) provide bounded concurrency without the memory footprint and binary size of Tokio. |
 | **Tree-sitter Parsing** | **Rejected** | Fish shell hand-writes its lexer for maximum speed. Full AST tree parsing incurs substantial per-keystroke allocation overhead unnecessary for interactive syntax highlighting. |

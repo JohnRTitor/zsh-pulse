@@ -1,6 +1,6 @@
-# Architecture — `shell-pulse`
+# Architecture — `zsh-pulse`
 
-Status: Describes the current production architecture of the `shell-pulse` engine.  
+Status: Describes the current production architecture of the `zsh-pulse` engine.  
 Scope: The crates, layering, data flow, threading model, and architectural decisions.
 
 Companion documents:
@@ -17,7 +17,7 @@ Companion documents:
 
 ## 1. Executive Summary
 
-`shell-pulse` is a high-performance shell enhancement engine for Zsh. It delivers real-time syntax highlighting, bounded filesystem path completions, Fish-style inline autosuggestions, and interactive history navigation.
+`zsh-pulse` is a high-performance shell enhancement engine for Zsh. It delivers real-time syntax highlighting, bounded filesystem path completions, Fish-style inline autosuggestions, and interactive history navigation.
 
 The core constraints that shaped this architecture:
 
