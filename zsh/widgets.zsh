@@ -427,7 +427,7 @@ zsh-pulse-highlight-redraw() {
   # Calling any completion widget while complist.so is in menu-select corrupts Zsh's C heap and causes SIGSEGV.
   if [[ ${ZSH_PULSE_COMPLETION:-1} != (0|[fF][aA][lL][sS][eE]|[oO][fF][fF]|[nN][oO]) ]]; then
     if (( ! PENDING && ! KEYS_QUEUED_COUNT && ${+functions[compdef]} )); then
-      if (( _ZSH_PULSE_MENU_HIDDEN == 0 && _ZSH_PULSE_IN_TYPEAHEAD == 0 )); then
+      if (( _ZSH_PULSE_IN_TYPEAHEAD == 0 )); then
         # `$WIDGET` is this hook's own name while the hook runs, so it cannot
         # tell us which widget triggered the redraw: it is always
         # `zsh-pulse-highlight-redraw` here. Excluding `zsh-pulse-*` on
@@ -491,7 +491,7 @@ zsh-pulse-highlight-redraw() {
 zsh-pulse-highlight-line-finish() {
   _ZSH_PULSE_LAST_TYPEAHEAD=""
   _ZSH_PULSE_IN_TYPEAHEAD=0
-  _ZSH_PULSE_MENU_HIDDEN=0
+  _ZSH_PULSE_TYPEAHEAD_VISIBLE=0
   _ZSH_PULSE_MENU_ACTIVE=0
   _zsh_pulse_hist_searching=0
   _zsh_pulse_hist_orig_buffer=""
@@ -505,7 +505,7 @@ zsh-pulse-highlight-line-init() {
     _ZSH_PULSE_LAST_TYPEAHEAD=""
     zle -Rc 2>/dev/null
   fi
-  _ZSH_PULSE_MENU_HIDDEN=0
+  _ZSH_PULSE_TYPEAHEAD_VISIBLE=0
   _ZSH_PULSE_IN_TYPEAHEAD=0
   _ZSH_PULSE_MENU_ACTIVE=0
   _zsh_pulse_hist_searching=0

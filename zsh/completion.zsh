@@ -76,7 +76,243 @@ if (( has_autocomplete )); then
 fi
 
 if (( has_autocomplete )); then
+  typeset -gi _ZSH_PULSE_MAX_LINES=16
+  typeset -gi _ZSH_PULSE_PARTIAL_LIST=0
+  typeset -gi _ZSH_PULSE_TYPEAHEAD_VISIBLE=0
+
+  # How many lines the typeahead preview may occupy.
+  #
+  # zsh-autocomplete's real-time listing is capped by *rendered lines*, not
+  # by candidate count. Its default is 16 lines, further limited by the
+  # terminal height and the space the current buffer already occupies:
+  #
+  #     min(16, LINES - BUFFERLINES - 1)
+  #
+  # Heading lines and the `(MORE)` marker count toward that cap. The
+  # optional arguments exist so the formula can be tested without a
+  # terminal; the widget calls this with no arguments.
+  _zsh_pulse_typeahead_max_lines() {
+    local -i max_lines=${ZSH_PULSE_TYPEAHEAD_LINES:-16}
+    local -i lines=${1:-${LINES:-24}}
+    local -i buffer_lines=${2:-${BUFFERLINES:-1}}
+
+    _ZSH_PULSE_MAX_LINES=$(( lines - buffer_lines - 1 ))
+    (( _ZSH_PULSE_MAX_LINES > max_lines )) && _ZSH_PULSE_MAX_LINES=$max_lines
+    (( _ZSH_PULSE_MAX_LINES > 0 ))
+  }
+
+  # Number of leading arguments of a `compadd` call that are options.
+  #
+  # Adapted from zsh-autocomplete's `_autocomplete__compadd_opts_len`
+  # (MIT; see ATTRIBUTION.md). The wrapper needs it to pass the original
+  # option arguments through to the real builtin while replacing the
+  # match list with the truncated one.
+  _zsh_pulse_compadd_opts_len() {
+    local -i len=$(( ${@[(i)(-|--)]} - 1 ))
+    (( len < $# )) && return len
+
+    len=${@[(I)-*]}
+    [[ $@[len] == -*[PSpsiIdJVXxrRWFMOAD] ]] && (( len++ ))
+    return len
+  }
+
+  # `_describe` adds a heading line for each group. The wrapper has to
+  # reserve room for it before counting the candidates.
+  _zsh_pulse_typeahead_describe() {
+    local -i _ZSH_PULSE_DESCRIBED_LINES=1
+    _zsh_pulse_typeahead_describe_old "$@"
+  }
+
+  # Stop the completion system from trying further tags once the preview
+  # is full. `comptags` is shadowed only for the duration of the call and
+  # restored by the widget's `always` block.
+  _zsh_pulse_typeahead_compadd_disable() {
+    _ZSH_PULSE_PARTIAL_LIST=1
+    comptags() { false }
+  }
+
+  # `compadd` wrapper that keeps the preview within the line cap.
+  #
+  # Adapted from zsh-autocomplete's `.autocomplete:async:compadd`
+  # (MIT; see ATTRIBUTION.md). The algorithm is the same: measure how
+  # many lines a group would add, trim the match and display arrays when
+  # they do not fit, and leave a `(MORE)` marker for the widget to append.
+  _zsh_pulse_typeahead_compadd() {
+    setopt localoptions multibyte
+
+    local -A _opts_=()
+    local -a _xopts_=() _displ_=() _matches_=()
+    local _displ_name_= _matches_name_=
+
+    zparseopts -A _opts_ -E -- D: E: O:
+
+    local -i _unused_lines_=$(( _ZSH_PULSE_MAX_LINES - compstate[list_lines] ))
+
+    # If `_grp` is not set, `_describe` is adding completions in a normal
+    # way and the group bookkeeping below does not apply.
+    if [[ -v _ZSH_PULSE_DESCRIBED_LINES && -n $_grp ]]; then
+      # We cannot interfere while `_describe` is actually adding the
+      # completions, or the layout breaks.
+      if [[ -z $_opts_[-D] ]]; then
+        builtin compadd "$@"
+        return
+      fi
+
+      _displ_name_=$_opts_[-D]
+      _matches_name_=$_opts_[-O]
+
+      # The preview is already full: tell `_describe` there is nothing
+      # left to add for this group.
+      if (( _ZSH_PULSE_PARTIAL_LIST )); then
+        set -A $_displ_name_
+        [[ -n $_matches_name_ ]] && set -A $_matches_name_
+      fi
+
+      builtin compadd "$@"
+      local -i _ret_=$?
+
+      local -i _ndisplay_=${(PA)#_displ_name_}
+      local -i _lines_left_for_describe_=$(( _unused_lines_ - _ZSH_PULSE_DESCRIBED_LINES ))
+
+      # The number of lines a `_describe` group adds is the number of
+      # unique display strings.
+      if (( ${#${(u)${(PA)_displ_name_}[@]#*:}} > _lines_left_for_describe_ )); then
+        local -i _matches_to_remove=$_ndisplay_
+        (( _lines_left_for_describe_ > 0 )) &&
+            _matches_to_remove=$(( _ndisplay_ - _lines_left_for_describe_ ))
+        if (( _matches_to_remove < _ndisplay_ )); then
+          shift -p $_matches_to_remove $_displ_name_ $_matches_name_
+        else
+          set -A $_displ_name_
+          [[ -n $_matches_name_ ]] && set -A $_matches_name_
+        fi
+        _ndisplay_=${(PA)#_displ_name_}
+        _zsh_pulse_typeahead_compadd_disable
+      fi
+      (( _ZSH_PULSE_DESCRIBED_LINES += _ndisplay_ ))
+
+      return _ret_
+    fi
+
+    # The preview is already full: drop this group's matches.
+    if (( _ZSH_PULSE_PARTIAL_LIST )); then
+      [[ -n $_opts_[-D] ]] && set -A $_opts_[-D]
+      [[ -n $_opts_[-O] ]] && set -A $_opts_[-O]
+      return 1
+    fi
+
+    if [[ -n $_opts_[-D]$_opts_[-O] ]]; then
+      builtin compadd "$@"
+      return
+    fi
+
+    local -i _old_total_lines=$compstate[list_lines]
+
+    # +: keep all occurrences; otherwise only the last one is kept.
+    zparseopts -a _xopts_ -D -E -- X+: x+:
+
+    if (( $#_xopts_ )); then
+      # Use only the first one: subsequent `-X`/`-x` options are ignored
+      # by `compadd` anyway.
+      local original="$_xopts_[2]"
+      local formatted="${(%g:ce:)original}"
+
+      # Trim the text to one line and omit ANSI sequences: command
+      # substitution would otherwise choke on them.
+      local ansi_start=${(M)formatted##($'\C-[['[;[:digit:]]#m)#}
+      local ansi_end=${(M)formatted%%($'\C-[['[;[:digit:]]#m)#}
+      local text=${${formatted#$ansi_start}%$ansi_end}
+      _xopts_=(
+        "$_xopts_[1]"
+        "${(mr:COLUMNS-1:)text%%[[:space:]]#}"
+      )
+    fi
+
+    local -i _total_new_lines_="$(
+      builtin compadd "$_xopts_[@]" "$@"
+      print -nr -- $(( $compstate[list_lines] - _old_total_lines ))
+    )"
+
+    if (( $#_xopts_ )); then
+      _xopts_[2]="${original/$text/$_xopts_[-1]}"
+    fi
+
+    # Everything fits.
+    if (( _total_new_lines_ + $compstate[list_lines] <= _ZSH_PULSE_MAX_LINES )); then
+      builtin compadd "$_xopts_[@]" "$@"
+      return
+    fi
+
+    local -i _new_completion_lines_="$(
+      builtin compadd "$@"
+      print -nr -- $(( $compstate[list_lines] - _old_total_lines ))
+    )"
+
+    local -a _dopt_=()
+    zparseopts -a _dopt_ -D -E -- d: ld:
+
+    _displ_name_=$_dopt_[2]
+
+    # Collect all matching completions and their display strings (if any).
+    local -a _Dopt_=()
+    [[ -n $_displ_name_ ]] && _Dopt_=( -D $_displ_name_ )
+    builtin compadd -O _matches_ $_Dopt_ "$@"
+
+    # Without an array of display strings, create one from the matches.
+    if [[ -z $_displ_name_ ]]; then
+      _displ_name_=_displ_
+      _displ_=( "$_matches_[@]" )
+      _dopt_=( -d $_displ_name_ )
+    fi
+
+    local -i _nmatches_per_line_=$(( 1.0 * $#_matches_ / _new_completion_lines_ ))
+
+    # If a match needs more than one line, make each match fit exactly one.
+    if (( _nmatches_per_line_ < 1 )); then
+      # WORKAROUND: zsh treats a display string exactly $COLUMNS wide as
+      # not fitting on one line.
+      set -A $_displ_name_ ${(@mr:COLUMNS-1:)${(PA)_displ_name_}[@]//$'\n'/\n}
+
+      _dopt_=( -ld $_displ_name_ )
+      (( _nmatches_per_line_ = 1 ))
+    fi
+
+    local -i _new_heading_lines_=$(( _total_new_lines_ - _new_completion_lines_ ))
+
+    # Round down before subtracting, or the result is effectively rounded up.
+    local -i _nmatches_that_fit_=$((
+      ( _unused_lines_ - _new_heading_lines_ ) * _nmatches_per_line_
+    ))
+
+    local -i _nmatches_to_remove_=$#_matches_
+    (( _nmatches_that_fit_ > 0 )) &&
+        _nmatches_to_remove_=$(( $#_matches_ - _nmatches_that_fit_ ))
+
+    if (( _nmatches_to_remove_ > 0 )); then
+      # Reserve one line for the `(MORE)` marker.
+      (( _nmatches_to_remove_++ ))
+      (( _nmatches_to_remove_ > $#_matches_ )) &&
+          _nmatches_to_remove_=$#_matches_
+
+      _zsh_pulse_typeahead_compadd_disable
+
+      # Always add a heading, even when no matches remain: a lone
+      # `(MORE)` without any content makes no sense.
+      (( _nmatches_to_remove_ >= $#_matches_ )) && _xopts_[1]=-x
+
+      shift -p $_nmatches_to_remove_ _matches_ $_displ_name_
+    fi
+
+    _zsh_pulse_compadd_opts_len "$@"
+    builtin compadd "$_xopts_[@]" "$_dopt_[@]" -a "$@[1,?]" _matches_
+  }
+
   # Real-time type-ahead completion widget (lists choices below prompt without inserting).
+  #
+  # The candidate source is zsh's own completion system: `_main_complete`
+  # runs synchronously in the `list-choices` context. That is what makes
+  # `git`, `cargo`, flags, subcommands and their descriptions appear exactly
+  # as they do on Tab, instead of the Rust engine's path-only guesses.
   _zsh_pulse_typeahead_widget() {
     emulate -L zsh
     setopt extendedglob noglob
@@ -89,37 +325,65 @@ if (( has_autocomplete )); then
       return 0
     fi
 
+    (( $+functions[_main_complete] )) || return 0
+
+    _ZSH_PULSE_TYPEAHEAD_VISIBLE=0
+    _ZSH_PULSE_PARTIAL_LIST=0
+    _zsh_pulse_typeahead_max_lines || return 0
+
     # Strictly prevent inserting text or modifying buffer during typeahead auto-listing.
     compstate[insert]=''
     compstate[old_list]=''
     compstate[pattern_insert]=''
-    unset MENUSELECT MENUMODE 2>/dev/null
+    compstate[list]='list force packed'
+    compstate[list_max]=0
 
-    # Query zsh-pulse's native Rust completion engine (<10us latency).
-    # Never invokes Zsh compsys shell scripts or spelling correctors.
-    zsh-pulse-complete --max=16
+    # Force `_describe` to load so its body can be saved and shadowed.
+    autoload -Uz +X _describe 2>/dev/null
 
-    if (( ${#_zsh_pulse_matches[@]} > 0 )); then
-      local -a descs
-      local maxw=$(( COLUMNS > 4 ? COLUMNS - 2 : 78 ))
-      local d
-      for d in "${_zsh_pulse_descriptions[@]}"; do
-        if (( ${#d} > maxw )); then
-          descs+=( "${d[1,maxw]}" )
-        else
-          descs+=( "$d" )
-        fi
-      done
-      compadd -Q -U -d descs -a _zsh_pulse_matches
-      compstate[list]='list force'
+    if (( $+functions[compadd] )); then
+      functions[_zsh_pulse_typeahead_compadd_old]="$functions[compadd]"
+    fi
+    functions[compadd]="$functions[_zsh_pulse_typeahead_compadd]"
+
+    if (( $+functions[_describe] )); then
+      functions[_zsh_pulse_typeahead_describe_old]="$functions[_describe]"
+      functions[_describe]="$functions[_zsh_pulse_typeahead_describe]"
+    fi
+
+    {
+      _main_complete
+    } always {
+      unfunction compadd comptags 2>/dev/null
+      if (( $+functions[_zsh_pulse_typeahead_compadd_old] )); then
+        functions[compadd]="$functions[_zsh_pulse_typeahead_compadd_old]"
+        unfunction _zsh_pulse_typeahead_compadd_old
+      fi
+      if (( $+functions[_zsh_pulse_typeahead_describe_old] )); then
+        functions[_describe]="$functions[_zsh_pulse_typeahead_describe_old]"
+        unfunction _zsh_pulse_typeahead_describe_old
+      fi
+
+      unset MENUSELECT MENUMODE 2>/dev/null
+      compstate[insert]=''
+      _lastcomp[insert]=''
+      compstate[pattern_insert]=''
+      _lastcomp[pattern_insert]=''
+      compstate[list_max]=0
+      MENUSCROLL=0
+
+      if (( _ZSH_PULSE_PARTIAL_LIST )); then
+        builtin compadd -J -last- -x '%F{0}%K{12}(MORE)%f%k'
+        _lastcomp[list_lines]=$compstate[list_lines]
+      fi
+    }
+
+    if (( compstate[nmatches] > 0 && compstate[list_lines] > 0 )); then
+      _ZSH_PULSE_TYPEAHEAD_VISIBLE=1
     else
       compstate[list]=''
     fi
 
-    unset MENUSELECT MENUMODE 2>/dev/null
-    compstate[insert]=''
-    _lastcomp[insert]=''
-    compstate[pattern_insert]=''
     return 2
   }
 
@@ -239,7 +503,7 @@ if (( has_history )); then
       _zsh_pulse_hist_cursor=$CURSOR
       _zsh_pulse_hist_orig_no=$HISTNO
       _ZSH_PULSE_LAST_TYPEAHEAD=""
-      _zsh_pulse_matches=()
+      _ZSH_PULSE_TYPEAHEAD_VISIBLE=0
       zle -Rc 2>/dev/null
       if zle .history-beginning-search-backward; then
         _zsh_pulse_hist_searching=1
@@ -267,7 +531,7 @@ if (( has_history )); then
       zle .down-line
     else
       _zsh_pulse_hist_searching=0
-      if (( _ZSH_PULSE_MENU_HIDDEN == 0 && ${#_zsh_pulse_matches[@]} > 0 )) &&
+      if (( _ZSH_PULSE_TYPEAHEAD_VISIBLE == 1 )) &&
          [[ -n $_ZSH_PULSE_LAST_TYPEAHEAD && "$BUFFER" == "$_ZSH_PULSE_LAST_TYPEAHEAD" ]]; then
         zle menu-select -w 2>/dev/null || zle down-line-or-beginning-search 2>/dev/null || zle .down-line-or-history
       else
@@ -317,24 +581,23 @@ if (( has_autosuggest )); then
 fi
 
 # -----------------------------------------------------------------------------
-# 5. Tab Behavior: Toggle / Hide Completion Menu
+# 5. Tab Behavior: Expand the Full Native Completion List
 # -----------------------------------------------------------------------------
 
 if (( has_autocomplete )); then
-  typeset -g _ZSH_PULSE_MENU_HIDDEN=0
-
-  # Pressing Tab when the completion menu is visible hides/clears the menu.
-  # Pressing Tab when the menu is hidden or empty expands/shows completion.
+  # The typeahead preview is only a preview. The first Tab replaces it with
+  # the full, uncapped completion list (which may paginate); it does not
+  # spend a keystroke hiding the preview first.
   _zsh_pulse_tab() {
-    if (( _ZSH_PULSE_MENU_HIDDEN == 0 )) && [[ -n $_ZSH_PULSE_LAST_TYPEAHEAD ]]; then
-      _ZSH_PULSE_MENU_HIDDEN=1
-      _ZSH_PULSE_LAST_TYPEAHEAD=""
-      zle -Rc 2>/dev/null
-    else
-      _ZSH_PULSE_MENU_HIDDEN=0
-      _ZSH_PULSE_LAST_TYPEAHEAD=""
-      zle expand-or-complete
-    fi
+    _ZSH_PULSE_LAST_TYPEAHEAD=""
+    _ZSH_PULSE_TYPEAHEAD_VISIBLE=0
+    # The typeahead widget leaves `_lastcomp` populated. Without clearing
+    # it, `expand-or-complete` treats the preview as the current list and
+    # jumps straight into menu selection (inserting the first candidate).
+    # Clearing it makes the first Tab expand the common prefix and list the
+    # full, uncapped completion set instead.
+    _lastcomp=()
+    zle expand-or-complete
   }
 
   zle -N zsh-pulse-tab _zsh_pulse_tab
@@ -423,6 +686,7 @@ if (( has_autocomplete || has_history )); then
     fi
     typeset -g _ZSH_PULSE_MENU_ACTIVE=0
     _zsh_pulse_hist_searching=0
+    _ZSH_PULSE_TYPEAHEAD_VISIBLE=0
     zle -Rc 2>/dev/null
   }
   zle -N _zsh_pulse_menuselect_abort
@@ -432,11 +696,12 @@ if (( has_autocomplete || has_history )); then
     _ZSH_PULSE_SAVED_BUFFER=""
     _ZSH_PULSE_SAVED_ACTIVE=0
     _zsh_pulse_hist_searching=0
+    _ZSH_PULSE_TYPEAHEAD_VISIBLE=0
     zle .accept-line
   }
   zle -N _zsh_pulse_menuselect_accept
 
-  # Tab (toggle/hide menu) & Shift-Tab (reverse)
+  # Tab (full native list) & Shift-Tab (reverse)
   _zsh_pulse_bind_all zsh-pulse-tab '^I'
   bindkey -M menuselect '^I' _zsh_pulse_menuselect_abort 2>/dev/null
   bindkey -M menuselect '^C' _zsh_pulse_menuselect_abort 2>/dev/null
