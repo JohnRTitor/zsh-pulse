@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: "sccache"
+    steps:
+      # `fetch-depth: 0` is required, not incidental: the source tarball below is
+      # `git archive` of the pushed tag, and a shallow checkout does not have it.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: stable
+      - name: Build Release
+        run: cargo build --locked --release --workspace
+      - name: Package module and adapter
+        run: |
+          set -euxo pipefail
+          tag="${GITHUB_REF_NAME}"
+          out="zsh-pulse-linux-x86_64"
+          rm -rf "$out"
+          mkdir -p "$out/zshpulse" "$out/zsh"
+          cp target/release/libzshpulse_core.so "$out/zshpulse/core.so"
+          cp zsh/*.zsh "$out/zsh/"
+          tar -czvf "${out}.tar.gz" "$out"
+          sha256sum "${out}.tar.gz" > "${out}.tar.gz.sha256"
+      # The source archive downstream distributions build from. `git archive`
+      # of the tag, with a stable prefix and sorted metadata, so the checksum
+      # below means something. `gzip -n` omits the timestamp and the original
+      # name from the gzip header, which is what makes the bytes reproducible.
+      - name: Source tarball
+        run: |
+          set -euxo pipefail
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          git archive --format=tar --prefix="zsh-pulse-$version/" "$tag" \
+            | gzip -n -9 > "zsh-pulse-$version.tar.gz"
+          sha256sum "zsh-pulse-$version.tar.gz" > "zsh-pulse-$version.tar.gz.sha256"
+      - name: Release
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        with:
+          files: |
+            zsh-pulse-linux-x86_64.tar.gz
+            zsh-pulse-linux-x86_64.tar.gz.sha256
+            zsh-pulse-[0-9]*.tar.gz
+            zsh-pulse-[0-9]*.tar.gz.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

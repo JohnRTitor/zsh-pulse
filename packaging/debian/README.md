@@ -1,0 +1,15 @@
+# Debian packaging for zsh-pulse
+
+Community-maintained Debian packaging recipe, following the style of the
+`ananicy-rs` packaging recipes.
+
+## Build outline
+
+```sh
+cp -r packaging/debian debian
+debian/make-vendor.sh
+dpkg-buildpackage -us -uc -b
+```
+
+The vendored dependency archive (`debian/vendor.tar.xz`) is generated locally by
+`make-vendor.sh` and is not committed. Builds run with `--locked --offline`.

@@ -1,0 +1,31 @@
+Source: zsh-pulse
+Section: shells
+Priority: optional
+Maintainer: zsh-pulse packagers <zsh-pulse-packaging@example.invalid>
+Build-Depends:
+ debhelper-compat (= 13),
+ cargo,
+ rustc (>= 1.85),
+ make,
+ zsh,
+Standards-Version: 4.7.0
+Homepage: https://github.com/JohnRTitor/zsh-pulse
+Rules-Requires-Root: no
+
+Package: zsh-pulse
+Architecture: linux-any
+Depends:
+ ${shlibs:Depends},
+ ${misc:Depends},
+ zsh,
+Description: high-performance Zsh enhancement module written in Rust
+ zsh-pulse is a high-performance shell enhancement engine for Zsh, implemented
+ in Rust as a native loadable module (zshpulse/core.so).
+ .
+ It provides real-time incremental syntax highlighting, bounded filesystem
+ completions, Fish-style inline autosuggestions, interactive history
+ navigation, and typeahead completion preview integration.
+ .
+ The module and adapter scripts are installed under /usr/lib/zsh-pulse and
+ /usr/share/zsh-pulse. Source /usr/share/zsh-pulse/init.zsh from your .zshrc
+ to enable it.

@@ -1,0 +1,10 @@
+zsh-pulse (0.1.0-1) unstable; urgency=medium
+
+  * Initial packaging.
+    - Built from the project's cargo workspace with `cargo build --release`
+      and installed via `make install`.
+    - Cargo dependencies are vendored into debian/vendor.tar.xz and the build
+      runs with --locked --offline and a CARGO_HOME inside the build directory.
+    - Installs the native Zsh module (zshpulse/core.so) and adapter scripts.
+
+ -- zsh-pulse packagers <zsh-pulse-packaging@example.invalid>  Thu, 12 Nov 2026 00:00:00 +0000

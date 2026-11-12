@@ -1,0 +1,40 @@
+# Maintainer: zsh-pulse packagers <zsh-pulse-packaging@example.invalid>
+
+pkgname=zsh-pulse
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='High-performance Zsh enhancement module written in Rust'
+arch=('x86_64')
+url='https://github.com/JohnRTitor/zsh-pulse'
+license=('MIT')
+depends=('zsh')
+makedepends=('cargo' 'git' 'make')
+source=("git+$url.git#tag=v$pkgver")
+b2sums=('SKIP')
+
+pkgver() {
+  cd "$pkgname"
+  git describe --tags --long --dirty |
+    sed -E 's/^v//; s/-[0-9]+-g[0-9a-f]+(-dirty)?$//'
+}
+
+prepare() {
+  cd "$pkgname"
+  cargo fetch --locked --target "$(rustc --print host-tuple)"
+}
+
+build() {
+  cd "$pkgname"
+  cargo build --release --frozen --workspace
+}
+
+check() {
+  cd "$pkgname"
+  cargo test --frozen --workspace
+}
+
+package() {
+  cd "$pkgname"
+  make install DESTDIR="$pkgdir" PREFIX=/usr LIBDIR=/usr/lib
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

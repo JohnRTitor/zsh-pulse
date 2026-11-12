@@ -16,7 +16,7 @@
       system:
       let
         pkgs = import nixpkgs { inherit system; };
-        zsh-pulse = pkgs.callPackage ./contrib/package.nix { };
+        zsh-pulse = pkgs.callPackage ./packaging/package.nix { };
       in
       {
         packages = {

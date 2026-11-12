@@ -61,7 +61,7 @@
 - [x] Down-Arrow (`_zsh_pulse_down_line_or_select`) enters visible typeahead menu or performs prefix history search
 
 ### Phase 9: Zsh Wordcode (`zcompile`) Compilation & Zero Parse Overhead
-- [x] Configure `contrib/package.nix` with `nativeBuildInputs = [ zsh ]` and `zcompile` all installed scripts (`init.zsh`, `widgets.zsh`, `completion.zsh`)
+- [x] Configure `packaging/package.nix` with `nativeBuildInputs = [ zsh ]` and `zcompile` all installed scripts (`init.zsh`, `widgets.zsh`, `completion.zsh`)
 - [x] Pre-compile `.zwc` wordcode in `bench/install.sh` for development and benchmark workflows
 - [x] Add `*.zwc` to `.gitignore` to keep repository clean
 
