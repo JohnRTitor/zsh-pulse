@@ -642,7 +642,7 @@ mod tests {
     #[test]
     fn complete_filesystem_tilde_preserves_tilde_slash_prefix() {
         let cwd = PathBuf::from("/tmp");
-        let home = PathBuf::from("/home/masum");
+        let home = PathBuf::from("/home/alice");
         let line = b"ls ~";
         let ctx = CompletionContext::new(line, line.len(), cwd, home);
         let outcome = complete_paths(&ctx, 10);
