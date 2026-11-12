@@ -392,15 +392,18 @@ mod tests {
             return;
         }
         let _g = serialise_threads();
-        let before = worker_thread_count();
+        let before = settled_worker_thread_count();
         let w = Worker::spawn().expect("spawn");
         let r = w.submit(1, b"x".to_vec(), Duration::from_secs(2)).expect("reply");
         assert_eq!(r.checksum, checksum(b"x"));
         // Asserting on *our own thread by name* rather than a global count, so
-        // parallel tests cannot perturb the result.
+        // parallel tests cannot perturb the result. Use a settled baseline and
+        // compare the delta so a transiently lingering worker thread from an
+        // earlier test in the process cannot make this flaky.
+        let after = wait_for_worker_threads(before + 1);
         assert_eq!(
-            wait_for_worker_threads(before + 1),
-            before + 1,
+            after.saturating_sub(before),
+            1,
             "spawning a Worker must create one thread named {WORKER_THREAD_NAME}"
         );
     }
