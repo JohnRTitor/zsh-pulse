@@ -428,8 +428,13 @@ zsh-pulse-highlight-redraw() {
   if [[ ${ZSH_PULSE_COMPLETION:-1} != (0|[fF][aA][lL][sS][eE]|[oO][fF][fF]|[nN][oO]) ]]; then
     if (( ! PENDING && ! KEYS_QUEUED_COUNT && ${+functions[compdef]} )); then
       if (( _ZSH_PULSE_MENU_HIDDEN == 0 && _ZSH_PULSE_IN_TYPEAHEAD == 0 )); then
-        if [[ ${WIDGET##.} != (menu-select|*menu*|*complete*|zsh-pulse-*|*select*|*search*) &&
-              ${LASTWIDGET##.} != (menu-select|*menu*|*complete*|zsh-pulse-*|*select*|*search*) ]]; then
+        # `$WIDGET` is this hook's own name while the hook runs, so it cannot
+        # tell us which widget triggered the redraw: it is always
+        # `zsh-pulse-highlight-redraw` here. Excluding `zsh-pulse-*` on
+        # `$WIDGET` therefore excluded the hook itself and silently disabled
+        # typeahead. `$LASTWIDGET` is the widget that caused the redraw, and
+        # that is the one the guard must look at.
+        if [[ ${LASTWIDGET##.} != (menu-select|*menu*|*complete*|zsh-pulse-tab|zsh-pulse-history-search|*select*|*search*) ]]; then
           if [[ -n $BUFFER && "$BUFFER" != "$_ZSH_PULSE_LAST_TYPEAHEAD" ]]; then
             _ZSH_PULSE_LAST_TYPEAHEAD="$BUFFER"
             if [[ -n $widgets[zsh-pulse-typeahead] ]]; then
