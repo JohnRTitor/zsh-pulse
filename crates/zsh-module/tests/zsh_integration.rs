@@ -386,7 +386,7 @@ fn the_highlighter_reports_character_offsets_not_byte_offsets() {
         "typeset -ga region_highlight\n\
          region_highlight=()\n\
          WIDGET=test-widget\n\
-         BUFFER=$'echo \\u00e9 | grep x'\n\
+         BUFFER='echo é | grep x'\n\
          CURSOR=3\n\
          zsh-pulse-highlight --region-highlight --command-known=echo --command-known=grep\n\
          print -r -- \"REGIONS=<${(j:,:)region_highlight}>\"",
