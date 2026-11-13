@@ -83,6 +83,8 @@ jobs:
           builddir="$HOME/rpmbuild/BUILD/zsh-pulse-$version-build"
           useradd --create-home --shell /bin/bash builder
           chown -R builder:builder "$HOME/rpmbuild/BUILD"
+          echo "zsh version tested with:"
+          zsh --version
           su builder -s /bin/bash -c "cd '$builddir/zsh-pulse-$version' && \
             CARGO_HOME='$builddir/cargo-home' cargo test --locked --offline --workspace"
       - name: rpmlint
