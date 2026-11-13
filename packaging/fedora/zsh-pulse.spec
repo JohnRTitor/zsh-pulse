@@ -6,7 +6,7 @@
 Name:           zsh-pulse
 Version:        0.1.0
 Release:        1%{?dist}
-Summary:        High-performance Zsh enhancement module written in Rust
+Summary:        High-performance Zsh enhancement engine (highlighting, completions, autosuggestions, history) in Rust
 
 License:        MIT
 URL:            https://github.com/JohnRTitor/zsh-pulse

@@ -18,7 +18,7 @@ Depends:
  ${shlibs:Depends},
  ${misc:Depends},
  zsh,
-Description: high-performance Zsh enhancement module written in Rust
+Description: high-performance Zsh enhancement engine (highlighting, completions, autosuggestions, history) in Rust
  zsh-pulse is a high-performance shell enhancement engine for Zsh, implemented
  in Rust as a native loadable module (zshpulse/core.so).
  .

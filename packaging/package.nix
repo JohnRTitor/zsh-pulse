@@ -70,15 +70,18 @@ rustPlatform.buildRustPackage {
   '';
 
   meta = {
-    description = "Incremental syntax highlighting for zsh, in Rust";
+    description = "High-performance Zsh enhancement engine (highlighting, completions, autosuggestions, history) in Rust";
     longDescription = ''
-      zsh-pulse loads a small native module into zsh and highlights the
-      command line as it is typed, through zsh's `region_highlight`
-      parameter. The lexer is pure Rust and re-lexes only the part of the
-      line that changed.
+      zsh-pulse is a high-performance shell enhancement engine for Zsh,
+      implemented in Rust as a native loadable module (zshpulse/core.so).
+
+      It provides real-time incremental syntax highlighting, bounded
+      filesystem completions, Fish-style inline autosuggestions,
+      interactive history navigation, and typeahead completion preview
+      integration.
     '';
     license = lib.licenses.mit;
     platforms = lib.platforms.unix;
-    mainProgram = "zsh-pulse";
+    maintainers = [ lib.maintainers.johnrtitor ];
   };
 }
