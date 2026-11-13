@@ -667,6 +667,7 @@ fn the_adapter_installs_both_hooks_and_does_not_chain_itself() {
 
 #[test]
 fn every_adapter_file_parses() {
+    require_zsh!();
     // A syntax error in `widgets.zsh` makes the `source` inside `init.zsh`
     // fail, and zsh carries on — so the adapter would look half-installed.
     let dir = adapter_path().parent().expect("the zsh directory").to_path_buf();
@@ -689,6 +690,7 @@ fn every_adapter_file_parses() {
 
 #[test]
 fn another_plugins_entries_survive_our_publish() {
+    require_zsh!();
     // `region_highlight` is replaced wholesale, so publishing only our own
     // entries would delete everyone else's. The entries we published last
     // time are recognised by their `memo=` and replaced; everything else is
@@ -712,6 +714,7 @@ fn another_plugins_entries_survive_our_publish() {
 
 #[test]
 fn our_own_previous_entries_are_replaced_not_accumulated() {
+    require_zsh!();
     // The memo is what tells us which entries are ours. Without replacing
     // them, every keystroke would add another copy.
     let (ok, out) = run_zsh(
