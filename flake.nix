@@ -39,7 +39,7 @@
           formatter = pkgs.nixfmt;
 
           packages = {
-            default = pkgs.callPackage ./packaging/package.nix { inherit version; };
+            default = pkgs.callPackage ./packaging/nix/package.nix { inherit version; };
             zsh-pulse = config.packages.default;
           };
 
