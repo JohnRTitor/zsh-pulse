@@ -37,7 +37,7 @@ concurrency:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     # Scoped to this job on purpose: this job installs sccache via
     # `.github/actions/setup-rust`. Setting RUSTC_WRAPPER workflow-wide would
     # make any job without that action fail to invoke rustc.
@@ -47,6 +47,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, macos-latest]
         toolchain: [stable, nightly]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
