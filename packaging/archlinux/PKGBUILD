@@ -3,7 +3,7 @@
 pkgname=zsh-pulse
 pkgver=0.1.0
 pkgrel=1
-pkgdesc='High-performance Zsh enhancement module written in Rust'
+pkgdesc='Fast, tiny, high-performance Zsh enhancement engine (highlighting, completions, autosuggestions, history) in Rust'
 arch=('x86_64')
 url='https://github.com/JohnRTitor/zsh-pulse'
 license=('MIT')

@@ -58,9 +58,9 @@ rustPlatform.buildRustPackage {
   '';
 
   meta = {
-    description = "High-performance Zsh enhancement engine (highlighting, completions, autosuggestions, history) in Rust";
+    description = "Fast, tiny, high-performance Zsh enhancement engine (highlighting, completions, autosuggestions, history) in Rust";
     longDescription = ''
-      zsh-pulse is a high-performance shell enhancement engine for Zsh,
+      zsh-pulse is a fast, tiny, high-performance shell enhancement engine for Zsh,
       implemented in Rust as a native loadable module (zshpulse/core.so).
 
       It provides real-time incremental syntax highlighting, bounded

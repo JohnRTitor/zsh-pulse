@@ -1,5 +1,5 @@
 {
-  description = "zsh-pulse — high-performance Zsh enhancement engine (highlighting, completions, autosuggestions, history) in Rust";
+  description = "zsh-pulse — fast, tiny, high-performance Zsh enhancement engine (highlighting, completions, autosuggestions, history) in Rust";
 
   inputs = {
     nixpkgs.url = "https://channels.nixos.org/nixos-unstable/nixexprs.tar.zst";

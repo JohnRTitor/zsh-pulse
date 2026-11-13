@@ -6,7 +6,7 @@
 Name:           zsh-pulse
 Version:        0.1.0
 Release:        1%{?dist}
-Summary:        High-performance Zsh enhancement engine (highlighting, completions, autosuggestions, history) in Rust
+Summary:        Fast, tiny, high-performance Zsh enhancement engine (highlighting, completions, autosuggestions, history) in Rust
 
 License:        MIT
 URL:            https://github.com/JohnRTitor/zsh-pulse
@@ -23,7 +23,7 @@ BuildRequires:  zsh
 Requires:       zsh
 
 %description
-zsh-pulse is a high-performance shell enhancement engine for Zsh, implemented
+zsh-pulse is a fast, tiny, high-performance shell enhancement engine for Zsh, implemented
 in Rust as a native loadable module (zshpulse/core.so).
 
 It provides real-time incremental syntax highlighting, bounded filesystem

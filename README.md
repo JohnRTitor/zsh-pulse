@@ -5,9 +5,11 @@
 [![Rust: 1.85+](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
 [![Zsh: 5.8+](https://img.shields.io/badge/zsh-5.8%2B-lightgrey.svg)](https://www.zsh.org)
 
-**zsh-pulse** is a high-performance shell enhancement engine for [Zsh](https://www.zsh.org), implemented in Rust with native Zsh completion integration.
+**zsh-pulse** is a fast, tiny, high-performance shell enhancement engine for [Zsh](https://www.zsh.org), implemented in Rust with native Zsh completion integration.
 
 It provides real-time incremental syntax highlighting, bounded filesystem completions, Fish-style inline autosuggestions, interactive history navigation, and a typeahead preview of Zsh's own completion candidates. The Rust highlighting and autosuggest paths run in-process with **sub-microsecond keystroke latency** (~276 ns module call, ~0.8 µs re-lexing) and **zero process forks**. The typeahead preview deliberately runs Zsh's native completion system synchronously, so it pays that system's cost rather than the Rust path's (see [performance](docs/performance.md)).
+
+**Zero dependencies:** no third-party compile-time crates and no external runtime binaries, background daemons, or plugin frameworks required—just Zsh and the native module (optional `fzf` integration is supported when installed).
 
 ---
 
