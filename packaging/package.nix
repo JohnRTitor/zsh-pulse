@@ -13,10 +13,11 @@
   lib,
   rustPlatform,
   zsh,
+  version ? "unstable",
 }:
 rustPlatform.buildRustPackage {
   pname = "zsh-pulse";
-  version = "0.1.0";
+  inherit version;
 
   nativeBuildInputs = [ zsh ];
 
