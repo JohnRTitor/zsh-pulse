@@ -34,11 +34,15 @@ rustPlatform.buildRustPackage {
 
   cargoLock.lockFile = ../../Cargo.lock;
 
-  # Integration tests drive a real zsh and need the module installed under a
-  # module_path first (see bench/install.sh), so they are not run here.
-  doCheck = false;
+  # We install the module at $out/lib/zshpulse/core.so (and adapter files)
+  # ourselves; skip cargoInstallHook's default copy of cdylibs into $out/lib.
+  dontCargoInstall = true;
 
-  postInstall = ''
+  # The Makefile's default `install` target writes to /usr; install into $out
+  # from postInstall instead.
+  installPhase = ''
+    runHook preInstall
+
     make install-files \
       DESTDIR="$out" \
       PREFIX=/ \
@@ -56,7 +60,13 @@ rustPlatform.buildRustPackage {
     zsh -c "zcompile '$out/share/zsh-pulse/zsh/init.zsh'"
     zsh -c "zcompile '$out/share/zsh-pulse/zsh/widgets.zsh'"
     zsh -c "zcompile '$out/share/zsh-pulse/zsh/completion.zsh'"
+    
+    runHook postInstall
   '';
+
+  # Integration tests drive a real zsh and need the module installed under a
+  # module_path first (see bench/install.sh), so they are not run here.
+  doCheck = false;
 
   meta = {
     description = "Fast, tiny, high-performance Zsh enhancement engine (highlighting, completions, autosuggestions, history) in Rust";
