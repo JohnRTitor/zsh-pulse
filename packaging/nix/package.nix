@@ -10,6 +10,7 @@
 # which rejects an absolute path and a `.so` suffix in a `zmodload` name.
 {
   lib,
+  stdenv,
   rustPlatform,
   zsh,
   version ? "unstable",
@@ -44,7 +45,7 @@ rustPlatform.buildRustPackage {
       LIBDIR=/lib \
       DATADIR=/share \
       MODULE_LIB_SUBDIR=zshpulse \
-      CARGO_TARGET_DIR=target \
+      CARGO_TARGET_DIR="target/${stdenv.hostPlatform.rust.cargoShortTarget}" \
       TARGET=release
 
     sed "s|@out@|$out|g" zsh/nix-init.zsh > "$out/share/zsh-pulse/init.zsh"
