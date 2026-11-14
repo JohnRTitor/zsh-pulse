@@ -155,18 +155,31 @@ pub mod zsh {
 
 /// `dlopen`/`dlsym`, declared locally so this crate has **no dependencies**.
 pub mod dl {
-    use core::ffi::{c_char, c_void};
+    use core::ffi::{c_char, c_int, c_void};
 
-    /// `RTLD_DEFAULT` — search the global symbol scope, which for a zsh module
-    /// includes the `zsh` executable's exported symbols.
+    /// Search the default/global symbol scope.
+    ///
+    /// The value of `RTLD_DEFAULT` is platform-specific (`NULL` on Linux,
+    /// `(void *) -2` on macOS), so it must not be hard-coded as `null_mut()`.
+    #[cfg(target_os = "macos")]
+    pub const RTLD_DEFAULT: *mut c_void = -2isize as *mut c_void;
+    #[cfg(not(target_os = "macos"))]
     pub const RTLD_DEFAULT: *mut c_void = core::ptr::null_mut();
 
+    pub const RTLD_LAZY: c_int = 0x1;
+
     unsafe extern "C" {
+        /// `void *dlopen(const char *path, int mode)`
+        pub fn dlopen(path: *const c_char, mode: c_int) -> *mut c_void;
         /// `void *dlsym(void *handle, const char *symbol)`
         pub fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
     }
 
-    /// Look up `symbol` in the global scope. Returns `None` if absent.
+    /// Look up `symbol` in the process/global scope. Returns `None` if absent.
+    ///
+    /// Tries `RTLD_DEFAULT` and, as a fallback, the main executable handle
+    /// (`dlopen(NULL, ...)`) because symbol visibility differs across
+    /// platforms and zsh builds.
     ///
     /// # Safety
     ///
@@ -175,6 +188,14 @@ pub mod dl {
     pub unsafe fn lookup_global(symbol: &str) -> Option<*mut c_void> {
         let c = std::ffi::CString::new(symbol).ok()?;
         let p = unsafe { dlsym(RTLD_DEFAULT, c.as_ptr()) };
+        if !p.is_null() {
+            return Some(p);
+        }
+        let main = unsafe { dlopen(core::ptr::null(), RTLD_LAZY) };
+        if main.is_null() {
+            return None;
+        }
+        let p = unsafe { dlsym(main, c.as_ptr()) };
         if p.is_null() { None } else { Some(p) }
     }
 }
