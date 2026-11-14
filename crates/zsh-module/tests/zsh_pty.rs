@@ -20,11 +20,16 @@
 //!
 //! | what | attribute | the bytes zsh writes |
 //! |---|---|---|
-//! | a command the shell knows | `fg=green` | `ESC [ 3 2 m` |
+//! | a command the shell knows | `fg=cyan` | `ESC [ 3 6 m` |
 //! | a command the shell does not know | `fg=red,bold` | `ESC [ 1 m` `ESC [ 3 1 m` |
 //! | a command-line option (`-l`, `--amend`) | `fg=cyan` | `ESC [ 3 6 m` |
-//! | a word naming an existing directory | `fg=magenta,underline` | `ESC [ 4 m` `ESC [ 3 5 m` |
-//! | a word naming an existing file | `fg=magenta` | `ESC [ 3 5 m` |
+//! | a word naming an existing directory | `underline` | `ESC [ 4 m` |
+//! | a word naming an existing file | `underline` | `ESC [ 4 m` |
+//!
+//! A command word and an option are both `fg=cyan`, so a test that needs
+//! to tell them apart uses their positions on the line, not the colour.
+//! There is no file/directory colour distinction either: both are
+//! underlined.
 //!
 //! zsh writes the **attributes first and the foreground colour second**,
 //! and the bytes themselves come from the terminal's capabilities — so
@@ -149,12 +154,12 @@ const SECOND_ARGUMENT: &str = "SPARGZULU";
 /// `TERM`. zsh's prompt escapes are the same machinery the line editor
 /// uses to turn an attribute into terminal bytes, so they say what the
 /// terminal supports: `%B` is the bold sequence, `%U` the underline one,
-/// `%F{green}` the foreground-colour one and `%f` the way back to the
+/// `%F{cyan}` the foreground-colour one and `%f` the way back to the
 /// default foreground.
 ///
 /// zsh writes the **attributes first and the foreground colour second**,
-/// so `fg=red,bold` becomes `ESC [ 1 m` `ESC [ 3 1 m` and
-/// `fg=magenta,underline` becomes `ESC [ 4 m` `ESC [ 3 5 m`.
+/// so `fg=red,bold` becomes `ESC [ 1 m` `ESC [ 3 1 m`, while `underline`
+/// is just `ESC [ 4 m`.
 ///
 /// The `zsh_pty` test binary dumps the raw bytes it captured, so these
 /// can be checked against reality rather than against a guess.
@@ -171,10 +176,10 @@ struct Palette {
     yellow: Vec<u8>,
     /// SGR 34: the blue foreground.
     blue: Vec<u8>,
-    /// SGR 35: the magenta foreground.
-    magenta: Vec<u8>,
     /// SGR 36: the cyan foreground.
     cyan: Vec<u8>,
+    /// SGR 37: the white foreground.
+    white: Vec<u8>,
     /// SGR 39: the default foreground — what closes a region.
     ///
     /// This is what closes a highlighted region. SGR 39 is "default
@@ -185,8 +190,10 @@ struct Palette {
     default_foreground: Vec<u8>,
     /// The bytes for `fg=red,bold`: the attribute, then the colour.
     red_bold: Vec<u8>,
-    /// The bytes for `fg=magenta,underline`: the attribute, then the colour.
-    magenta_underline: Vec<u8>,
+    /// The bytes for `fg=blue,bold`: the attribute, then the colour.
+    blue_bold: Vec<u8>,
+    /// The bytes for `fg=yellow,bold`: the attribute, then the colour.
+    yellow_bold: Vec<u8>,
 }
 
 impl Palette {
@@ -203,31 +210,32 @@ impl Palette {
         let green = prompt_escape(term, "%F{green}");
         let yellow = prompt_escape(term, "%F{yellow}");
         let blue = prompt_escape(term, "%F{blue}");
-        let magenta = prompt_escape(term, "%F{magenta}");
         let cyan = prompt_escape(term, "%F{cyan}");
+        let white = prompt_escape(term, "%F{white}");
         let default_foreground = prompt_escape(term, "%f");
         Palette {
             // The attributes come first and the foreground colour second:
             // this is the order zsh writes them in, and it is the order
-            // `fg=red,bold` and `fg=magenta,underline` are read in.
+            // the combined attributes are read in.
             red_bold: [bold.as_slice(), red.as_slice()].concat(),
-            magenta_underline: [underline.as_slice(), magenta.as_slice()].concat(),
+            blue_bold: [bold.as_slice(), blue.as_slice()].concat(),
+            yellow_bold: [bold.as_slice(), yellow.as_slice()].concat(),
             bold,
             underline,
             red,
             green,
             yellow,
             blue,
-            magenta,
             cyan,
+            white,
             default_foreground,
         }
     }
 
     /// Whether the terminal answers with the standard xterm sequences.
     ///
-    /// SGR 1 is bold, SGR 4 is underline, SGR 31, 32, 33, 34, 35 and 36
-    /// are red, green, yellow, blue, magenta and cyan, and SGR 39 is the
+    /// SGR 1 is bold, SGR 4 is underline, SGR 31, 32, 33, 34, 36 and 37
+    /// are red, green, yellow, blue, cyan and white, and SGR 39 is the
     /// default foreground. The test pins `TERM` to a terminal with these
     /// capabilities, so that the bytes it asserts on are the ones in the
     /// table at the top of this file.
@@ -238,18 +246,18 @@ impl Palette {
             && self.green == b"\x1b[32m".as_slice()
             && self.yellow == b"\x1b[33m".as_slice()
             && self.blue == b"\x1b[34m".as_slice()
-            && self.magenta == b"\x1b[35m".as_slice()
             && self.cyan == b"\x1b[36m".as_slice()
+            && self.white == b"\x1b[37m".as_slice()
             && self.default_foreground == b"\x1b[39m".as_slice()
     }
 
-    /// Every sequence the plugin can write.
+    /// Every foreground sequence the plugin can write.
     ///
-    /// The plugin's styles are a colour, an attribute, or both
+    /// The plugin's foreground styles are a colour, an attribute, or both
     /// (`crates/zsh-module/src/region.rs`), so "nothing was coloured" has
-    /// to be checked against all of them: the six colours it publishes,
-    /// the two attributes, and the two combinations. Checking only one of
-    /// them would let the others through.
+    /// to be checked against all of them: the colours it publishes, the
+    /// two attributes, and the combinations. The background colour of a
+    /// global alias is not covered: no scenario here defines one.
     fn every_sequence(&self) -> Vec<&[u8]> {
         vec![
             self.bold.as_slice(),
@@ -258,10 +266,11 @@ impl Palette {
             self.green.as_slice(),
             self.yellow.as_slice(),
             self.blue.as_slice(),
-            self.magenta.as_slice(),
             self.cyan.as_slice(),
+            self.white.as_slice(),
             self.red_bold.as_slice(),
-            self.magenta_underline.as_slice(),
+            self.blue_bold.as_slice(),
+            self.yellow_bold.as_slice(),
         ]
     }
 }
@@ -1042,7 +1051,7 @@ fn prompt_escape(term: &str, escape: &str) -> Vec<u8> {
 ///
 /// Every sequence an assertion in this file uses is checked, not only the
 /// two the first version of this test needed: a terminal that answers
-/// `cyan` correctly but `magenta` differently would make the later
+/// `cyan` correctly but `yellow` differently would make the later
 /// assertions wrong.
 fn colour_terminal() -> Option<Terminal> {
     const CANDIDATES: &[&str] = &["xterm-256color", "xterm", "screen", "linux", "xterm-kitty"];
@@ -1061,7 +1070,7 @@ fn the_typed_command_is_highlighted_on_the_terminal() {
     let Some(term) = colour_terminal() else {
         skip(
             "no terminal type with the standard xterm colour capabilities \
-             was found, so the bytes zsh writes for `fg=green` cannot be known \
+             was found, so the bytes zsh writes for `fg=cyan` cannot be known \
              in advance and asserting on them would be a guess.",
         );
         return;
@@ -1092,14 +1101,14 @@ fn the_typed_command_is_highlighted_on_the_terminal() {
         capture.dump()
     );
 
-    // The command word is `fg=green`: the shell knows `echo`, so the
-    // plugin paints it green.
+    // The command word is `fg=cyan`: the shell knows `echo`, so the
+    // plugin paints it cyan.
     assert!(
-        capture.contains(&term.palette.green),
-        "the green region of the command word never reached the terminal.\n\
+        capture.contains(&term.palette.cyan),
+        "the cyan region of the command word never reached the terminal.\n\
          expected the bytes {:?} somewhere in the terminal output.\n\
          harness: {}\ncaptured {} bytes:\n{}",
-        term.palette.green,
+        term.palette.cyan,
         capture.status,
         capture.bytes.len(),
         capture.dump()
@@ -1126,12 +1135,12 @@ fn the_typed_command_is_highlighted_on_the_terminal() {
 
     // The highlight stops at the end of the command word: an ordinary
     // argument is not styled, so the bytes in front of the argument cannot
-    // be the green sequence.
+    // be the cyan sequence.
     for at in drawn {
-        let before = &capture.bytes[at.saturating_sub(term.palette.green.len())..at];
+        let before = &capture.bytes[at.saturating_sub(term.palette.cyan.len())..at];
         assert_ne!(
             before,
-            term.palette.green.as_slice(),
+            term.palette.cyan.as_slice(),
             "the argument {ARGUMENT} was drawn inside the highlighted region: \
              an ordinary argument must not be styled.\n{}",
             capture.dump()
@@ -1248,10 +1257,10 @@ fn an_empty_line_is_not_highlighted() {
         "the module did not load in the shell under the pty.\n{}",
         capture.dump()
     );
-    // Not one of the sequences the plugin can write may be there: the
-    // plugin publishes six colours and two attributes, and an empty line
-    // has none of them. Checking a single colour would let the others
-    // through.
+    // Not one of the foreground sequences the plugin can write may be
+    // there: the plugin publishes colours, attributes and combinations,
+    // and an empty line has none of them. Checking a single colour would
+    // let the others through.
     for sequence in term.palette.every_sequence() {
         assert!(
             !capture.contains(sequence),
@@ -1277,7 +1286,7 @@ fn the_highlighting_survives_a_second_command_line() {
     let Some(term) = colour_terminal() else {
         skip(
             "no terminal type with the standard xterm colour capabilities \
-             was found, so the bytes zsh writes for `fg=green` cannot be known \
+             was found, so the bytes zsh writes for `fg=cyan` cannot be known \
              in advance and asserting on them would be a guess.",
         );
         return;
@@ -1330,30 +1339,30 @@ fn the_highlighting_survives_a_second_command_line() {
     // first one proves the hook works, the second proves it still works
     // after the line was submitted and zsh emptied the display array.
     //
-    // The green of the first line is drawn before that line's argument;
-    // the green of the second line is drawn after it — between the two
+    // The cyan of the first line is drawn before that line's argument;
+    // the cyan of the second line is drawn after it — between the two
     // arguments there is only the output of the first `echo` and the
     // prompt of the second line, and neither of them is coloured.
-    let green = capture.screen_positions_with(Attrs::of(&term.palette.green));
+    let cyan = capture.screen_positions_with(Attrs::of(&term.palette.cyan));
     assert!(
-        !green.is_empty(),
-        "the command word was never highlighted in green.\n{}",
+        !cyan.is_empty(),
+        "the command word was never highlighted in cyan.\n{}",
         capture.dump()
     );
     let first_at = first[0];
     let second_at = second[0];
     assert!(
-        green.iter().any(|at| *at < first_at),
-        "the command word of the *first* line was never highlighted in green.\n\
+        cyan.iter().any(|at| *at < first_at),
+        "the command word of the *first* line was never highlighted in cyan.\n\
          harness: {}\ncaptured {} bytes:\n{}",
         capture.status,
         capture.bytes.len(),
         capture.dump()
     );
     assert!(
-        green.iter().any(|at| *at > first_at && *at < second_at),
+        cyan.iter().any(|at| *at > first_at && *at < second_at),
         "the command word of the *second* line was never highlighted in \
-         green: every green is outside the second line.\n\
+         cyan: every cyan is outside the second line.\n\
          harness: {}\ncaptured {} bytes:\n{}",
         capture.status,
         capture.bytes.len(),
@@ -1403,11 +1412,11 @@ fn the_highlighting_survives_tab_completion() {
         capture.dump()
     );
 
-    let green = capture.screen_positions_with(Attrs::of(&term.palette.green));
+    let cyan = capture.screen_positions_with(Attrs::of(&term.palette.cyan));
     let second_at = second[0];
     assert!(
-        green.iter().any(|at| *at < second_at),
-        "highlighting was killed after tab completion: no green command word drawn on the second line.\n{}",
+        cyan.iter().any(|at| *at < second_at),
+        "highlighting was killed after tab completion: no cyan command word drawn on the second line.\n{}",
         capture.dump()
     );
 }
@@ -1469,24 +1478,24 @@ fn without_the_module_nothing_is_highlighted() {
     }
 }
 
-/// A command the shell knows is green.
+/// A command the shell knows is cyan.
 ///
 /// `echo` is a builtin, so the shell knows it and the plugin paints the
-/// command word green.
+/// command word cyan.
 ///
 /// The prefixes of the word are a different matter: while the word is
 /// being typed the shell is asked about `e`, `ec` and `ech`, none of
 /// which it knows, so those are red. The *last* red therefore belongs to
-/// a prefix and has to come before the green of the finished word — a
-/// plugin that painted `echo` red would put a red after the green.
+/// a prefix and has to come before the cyan of the finished word — a
+/// plugin that painted `echo` red would put a red after the cyan.
 #[test]
 #[cfg(feature = "highlight")]
-fn a_known_command_is_green_on_the_terminal() {
+fn a_known_command_is_cyan_on_the_terminal() {
     require_zsh_pty!();
     let Some(term) = colour_terminal() else {
         skip(
             "no terminal type with the standard xterm colour capabilities \
-             was found, so the bytes zsh writes for `fg=green` cannot be known \
+             was found, so the bytes zsh writes for `fg=cyan` cannot be known \
              in advance and asserting on them would be a guess.",
         );
         return;
@@ -1517,34 +1526,34 @@ fn a_known_command_is_green_on_the_terminal() {
         capture.dump()
     );
 
-    // The green reached the terminal.
-    let green = capture.screen_positions_with(Attrs::of(&term.palette.green));
+    // The cyan reached the terminal.
+    let cyan = capture.screen_positions_with(Attrs::of(&term.palette.cyan));
     assert!(
-        !green.is_empty(),
-        "the command word was not painted green: the bytes {:?} never \
+        !cyan.is_empty(),
+        "the command word was not painted cyan: the bytes {:?} never \
          reached the terminal.\n\
          harness: {}\ncaptured {} bytes:\n{}",
-        term.palette.green,
+        term.palette.cyan,
         capture.status,
         capture.bytes.len(),
         capture.dump()
     );
 
-    // The *finished* word is the green one. Every red the plugin painted
+    // The *finished* word is the cyan one. Every red the plugin painted
     // belongs to a prefix the shell did not know yet, and those are drawn
     // first.
     let red = capture.screen_positions_with(Attrs::of(&term.palette.red_bold));
     let last_red = red.last().copied();
-    let last_green = *green.last().expect("the green was checked above");
+    let last_cyan = *cyan.last().expect("the cyan was checked above");
     assert!(
-        last_red.is_none_or(|last| last < last_green),
+        last_red.is_none_or(|last| last < last_cyan),
         "the command word was painted red although the shell knows `echo`: \
-         the last red is at offset {last_red:?} and the last green at offset \
-         {last_green}.\n{}",
+         the last red is at offset {last_red:?} and the last cyan at offset \
+         {last_cyan}.\n{}",
         capture.dump()
     );
 
-    // The green region was closed before the argument was drawn: the
+    // The cyan region was closed before the argument was drawn: the
     // attributes in force at the argument are the default ones.
     let drawn = capture.screen_occurrences(ARGUMENT.as_bytes());
     assert!(
@@ -1557,7 +1566,7 @@ fn a_known_command_is_green_on_the_terminal() {
         assert_eq!(
             capture.attrs_at(at),
             Some(Attrs::of(&term.palette.default_foreground)),
-            "the command word was still in green when the argument was \
+            "the command word was still in cyan when the argument was \
              drawn, so the region was never closed.\n{}",
             capture.dump()
         );
@@ -1569,7 +1578,7 @@ fn a_known_command_is_green_on_the_terminal() {
 /// The word `nosuchcommandxyz` is not a builtin, not a command on `$PATH`
 /// and not an alias, so the plugin paints it red and bold. Its prefixes
 /// are unknown too — `n`, `no`, `nos` — so the whole word is red and
-/// *no* green may appear: a green would mean the plugin thought the
+/// *no* cyan may appear: a cyan would mean the plugin thought the
 /// shell knew the word.
 #[test]
 #[cfg(feature = "highlight")]
@@ -1621,15 +1630,16 @@ fn an_unknown_command_is_red_and_bold_on_the_terminal() {
         capture.dump()
     );
 
-    // No green at all: the shell does not know this word, so nothing may
-    // be painted green. This is the check that keeps the test honest — a
-    // plugin that painted every word green would fail here.
+    // No cyan at all: the shell does not know this word, so nothing may
+    // be painted as a known command. This is the check that keeps the
+    // test honest — a plugin that painted every word as a known command
+    // would fail here.
     assert!(
-        !capture.contains(&term.palette.green),
-        "the unknown command was painted green: the bytes {:?} are in the \
+        !capture.contains(&term.palette.cyan),
+        "the unknown command was painted cyan: the bytes {:?} are in the \
          terminal output, but the shell does not know `nosuchcommandxyz`.\n\
          harness: {}\ncaptured {} bytes:\n{}",
-        term.palette.green,
+        term.palette.cyan,
         capture.status,
         capture.bytes.len(),
         capture.dump()
@@ -1657,10 +1667,11 @@ fn an_unknown_command_is_red_and_bold_on_the_terminal() {
 
 /// A command-line option is cyan.
 ///
-/// `ls` is a command the shell knows, so the command word is green; the
-/// option `--color` that follows it is cyan. The option is further right
-/// on the line than the command word, so its cyan has to come after the
-/// green — and its region has to be closed before the argument is drawn.
+/// `ls` is a command the shell knows, so the command word is cyan; the
+/// option `--color` that follows it is cyan too. The colour alone cannot
+/// tell them apart, so the test checks the attributes at their positions
+/// on the line: the command word first, the option after it, and the
+/// option's region closed before the argument is drawn.
 #[test]
 #[cfg(feature = "highlight")]
 fn an_option_is_highlighted_on_the_terminal() {
@@ -1673,9 +1684,10 @@ fn an_option_is_highlighted_on_the_terminal() {
         );
         return;
     };
+    let typed = "ls --color SPARGXYZ";
     let capture = match capture(
         &Scenario {
-            typed: "ls --color SPARGXYZ".to_string(),
+            typed: typed.to_string(),
             wait_for: ARGUMENT.as_bytes(),
             load_module: true,
             count: 1,
@@ -1699,81 +1711,86 @@ fn an_option_is_highlighted_on_the_terminal() {
         capture.dump()
     );
 
-    // The cyan reached the terminal.
-    let cyan = capture.screen_positions_with(Attrs::of(&term.palette.cyan));
-    assert!(
-        !cyan.is_empty(),
-        "the option was not painted cyan: the bytes {:?} never reached the \
-         terminal.\nharness: {}\ncaptured {} bytes:\n{}",
-        term.palette.cyan,
-        capture.status,
-        capture.bytes.len(),
-        capture.dump()
-    );
+    // The command word and the option share `fg=cyan`, so their positions
+    // are what distinguishes them. `ls` is 0..2, `--color` is 3..10 and
+    // the argument starts at 11.
+    let drawn = capture.screen_occurrences(ARGUMENT.as_bytes());
+    let at = *drawn
+        .last()
+        .unwrap_or_else(|| panic!("the argument was never drawn.\n{}", capture.dump()));
+    let start = at
+        .checked_sub(typed.len() - ARGUMENT.len())
+        .unwrap_or_else(|| panic!("the line was not drawn as one piece.\n{}", capture.dump()));
 
-    // The command word comes first on the line, so the option's cyan has
-    // to come after the command word's green.
-    let green = capture.screen_positions_with(Attrs::of(&term.palette.green));
-    assert!(
-        !green.is_empty(),
-        "the command word `ls` was not painted green, so the order of the \
-         two regions cannot be checked.\n{}",
+    let cyan = Attrs::of(&term.palette.cyan);
+    for offset in 0..2 {
+        assert_eq!(
+            capture.attrs_at(start + offset),
+            Some(cyan),
+            "the command word `ls` was not drawn in cyan (offset {offset}).\n{}",
+            capture.dump()
+        );
+    }
+    assert_ne!(
+        capture.attrs_at(start + 2),
+        Some(cyan),
+        "the space after `ls` must not be inside its region.\n{}",
         capture.dump()
     );
-    assert!(
-        green[0] < cyan[0],
-        "the option was painted before the command word: the first green is \
-         at offset {} and the first cyan at offset {}.\n{}",
-        green[0],
-        cyan[0],
+    for offset in 3..10 {
+        assert_eq!(
+            capture.attrs_at(start + offset),
+            Some(cyan),
+            "the option `--color` was not drawn in cyan (offset {offset}).\n{}",
+            capture.dump()
+        );
+    }
+    assert_ne!(
+        capture.attrs_at(start + 10),
+        Some(cyan),
+        "the space after `--color` must not be inside its region.\n{}",
         capture.dump()
     );
 
     // The option's region was closed before the argument was drawn: the
     // attributes in force at the argument are the default ones.
-    let drawn = capture.screen_occurrences(ARGUMENT.as_bytes());
-    assert!(
-        !drawn.is_empty(),
-        "the argument {ARGUMENT} was never drawn, so the line was not edited \
-         at all.\n{}",
-        capture.dump()
-    );
-    for at in drawn {
+    let default = Attrs::of(&term.palette.default_foreground);
+    for offset in 11..typed.len() {
         assert_eq!(
-            capture.attrs_at(at),
-            Some(Attrs::of(&term.palette.default_foreground)),
+            capture.attrs_at(start + offset),
+            Some(default),
             "the option was still in cyan when the argument was drawn, so \
-             the region was never closed.\n{}",
+             the region was never closed (offset {offset}).\n{}",
             capture.dump()
         );
     }
 }
 
-/// A word naming an existing directory is magenta and underlined.
+/// A word naming an existing directory is underlined.
 ///
 /// The plugin looks the word up in the filesystem: a word that names an
-/// existing directory is magenta *and* underlined, so that it can be told
-/// apart from a plain file, which is magenta only.
+/// existing directory is underlined. Files are underlined too — the
+/// highlighter does not distinguish the two kinds in its style.
 ///
 /// The directory used here is `std::env::temp_dir()` — the same place the
 /// harness puts its own scratch directory, so it certainly exists.
 #[test]
 #[cfg(feature = "highlight")]
-fn an_existing_directory_is_magenta_and_underlined_on_the_terminal() {
+fn an_existing_directory_is_underlined_on_the_terminal() {
     require_zsh_pty!();
     let Some(term) = colour_terminal() else {
         skip(
             "no terminal type with the standard xterm colour capabilities \
-             was found, so the bytes zsh writes for `fg=magenta,underline` \
-             cannot be known in advance and asserting on them would be a \
-             guess.",
+             was found, so the bytes zsh writes for `underline` cannot be \
+             known in advance and asserting on them would be a guess.",
         );
         return;
     };
     let directory = std::env::temp_dir();
+    let directory_text = directory.display().to_string();
     // A path with a space in it cannot be typed as one word, so the
     // scenario would not be the one it claims to be.
-    if directory.display().to_string().contains(' ') {
+    if directory_text.contains(' ') {
         skip(
             "the temporary directory name contains a space, so it cannot be \
              typed as a single word and the scenario would not test what it \
@@ -1781,9 +1798,10 @@ fn an_existing_directory_is_magenta_and_underlined_on_the_terminal() {
         );
         return;
     }
+    let typed = format!("ls {directory_text} SPARGXYZ");
     let capture = match capture(
         &Scenario {
-            typed: format!("ls {} SPARGXYZ", directory.display()),
+            typed: typed.clone(),
             wait_for: ARGUMENT.as_bytes(),
             load_module: true,
             count: 1,
@@ -1807,43 +1825,45 @@ fn an_existing_directory_is_magenta_and_underlined_on_the_terminal() {
         capture.dump()
     );
 
-    // The magenta and the underline reached the terminal, in the order
-    // zsh writes them: the attribute first, the colour second.
-    assert!(
-        capture.contains(&term.palette.magenta_underline),
-        "the magenta+underline region of the directory never reached the \
-         terminal.\nexpected the bytes {:?} somewhere in the terminal \
-         output.\nharness: {}\ncaptured {} bytes:\n{}",
-        term.palette.magenta_underline,
-        capture.status,
-        capture.bytes.len(),
-        capture.dump()
-    );
-    assert!(
-        capture.contains(&term.palette.magenta),
-        "the magenta colour of the directory never reached the terminal.\n{}",
-        capture.dump()
-    );
-    assert!(
-        capture.contains(&term.palette.underline),
-        "the underline of the directory never reached the terminal.\n{}",
-        capture.dump()
-    );
+    // The directory's characters are underlined. Its position on the line
+    // is the proof that the underline belongs to the path and not to the
+    // command word, which is cyan, or to the argument, which is unstyled.
+    let drawn = capture.screen_occurrences(ARGUMENT.as_bytes());
+    let at = *drawn
+        .last()
+        .unwrap_or_else(|| panic!("the argument was never drawn.\n{}", capture.dump()));
+    let start = at
+        .checked_sub(typed.len() - ARGUMENT.len())
+        .unwrap_or_else(|| panic!("the line was not drawn as one piece.\n{}", capture.dump()));
+
+    let underlined = Attrs::of(&term.palette.underline);
+    for offset in 3..3 + directory_text.len() {
+        assert_eq!(
+            capture.attrs_at(start + offset),
+            Some(underlined),
+            "the directory was not drawn underlined (offset {offset}).\n{}",
+            capture.dump()
+        );
+    }
+
+    // The spaces around the path are not part of its region.
+    for offset in [2, 3 + directory_text.len()] {
+        assert_ne!(
+            capture.attrs_at(start + offset),
+            Some(underlined),
+            "the space at offset {offset} must not be underlined.\n{}",
+            capture.dump()
+        );
+    }
 
     // The argument was typed and drawn, outside the highlighted region.
-    let drawn = capture.screen_occurrences(ARGUMENT.as_bytes());
-    assert!(
-        !drawn.is_empty(),
-        "the argument {ARGUMENT} was never drawn, so the line was not edited \
-         at all.\n{}",
-        capture.dump()
-    );
-    for at in drawn {
+    let default = Attrs::of(&term.palette.default_foreground);
+    for offset in 4 + directory_text.len()..typed.len() {
         assert_eq!(
-            capture.attrs_at(at),
-            Some(Attrs::of(&term.palette.default_foreground)),
+            capture.attrs_at(start + offset),
+            Some(default),
             "the directory was still underlined when the argument was drawn, \
-             so the region was never closed.\n{}",
+             so the region was never closed (offset {offset}).\n{}",
             capture.dump()
         );
     }

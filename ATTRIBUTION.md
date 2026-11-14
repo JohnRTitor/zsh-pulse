@@ -76,7 +76,7 @@ During the research and design phases of `zsh-pulse`, the following upstream pro
 - **Borrowed Elements**:
   - Two-stage lookup order: Consulting the shell's internal command hash tables first (`$aliases`, `$functions`, `$builtins`, `$commands`, `$reswords`) before falling back to filesystem `stat` probes.
   - Highlighting memoization (`memo=zsh-pulse`) to cleanly coexist with other ZLE highlighting plugins without clobbering their `region_highlight` entries.
-  - Color styling palette conventions (`fg=green` for valid commands, `fg=red,bold` for unknown commands, `fg=magenta` for valid paths, `fg=magenta,underline` for valid directories).
+  - Color styling palette conventions, adapted to the current patina-aligned defaults (`fg=cyan` for valid commands, subcommands, and options; `fg=red,bold` for unknown commands; `underline` for valid paths).
 
 ### 6. `zsh-autocomplete` & `zsh-src` — Menu Safety & Native Builtin Calling
 - **Implementation**: [`zsh/completion.zsh`](zsh/completion.zsh), [`crates/zsh-abi/src/api.rs`](crates/zsh-abi/src/api.rs)

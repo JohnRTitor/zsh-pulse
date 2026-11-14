@@ -107,6 +107,9 @@ Executed on every redraw via `zle-line-pre-redraw`:
          ├─ Query shell command tables ($aliases, $functions, $builtins, $commands)
          │    Cached in ZSH_PULSE_COMMAND_CACHE (TTL = 2 seconds)
          │
+         ├─ Answer bounded CLI subcommands from the adapter's family/group tables
+         │    `--subcommand=<word>` for `git`, `cargo`, `docker`, `kubectl`, `npm`
+         │
          ▼
   zsh-pulse-highlight  [crates/zsh-module/src/highlight.rs]
          │
@@ -121,11 +124,9 @@ Executed on every redraw via `zle-line-pre-redraw`:
          │    Length ≥ 128 bytes: resume from token checkpoint, splice tail
          │
          ├─ Build and style spans:
-         │    Command known -> fg=green; unknown -> fg=red,bold
-         │    Literal word naming directory -> fg=magenta,underline
-         │    Literal word naming file -> fg=magenta
-         │    Option switch -> fg=cyan
-         │    Bracket / quote pairs -> bg=blue on hover; fg=red,bold on mismatch
+         │    Command known / subcommand / option -> fg=cyan; unknown -> fg=red,bold
+         │    Literal word naming a directory or file -> underline
+         │    Bracket / quote pairs -> fg=yellow,bold on hover; fg=red,bold on mismatch
          │
          ├─ If spans unchanged: return immediately (0 Zsh calls)
          │

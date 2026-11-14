@@ -584,7 +584,7 @@ const COMMAND_SUBCOMMAND_ARGUMENT: &[u8] = b"--subcommand=";
 /// bug. A word that keeps the lexer's style is *styled*; a word with no
 /// region at all is left exactly as the user typed it. The difference
 /// is visible: the lexer's own style for a command word is
-/// [`StyleId::Command`], which is green, and green asserts that the
+/// [`StyleId::Command`], which is cyan, and cyan asserts that the
 /// shell knows the command — an assertion that was never established
 /// for a word the shell said nothing about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -952,7 +952,7 @@ fn push_word(
                     // A command inside a word: the command of a command
                     // substitution. It is a command in its own right, so
                     // it is styled from the shell's answers — and the
-                    // lexer's green is not published for a command
+                    // lexer's cyan is not published for a command
                     // nobody said anything about.
                     command_token_style(token, buffer, answers)
                 } else {
@@ -1011,15 +1011,15 @@ fn is_command_word(word: &[Token], buffer: &[u8]) -> bool {
 
 /// The style of a command word, given what the shell said about it.
 ///
-/// A command word the shell knows is green; one the shell does not know
+/// A command word the shell knows is cyan; one the shell does not know
 /// is red and bold, the way the reference implementation colours an
 /// unknown token (`research/upstream/fsh/fast-highlight:58-93`).
 ///
 /// A command word the shell said **nothing** about gets no region at
-/// all. The lexer's own style for a command word is green, and green
+/// all. The lexer's own style for a command word is cyan, and cyan
 /// asserts that the shell knows the command — an assertion that was
 /// never established. Publishing it would paint the `nosuchcmd` of
-/// `ls | nosuchcmd` green, which is what the module used to do.
+/// `ls | nosuchcmd` cyan, which is what the module used to do.
 ///
 /// A word the shell does not know may still name a file that exists —
 /// `~/bin/tool` is a path, not a typo — so the filesystem is consulted
@@ -1985,7 +1985,7 @@ mod tests {
         assert_eq!(
             command_style(word, line, &answers, &mut |_word| None),
             WordStyle::Styled(StyleId::Command),
-            "a command the shell knows is green"
+            "a command the shell knows is cyan"
         );
     }
 
@@ -2003,7 +2003,7 @@ mod tests {
 
     #[test]
     fn a_command_the_shell_said_nothing_about_is_left_alone() {
-        // The lexer's own style for a command word is green, and green
+        // The lexer's own style for a command word is cyan, and cyan
         // asserts that the shell knows the command — which was never
         // established. So a command word with no answer gets no region at
         // all, and stays exactly as the user typed it.
@@ -2030,6 +2030,58 @@ mod tests {
             command_style(word, line, &answers, &mut |_word| None),
             WordStyle::Unstyled,
             "an answer about another word must be dropped"
+        );
+    }
+
+    #[test]
+    fn a_subcommand_in_argument_position_is_styled_as_a_subcommand() {
+        // The adapter answers `--subcommand=status` for the word after a
+        // command family it knows. The word is an argument to the lexer,
+        // but it is the subcommand the user is typing, so it gets the
+        // subcommand style.
+        let answers = answers_from(&[b"--command-known=git", b"--subcommand=status"]);
+        assert_eq!(
+            spans_of("git status", &answers),
+            vec![
+                HighlightSpan::new(0, 3, StyleId::Command),
+                HighlightSpan::new(4, 10, StyleId::Subcommand),
+            ],
+            "the subcommand must be published with the subcommand style"
+        );
+    }
+
+    #[test]
+    fn a_nested_subcommand_is_styled_too() {
+        // `git remote add` has two subcommand words. The adapter answers
+        // both; the module applies each answer to its own word.
+        let answers = answers_from(&[
+            b"--command-known=git",
+            b"--subcommand=remote",
+            b"--subcommand=add",
+        ]);
+        assert_eq!(
+            spans_of("git remote add", &answers),
+            vec![
+                HighlightSpan::new(0, 3, StyleId::Command),
+                HighlightSpan::new(4, 10, StyleId::Subcommand),
+                HighlightSpan::new(11, 14, StyleId::Subcommand),
+            ],
+            "both levels of a nested subcommand must be published"
+        );
+    }
+
+    #[test]
+    fn a_word_without_a_subcommand_answer_is_not_a_subcommand() {
+        // An argument the adapter did not identify is an ordinary
+        // argument, even when it follows a command family.
+        let answers = answers_from(&[b"--command-known=git"]);
+        assert_eq!(
+            spans_of("git status", &answers),
+            vec![
+                HighlightSpan::new(0, 3, StyleId::Command),
+                HighlightSpan::new(4, 10, StyleId::Argument),
+            ],
+            "an argument without a subcommand answer must stay an argument"
         );
     }
 
@@ -2089,7 +2141,7 @@ mod tests {
     #[test]
     fn the_published_spans_are_the_ones_the_module_publishes() {
         // The function the benchmark and the tests use must publish what
-        // the module publishes: the command word green when the shell
+        // the module publishes: the command word cyan when the shell
         // knows it, red when it does not, and nothing at all when the
         // shell was not asked.
         assert_eq!(
@@ -2166,7 +2218,7 @@ mod tests {
     }
 
     #[test]
-    fn a_command_the_shell_knows_is_published_as_green() {
+    fn a_command_the_shell_knows_is_published_as_cyan() {
         let answers = answers_from(&[b"--command-known=ls"]);
         assert_eq!(
             spans_of("ls", &answers),
@@ -2188,8 +2240,8 @@ mod tests {
     #[test]
     fn a_command_word_with_no_answer_is_not_published_at_all() {
         // The bug this fixes: `ls | nosuchcmd` painted the second command
-        // word green, because the lexer's own style for a command word is
-        // green and the module fell back to it.
+        // word cyan, because the lexer's own style for a command word is
+        // cyan and the module fell back to it.
         let answers = answers_from(&[]);
         assert!(
             spans_of("ls", &answers).is_empty(),
@@ -2250,8 +2302,8 @@ mod tests {
     #[test]
     fn a_command_inside_a_substitution_is_not_published_without_an_answer() {
         // The command of a command substitution is a command in its own
-        // right, and the lexer's green for it says the same thing the
-        // green of a command word says: that the shell knows it.
+        // right, and the lexer's cyan for it says the same thing the
+        // cyan of a command word says: that the shell knows it.
         let answers = answers_from(&[]);
         let spans = spans_of("echo $(cmd)", &answers);
         assert!(
@@ -2457,7 +2509,7 @@ mod tests {
     #[test]
     fn a_precommand_target_without_an_answer_is_left_alone() {
         // The shell was asked about `sudo` only. The command it runs must
-        // not fall back to the lexer's green, and must not be called
+        // not fall back to the lexer's cyan, and must not be called
         // unknown either: nobody said anything about it.
         let answers = answers_from(&[b"--command-known=sudo"]);
         assert_eq!(

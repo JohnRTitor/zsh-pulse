@@ -103,7 +103,7 @@
 - [x] Implement per-context lexical `--` end-of-options handling so operands after `--` are not highlighted as options, with correct resets across command boundaries and command-context entry
 - [x] Tokenize process substitutions `<(...)` and `>(...)` (including optional fd prefixes) as substitutions, lex/highlight inner command lists, and preserve correct `--` scoping within substitutions
 - [x] Add bounded wrapper/precommand command discovery for `command`, `builtin`, `exec`, `noglob`, `nocorrect`, `nice`, `nohup`, `time`, `env`, and `sudo` (common option/option-argument forms, `--`, and `env` assignments)
-- [x] Add allowlisted subcommand detection for `git`, `cargo`, `docker`, `kubectl`, and `npm`, including bounded second-level nested subcommands for selected `docker`/`git` groups with heuristic option-argument consumption (schema-unaware)
+- [x] Add allowlisted subcommand detection for `git`, `cargo`, `docker`, `kubectl`, and `npm`, including bounded second-level nested subcommands for selected `docker`/`git` groups with heuristic option-argument consumption (schema-unaware). *Adapter-side family/group tables landed in the follow-up highlighting commit.*
 - [x] Expand lexer and zsh-module test coverage (unit/incremental, integration, and PTY) and pass formatting, targeted crate tests, and `cargo test --workspace`
 - [ ] Add command-schema/option-arity awareness and general multi-level CLI grammar support
 - [ ] Improve non-exhaustive process-substitution/composition parity and address broader Phase 2–4 grammar/dynamic parity gaps

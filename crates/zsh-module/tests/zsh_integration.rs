@@ -386,7 +386,7 @@ fn the_highlighter_fills_region_highlight() {
     // The assertion is on the *whole* array, so a duplicate or a missing
     // region would fail it.
     assert!(
-        out.contains("REGIONS=<0 4 fg=green memo=zsh-pulse>"),
+        out.contains("REGIONS=<0 4 fg=cyan memo=zsh-pulse>"),
         "unexpected regions: {out}"
     );
     // `hi` is an ordinary argument: it is not highlighted at all.
@@ -421,8 +421,8 @@ fn the_highlighter_reports_character_offsets_not_byte_offsets() {
     // would report 8.
     assert!(
         out.contains(
-            "REGIONS=<0 4 fg=green memo=zsh-pulse,7 8 fg=red memo=zsh-pulse,\
-             9 13 fg=green memo=zsh-pulse>"
+            "REGIONS=<0 4 fg=cyan memo=zsh-pulse,7 8 fg=red memo=zsh-pulse,\
+             9 13 fg=cyan memo=zsh-pulse>"
         ),
         "the offsets must be characters, not bytes: {out}"
     );
@@ -525,7 +525,7 @@ fn a_changed_line_is_pushed_again() {
     );
     assert!(ok, "zsh exited badly: {out}");
     assert!(
-        out.contains("REGIONS=SENTINEL,0 4 fg=green memo=zsh-pulse"),
+        out.contains("REGIONS=SENTINEL,0 4 fg=cyan memo=zsh-pulse"),
         "a changed line must be pushed again, keeping what another plugin \
          had: {out}"
     );
@@ -554,7 +554,7 @@ fn a_line_that_cannot_be_parsed_is_left_unhighlighted() {
     assert!(ok, "zsh exited badly: {out}");
     assert!(out.contains("SURVIVED"), "the shell did not finish: {out}");
     assert!(
-        !out.contains("fg=green") && !out.contains("fg=red"),
+        !out.contains("fg=cyan") && !out.contains("fg=red"),
         "an unparseable line must not keep the old highlights: {out}"
     );
 }
@@ -747,7 +747,7 @@ fn another_plugins_entries_survive_our_publish() {
     );
     assert!(ok, "zsh exited badly: {out}");
     assert!(
-        out.contains("REGIONS=<SENTINEL,0 4 fg=green memo=zsh-pulse>"),
+        out.contains("REGIONS=<SENTINEL,0 4 fg=cyan memo=zsh-pulse>"),
         "another plugin's entry must survive our publish: {out}"
     );
 }
@@ -771,13 +771,13 @@ fn our_own_previous_entries_are_replaced_not_accumulated() {
     );
     assert!(ok, "zsh exited badly: {out}");
     assert!(
-        out.contains("REGIONS=<0 5 fg=green memo=zsh-pulse>"),
+        out.contains("REGIONS=<0 5 fg=cyan memo=zsh-pulse>"),
         "only our latest entry must be published: {out}"
     );
 }
 
 // ---------------------------------------------------------------------------
-// The command word: green when the shell knows it, red when it does not
+// The command word: cyan when the shell knows it, red when it does not
 // ---------------------------------------------------------------------------
 
 /// The path of the adapter's widget file.
@@ -900,12 +900,12 @@ fn regions_with_answer(buffer: &str, answer: &str) -> String {
 }
 
 #[test]
-fn a_command_the_shell_knows_is_green() {
+fn a_command_the_shell_knows_is_cyan() {
     require_zsh!();
     let out = regions_for("ls");
     assert!(
-        out.contains("REGIONS=<0 2 fg=green memo=zsh-pulse>"),
-        "a command the shell knows must be green: {out}"
+        out.contains("REGIONS=<0 2 fg=cyan memo=zsh-pulse>"),
+        "a command the shell knows must be cyan: {out}"
     );
 }
 
@@ -944,11 +944,11 @@ fn the_shells_own_tables_decide_what_the_shell_knows() {
     );
     assert!(ok, "zsh exited badly: {out}");
     let cases = [
-        ("sp-alias", "fg=green"),
+        ("sp-alias", "fg=cyan"),
         ("sp-galias", "bg=blue"),
-        ("sp-function", "fg=green"),
-        ("sp-suffix", "fg=green"),
-        ("if", "fg=yellow"),
+        ("sp-function", "fg=cyan"),
+        ("sp-suffix", "fg=cyan"),
+        ("if", "fg=blue"),
     ];
     for (word, attr) in cases {
         let expected = format!(
@@ -996,21 +996,22 @@ fn the_command_words_of_a_line_are_found_the_way_the_shell_finds_them() {
     for (line, expected) in cases {
         let out = regions_for(line);
         for word in *expected {
-            let green = "fg=green memo=zsh-pulse";
+            let cyan = "fg=cyan memo=zsh-pulse";
             assert!(
-                out.contains(green),
+                out.contains(cyan),
                 "`{word}` of `{line}` is a command the shell knows, so it \
-                 must be green: {out}"
+                 must be cyan: {out}"
             );
         }
-        // Every command word is answered: the number of green regions is
-        // the number of command words.
-        let greens = out.matches("fg=green").count();
+        // Every command word is answered: none of these lines has an
+        // option, so the number of cyan regions is the number of command
+        // words.
+        let cyans = out.matches("fg=cyan").count();
         assert_eq!(
-            greens,
+            cyans,
             expected.len(),
             "`{line}` has the command words {expected:?}, so it must have \
-             that many green regions: {out}"
+             that many cyan regions: {out}"
         );
     }
 }
@@ -1043,7 +1044,7 @@ fn a_command_the_shell_cannot_be_asked_about_is_left_alone() {
     );
     assert!(ok, "zsh exited badly: {out}");
     assert!(
-        !out.contains("fg=red") && !out.contains("fg=green"),
+        !out.contains("fg=red") && !out.contains("fg=cyan"),
         "a command word the shell could not be asked about must be left \
          alone: {out}"
     );
@@ -1060,14 +1061,14 @@ fn a_command_the_shell_does_not_know_is_red() {
 }
 
 #[test]
-fn a_builtin_is_green() {
+fn a_builtin_is_cyan() {
     require_zsh!();
     // A builtin is in the shell's own table, so it is known even when
     // there is no such file anywhere.
     let out = regions_for("echo");
     assert!(
-        out.contains("REGIONS=<0 4 fg=green memo=zsh-pulse>"),
-        "a builtin must be green: {out}"
+        out.contains("REGIONS=<0 4 fg=cyan memo=zsh-pulse>"),
+        "a builtin must be cyan: {out}"
     );
 }
 
@@ -1078,7 +1079,7 @@ fn a_leading_assignment_does_not_hide_the_command() {
     // is not an assignment.
     let out = regions_for("FOO=bar ls");
     assert!(
-        out.contains("REGIONS=<0 7 fg=yellow memo=zsh-pulse,8 10 fg=green memo=zsh-pulse>"),
+        out.contains("REGIONS=<0 7 fg=blue memo=zsh-pulse,8 10 fg=cyan memo=zsh-pulse>"),
         "the command word is the first word that is not an assignment: {out}"
     );
 }
@@ -1089,7 +1090,7 @@ fn a_leading_assignment_does_not_hide_an_unknown_command() {
     let out = regions_for("FOO=bar definitelynotacommand");
     assert!(
         out.contains(
-            "REGIONS=<0 7 fg=yellow memo=zsh-pulse,\
+            "REGIONS=<0 7 fg=blue memo=zsh-pulse,\
              8 29 fg=red,bold memo=zsh-pulse>"
         ),
         "the command word is the first word that is not an assignment: {out}"
@@ -1109,9 +1110,9 @@ fn an_answer_about_another_word_is_not_applied() {
         "the wrong word must never be coloured red: {out}"
     );
     // An answer about another word is no answer at all: the command word
-    // is left alone rather than painted green.
+    // is left alone rather than painted cyan.
     assert!(
-        !out.contains("fg=green"),
+        !out.contains("fg=cyan"),
         "a command word without an answer must be left alone: {out}"
     );
 }
@@ -1135,7 +1136,7 @@ fn the_arguments_are_not_coloured_as_commands() {
     // must not be coloured like one.
     let out = regions_for("echo ls");
     assert!(
-        out.contains("REGIONS=<0 4 fg=green memo=zsh-pulse>"),
+        out.contains("REGIONS=<0 4 fg=cyan memo=zsh-pulse>"),
         "only the command word may be a command: {out}"
     );
 }
@@ -1148,11 +1149,11 @@ fn a_command_word_without_an_answer_is_left_alone() {
     // here, where the module is called on its own — the command word is
     // left exactly as the user typed it.
     //
-    // Painting it green would be a lie: green means "the shell knows this
+    // Painting it cyan would be a lie: cyan means "the shell knows this
     // command", and nobody said so.
     let out = regions_with_answer("ls", "");
     assert!(
-        !out.contains("fg=green") && !out.contains("fg=red"),
+        !out.contains("fg=cyan") && !out.contains("fg=red"),
         "a command word without an answer must not be coloured: {out}"
     );
 }
@@ -1167,12 +1168,12 @@ fn every_command_word_of_a_pipeline_is_coloured() {
     // The argument `x` is not a command and must not be coloured.
     let out = regions_for("ls | grep x");
     assert!(
-        out.contains("0 2 fg=green memo=zsh-pulse"),
-        "the first command of the pipeline must be green: {out}"
+        out.contains("0 2 fg=cyan memo=zsh-pulse"),
+        "the first command of the pipeline must be cyan: {out}"
     );
     assert!(
-        out.contains("5 9 fg=green memo=zsh-pulse"),
-        "the second command of the pipeline must be green too: {out}"
+        out.contains("5 9 fg=cyan memo=zsh-pulse"),
+        "the second command of the pipeline must be cyan too: {out}"
     );
     assert!(
         !out.contains("10 11"),
@@ -1187,12 +1188,12 @@ fn an_unknown_command_of_a_pipeline_is_red() {
     // is red, wherever it stands in the line.
     //
     // This is the case that used to be wrong: the second command word had
-    // no answer and fell back to the lexer's own style, which is green —
+    // no answer and fell back to the lexer's own style, which is cyan —
     // so an unknown command in a pipeline looked like one the shell knew.
     let out = regions_for("ls | definitelynotacommand");
     assert!(
-        out.contains("0 2 fg=green memo=zsh-pulse"),
-        "the first command of the pipeline must be green: {out}"
+        out.contains("0 2 fg=cyan memo=zsh-pulse"),
+        "the first command of the pipeline must be cyan: {out}"
     );
     assert!(
         out.contains("5 26 fg=red,bold memo=zsh-pulse"),
@@ -1207,7 +1208,7 @@ fn a_redirection_does_not_hide_the_command() {
     // command, and the command word is still the command word.
     let out = regions_for("echo > out.txt");
     assert!(
-        out.contains("0 4 fg=green memo=zsh-pulse"),
+        out.contains("0 4 fg=cyan memo=zsh-pulse"),
         "a redirection must not hide the command word: {out}"
     );
 }
@@ -1219,7 +1220,7 @@ fn a_file_descriptor_duplication_does_not_hide_the_command() {
     // number it duplicates must not be mistaken for the command word.
     let out = regions_for("echo 2>&1");
     assert!(
-        out.contains("REGIONS=<0 4 fg=green memo=zsh-pulse,5 8 fg=red memo=zsh-pulse>"),
+        out.contains("REGIONS=<0 4 fg=cyan memo=zsh-pulse,5 8 fg=red memo=zsh-pulse>"),
         "a file-descriptor duplication must not hide the command word, and \\
          the number it duplicates must not be coloured: {out}"
     );
@@ -1242,10 +1243,125 @@ fn the_old_answer_protocol_is_not_honoured() {
 #[test]
 fn an_option_is_cyan() {
     require_zsh!();
+    // The command word, the subcommand and the option are all cyan, so
+    // the offsets are what tell them apart: `git` is 0..3, `commit` is
+    // 4..10 and `--amend` is 11..18.
     let out = regions_for("git commit --amend");
     assert!(
-        out.contains("REGIONS=<0 3 fg=green memo=zsh-pulse,11 18 fg=cyan memo=zsh-pulse>"),
-        "an option must be cyan: {out}"
+        out.contains(
+            "REGIONS=<0 3 fg=cyan memo=zsh-pulse,\
+             4 10 fg=cyan memo=zsh-pulse,\
+             11 18 fg=cyan memo=zsh-pulse>"
+        ),
+        "the option at 11..18 must be cyan: {out}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Subcommands: the word after an allowlisted command family is a subcommand
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_subcommand_is_highlighted() {
+    require_zsh!();
+    // The adapter recognises `status` as a subcommand of `git` and answers
+    // `--subcommand=status`; the module styles that word even though the
+    // lexer sees it as an argument. It is cyan like the command, so the
+    // offsets are what tell the two words apart.
+    let out = regions_for("git status");
+    assert!(
+        out.contains("REGIONS=<0 3 fg=cyan memo=zsh-pulse,4 10 fg=cyan memo=zsh-pulse>"),
+        "the subcommand at 4..10 must be cyan: {out}"
+    );
+}
+
+#[test]
+fn a_nested_subcommand_is_highlighted() {
+    require_zsh!();
+    // `git remote add` has two subcommand words: `remote` is a selected
+    // group and `add` is a member of it. Both are answered and styled.
+    let out = regions_for("git remote add origin");
+    assert!(
+        out.contains(
+            "REGIONS=<0 3 fg=cyan memo=zsh-pulse,\
+             4 10 fg=cyan memo=zsh-pulse,\
+             11 14 fg=cyan memo=zsh-pulse>"
+        ),
+        "both levels of the nested subcommand must be cyan: {out}"
+    );
+}
+
+#[test]
+fn a_global_option_value_does_not_hide_the_subcommand() {
+    require_zsh!();
+    // `-C`, `--git-dir` and `-p` are global options. `-C` and `--git-dir`
+    // take their value in the next word, so the word after them is not
+    // the subcommand; `status` is. `--git-dir=.` and `-p` are
+    // self-contained, so `status` follows immediately.
+    let cases = [
+        ("git -C . status", "9 15 fg=cyan"),
+        ("git --git-dir . status", "16 22 fg=cyan"),
+        ("git --git-dir=. status", "16 22 fg=cyan"),
+        ("git -p status", "7 13 fg=cyan"),
+    ];
+    for (line, expected) in cases {
+        let out = regions_for(line);
+        assert!(
+            out.contains(expected),
+            "the subcommand of `{line}` must be cyan at {expected}: {out}"
+        );
+    }
+}
+
+#[test]
+fn a_toolchain_selection_does_not_hide_the_cargo_subcommand() {
+    require_zsh!();
+    // `+nightly` selects a toolchain; `build` is still the subcommand.
+    let out = regions_for("cargo +nightly build");
+    assert!(
+        out.contains("REGIONS=<0 5 fg=cyan memo=zsh-pulse,15 20 fg=cyan memo=zsh-pulse>"),
+        "the subcommand at 15..20 must be cyan: {out}"
+    );
+}
+
+#[test]
+fn an_operand_after_double_dash_is_not_a_subcommand() {
+    require_zsh!();
+    // `git -- status` does not run `git status`: `--` ends the options
+    // and everything after it is an operand. Nothing may be styled there.
+    let out = regions_for("git -- status");
+    assert!(
+        out.contains("REGIONS=<0 3 fg=cyan memo=zsh-pulse>"),
+        "only the command word may be highlighted: {out}"
+    );
+    assert!(
+        !out.contains("7 13"),
+        "an operand after -- must not be styled as a subcommand: {out}"
+    );
+}
+
+#[test]
+fn a_word_outside_the_subcommand_list_is_not_a_subcommand() {
+    require_zsh!();
+    // The table is bounded: a word it does not list stays an ordinary
+    // argument, even after a command family it knows.
+    let out = regions_for("git definitelynotasubcommand");
+    assert!(
+        out.contains("REGIONS=<0 3 fg=cyan memo=zsh-pulse>"),
+        "only the command word may be highlighted: {out}"
+    );
+}
+
+#[test]
+fn a_non_subcommand_operand_ends_the_subcommand_search() {
+    require_zsh!();
+    // Once a word is not a subcommand, nothing later in the simple
+    // command can be one: `status` here is an argument of `git foo`, not
+    // a subcommand of `git`.
+    let out = regions_for("git foo status");
+    assert!(
+        out.contains("REGIONS=<0 3 fg=cyan memo=zsh-pulse>"),
+        "only the command word may be highlighted: {out}"
     );
 }
 
@@ -1493,36 +1609,36 @@ fn existing_paths() -> (std::path::PathBuf, std::path::PathBuf) {
 }
 
 #[test]
-fn an_existing_file_is_magenta() {
+fn an_existing_file_is_underlined() {
     require_zsh!();
     let (file, _dir) = existing_paths();
     let path = file.display().to_string();
     let out = regions_for(&format!("cat {path}"));
     // The path starts after `cat ` and is as long as it is.
     let expected = format!(
-        "REGIONS=<0 3 fg=green memo=zsh-pulse,4 {} fg=magenta memo=zsh-pulse>",
+        "REGIONS=<0 3 fg=cyan memo=zsh-pulse,4 {} underline memo=zsh-pulse>",
         4 + path.len()
     );
     assert!(
         out.contains(&expected),
-        "an existing file must be magenta: {out}"
+        "an existing file must be underlined: {out}"
     );
 }
 
 #[test]
-fn an_existing_directory_is_magenta_and_underlined() {
+fn an_existing_directory_is_underlined() {
     require_zsh!();
     let (_file, dir) = existing_paths();
     let path = dir.display().to_string();
     let out = regions_for(&format!("cat {path}"));
     let expected = format!(
-        "REGIONS=<0 3 fg=green memo=zsh-pulse,\
-         4 {} fg=magenta,underline memo=zsh-pulse>",
+        "REGIONS=<0 3 fg=cyan memo=zsh-pulse,\
+         4 {} underline memo=zsh-pulse>",
         4 + path.len()
     );
     assert!(
         out.contains(&expected),
-        "an existing directory must be magenta and underlined: {out}"
+        "an existing directory must be underlined: {out}"
     );
 }
 
@@ -1533,7 +1649,7 @@ fn a_word_that_does_not_exist_is_not_a_path() {
     // nothing there, so it keeps its ordinary style.
     let out = regions_for("cat ./no-such-file-here");
     assert!(
-        out.contains("REGIONS=<0 3 fg=green memo=zsh-pulse>"),
+        out.contains("REGIONS=<0 3 fg=cyan memo=zsh-pulse>"),
         "a word that does not exist must not be highlighted: {out}"
     );
 }
@@ -1541,7 +1657,7 @@ fn a_word_that_does_not_exist_is_not_a_path() {
 #[test]
 fn a_tilde_is_the_home_directory() {
     require_zsh!();
-    // `~` expands to the home directory, which is a directory: magenta and
+    // `~` expands to the home directory, which is a directory and so is
     // underlined. The test needs a home directory to expand to.
     if std::env::var_os("HOME").is_none() {
         eprintln!(
@@ -1553,8 +1669,8 @@ fn a_tilde_is_the_home_directory() {
     let out = regions_for("cat ~");
     assert!(
         out.contains(
-            "REGIONS=<0 3 fg=green memo=zsh-pulse,\
-             4 5 fg=magenta,underline memo=zsh-pulse>"
+            "REGIONS=<0 3 fg=cyan memo=zsh-pulse,\
+             4 5 underline memo=zsh-pulse>"
         ),
         "a tilde is the home directory, which is a directory: {out}"
     );
@@ -1568,12 +1684,12 @@ fn the_command_inside_a_substitution_is_coloured() {
     // the whole `$(cmd)`.
     let out = regions_for("echo $(ls)");
     assert!(
-        out.contains("0 4 fg=green memo=zsh-pulse"),
-        "the outer command must be green: {out}"
+        out.contains("0 4 fg=cyan memo=zsh-pulse"),
+        "the outer command must be cyan: {out}"
     );
     assert!(
-        out.contains("7 9 fg=green memo=zsh-pulse"),
-        "the command inside the substitution must be green too: {out}"
+        out.contains("7 9 fg=cyan memo=zsh-pulse"),
+        "the command inside the substitution must be cyan too: {out}"
     );
 }
 
@@ -1585,13 +1701,13 @@ fn an_argument_that_names_nothing_is_not_highlighted() {
     // user typed it.
     let out = regions_for("echo hi");
     assert!(
-        out.contains("REGIONS=<0 4 fg=green memo=zsh-pulse>"),
+        out.contains("REGIONS=<0 4 fg=cyan memo=zsh-pulse>"),
         "an argument that names nothing must not be highlighted: {out}"
     );
 }
 
 #[test]
-fn a_bare_file_name_is_magenta() {
+fn a_bare_file_name_is_underlined() {
     require_zsh!();
     // A file name needs no slash: `Cargo.toml` names a file just as much
     // as `./Cargo.toml` does. The reference implementation looks every
@@ -1602,13 +1718,13 @@ fn a_bare_file_name_is_magenta() {
     std::fs::write(dir.join("a-file"), b"a file\n").expect("write the test file");
     let out = regions_for_in(&dir, "cat a-file");
     assert!(
-        out.contains("4 10 fg=magenta memo=zsh-pulse"),
-        "a bare file name must be magenta: {out}"
+        out.contains("4 10 underline memo=zsh-pulse"),
+        "a bare file name must be underlined: {out}"
     );
 }
 
 #[test]
-fn a_bare_directory_name_is_magenta_and_underlined() {
+fn a_bare_directory_name_is_underlined() {
     require_zsh!();
     let dir = std::env::temp_dir().join(format!("zsh-pulse-bare-dir-test-{}", std::process::id()));
     // The directory is removed first: a run that left it behind would
@@ -1621,14 +1737,14 @@ fn a_bare_directory_name_is_magenta_and_underlined() {
     // of this test is that the *word* is looked up, and a word that names
     // nothing is not coloured.
     assert!(
-        !out.contains("3 8 fg=magenta"),
+        !out.contains("3 8 underline"),
         "a name that names nothing must not be coloured: {out}"
     );
     std::fs::create_dir_all(dir.join("a-dir")).expect("create the test directory");
     let out = regions_for_in(&dir, "ls a-dir");
     assert!(
-        out.contains("3 8 fg=magenta,underline memo=zsh-pulse"),
-        "a bare directory name must be magenta and underlined: {out}"
+        out.contains("3 8 underline memo=zsh-pulse"),
+        "a bare directory name must be underlined: {out}"
     );
 }
 
@@ -1643,7 +1759,7 @@ fn an_append_assignment_does_not_hide_the_command() {
     // would never be coloured.
     let out = regions_for("FOO+=bar ls");
     assert!(
-        out.contains("9 11 fg=green memo=zsh-pulse"),
+        out.contains("9 11 fg=cyan memo=zsh-pulse"),
         "an append assignment must not hide the command word: {out}"
     );
 }
@@ -1756,12 +1872,12 @@ fn paired_brackets_highlighted_when_cursor_touches() {
     require_zsh!();
     let out = regions_for_with_cursor("echo (foo)", 10);
     assert!(
-        out.contains("5 6 bg=blue memo=zsh-pulse"),
-        "open bracket must be paired blue: {out}"
+        out.contains("5 6 fg=yellow,bold memo=zsh-pulse"),
+        "open bracket must be paired yellow and bold: {out}"
     );
     assert!(
-        out.contains("9 10 bg=blue memo=zsh-pulse"),
-        "close bracket must be paired blue: {out}"
+        out.contains("9 10 fg=yellow,bold memo=zsh-pulse"),
+        "close bracket must be paired yellow and bold: {out}"
     );
 }
 

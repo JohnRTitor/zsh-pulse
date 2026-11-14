@@ -30,12 +30,14 @@ This document provides the authoritative, complete catalog of all features imple
 - **Implementation**: [`crates/highlight/src/lib.rs`](crates/highlight/src/lib.rs), [`crates/zsh-module/src/highlight.rs`](crates/zsh-module/src/highlight.rs), [`zsh/widgets.zsh`](zsh/widgets.zsh)
 - **Token Classification (representative, hard-coded defaults):**
   - `Command`: known/resolved command words styled as callable (`fg=cyan`); unknown/missing commands styled distinctly (`fg=red,bold`).
-  - `Subcommand` (bounded): allowlisted command families/groups (e.g. `git`, `cargo`, `docker`, `kubectl`, `npm`, selected nested groups) can receive subcommand styling via adapter answers and semantic overrides.
+  - `Subcommand` (bounded): the first non-option word after an allowlisted family (`git`, `cargo`, `docker`, `kubectl`, `npm`) and selected second-level groups (`git remote add`, `docker compose up`, `kubectl rollout status`, …) are styled `fg=cyan` from adapter `--subcommand=` answers. Nesting is capped at two levels; see [known limitations](docs/known-limitations.md).
   - `Option`: command-line switches/options (e.g. `-a`, `--long-flag`) rendered in `fg=cyan` when lexed as options.
-  - `Strings/quotes`: single and double quoted strings styled as strings; escapes highlighted distinctly.
-  - `Param` / expansions: parameter/expansion-related tokens styled with dedicated defaults (e.g. parameter expansion styling).
-  - `Redirection` / operators / separators: shell operators, redirections, and command separators highlighted with syntax-aware styling.
-  - `Assignment`: environment variable assignments in command position highlighted with assignment styling.
+  - `ReservedWord` / `GlobalAlias`: shell keywords (`if`, `then`, …) in `fg=blue`; global aliases in `bg=blue`.
+  - `Strings/quotes`: single-quoted, double-quoted and here-document strings in `fg=green`; escapes in `fg=yellow`.
+  - `Param` / expansions: parameter expansions styled `fg=yellow`.
+  - `Comment` / `Glob`: comments in `fg=white`; globs in `fg=blue,bold`.
+  - `Redirection` / operators / separators: shell operators, redirections, and command separators highlighted `fg=red`.
+  - `Assignment`: environment variable assignments in command position highlighted `fg=blue`.
   - `Process substitutions`: `<(...)/>(...)` (including fd-prefixed whole-word forms) are tokenized as substitution command contexts so inner commands/options can be highlighted in supported cases.
 - **Bounded heuristics:** wrapper/precommand handling, option-argument consumption, and subcommand detection are lexical/heuristic (not command-schema/option-arity aware). See [`docs/known-limitations.md`](docs/known-limitations.md).
 
@@ -48,8 +50,8 @@ This document provides the authoritative, complete catalog of all features imple
 ### 1.4 Live Filesystem Path Validation
 - **Implementation**: [`crates/zsh-module/src/highlight.rs`](crates/zsh-module/src/highlight.rs)
 - **Behavior**: Every literal word on the command line is evaluated as a potential filesystem target (relative to `$PWD` or `$HOME`).
-  - Valid existing directories: Highlighted and underlined (`fg=magenta,underline`).
-  - Valid existing regular files / executables: Highlighted in `fg=magenta`.
+  - Valid existing directories: Highlighted and underlined (`underline`).
+  - Valid existing regular files / executables: Highlighted and underlined (`underline`).
 - **Bounded Probing**: Path lookups are bounded to a maximum of 16 words per line (`MAX_PATH_LOOKUPS`) to guarantee consistent responsiveness.
 - **LRU Caching**: Results from `stat` calls are cached in a 64-entry cache with a 2-second expiration TTL.
 
@@ -57,7 +59,7 @@ This document provides the authoritative, complete catalog of all features imple
 - **Implementation**: [`crates/highlight/src/bracket.rs`](crates/highlight/src/bracket.rs)
 - **Features**:
   - **Matching Pairs**: Identifies paired delimiters: `()`, `{}`, `[]`, `""`, `''`.
-  - **Cursor Hover Highlighting**: Touching or resting immediately adjacent to either side of an open/close bracket or quote highlights both elements of the pair in `bg=blue` (or bold).
+  - **Cursor Hover Highlighting**: Touching or resting immediately adjacent to either side of an open/close bracket or quote highlights both elements of the pair in `fg=yellow,bold`.
   - **Syntax Error Highlighting**: Unclosed brackets, mismatched brackets (e.g. `(]`), and unclosed string quotes are instantly styled with error highlighting (`fg=red,bold`).
   - **Context Immunity**: Brackets inside comments (`# (foo)`) or double-quoted strings (`"hello (world)"`) are excluded from syntax errors and bracket pairing stacks. Nested command substitutions (`$(...)`, `${...}`) maintain independent nested stacks.
 

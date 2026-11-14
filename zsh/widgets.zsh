@@ -30,7 +30,7 @@ fi
 # command word of the line. The shell — not the module — knows whether a
 # word is an alias, a function, a builtin, a command on `$PATH` or a
 # reserved word: those are the shell's own tables, and the module cannot
-# reach them. The module colours the command word green when the shell
+# reach them. The module colours the command word cyan when the shell
 # knows it and red when it does not, the way `fast-syntax-highlighting`
 # does.
 
@@ -59,7 +59,7 @@ fi
 # An answer is only trusted for a short while (see
 # `ZSH_PULSE_COMMAND_CACHE_TTL`). A word the shell knew may stop being
 # known — the user may `unalias` it or remove the function — and an answer
-# that was trusted for ever would keep the word green after the shell had
+# that was trusted for ever would keep the word cyan after the shell had
 # forgotten it. The same is true in the other direction: a command may be
 # installed while the session runs, and a remembered "not known" would be
 # wrong until the answer expired.
@@ -92,7 +92,13 @@ typeset -gi ZSH_PULSE_MAX_SUBSTITUTION_DEPTH=4
 # How deep the search into command substitutions currently is.
 typeset -gi ZSH_PULSE_SUBSTITUTION_DEPTH=0
 
-# The longest line the adapter will look at.
+# How deep the search into a CLI subcommand goes.
+#
+# The first level is the subcommand itself (`git status`); the second is a
+# member of a selected group (`git remote add`). Two levels cover the
+# common CLI grammars without turning the adapter into a command schema.
+typeset -gi ZSH_PULSE_MAX_SUBCOMMAND_DEPTH=2
+
 #
 # The module does not highlight a line longer than 4 KiB
 # (`crates/zsh-module/src/lib.rs`, `MAX_LINE`), so the adapter must not pay
@@ -217,6 +223,12 @@ zsh-pulse-highlight-words() {
   integer in_precommand=0
   # Whether `--` has ended the precommand's options.
   integer precommand_end_of_options=0
+  # The CLI family whose subcommand is still to come, or empty when no
+  # subcommand is expected.
+  local subcommand_family=''
+  # How many subcommand levels have been found: 0 is the first level, 1 is
+  # a member of a selected group.
+  integer subcommand_depth=0
   while (( i <= nwords )); do
     local word=${words[i]}
     if [[ -z $word ]]; then
@@ -257,6 +269,8 @@ zsh-pulse-highlight-words() {
       want_command=1
       in_precommand=0
       precommand_end_of_options=0
+      subcommand_family=''
+      subcommand_depth=0
       continue
     fi
     if (( want_command )); then
@@ -269,6 +283,8 @@ zsh-pulse-highlight-words() {
       # This is a command word.
       zsh-pulse-highlight-answer "$word"
       want_command=0
+      subcommand_family=''
+      subcommand_depth=0
       if zsh-pulse-highlight-is-precommand "$word"; then
         # `sudo true` runs `true`. Every word after the precommand is a
         # candidate for being the command it runs, so every non-option
@@ -279,6 +295,14 @@ zsh-pulse-highlight-words() {
         # the one in `precommand.rs`.
         in_precommand=1
         precommand_end_of_options=0
+      else
+        # A command family whose first argument is a subcommand. The
+        # group table is not consulted here: a group is never a command
+        # (`git remote` without `git` is not a command).
+        local command_name=${(Q)word}
+        if [[ -n ${ZSH_PULSE_SUBCOMMAND_FAMILIES[$command_name]:-} ]]; then
+          subcommand_family=$command_name
+        fi
       fi
       (( i++ ))
       continue
@@ -308,6 +332,49 @@ zsh-pulse-highlight-words() {
       (( i++ ))
       continue
     fi
+    if [[ -n $subcommand_family ]]; then
+      if [[ $word == '--' ]]; then
+        # The end of the options. What follows is an operand, not the
+        # subcommand: `git -- status` does not run `git status`.
+        subcommand_family=''
+        (( i++ ))
+        continue
+      fi
+      if [[ $word == +* && $subcommand_family == cargo ]]; then
+        # `cargo +nightly build` selects a toolchain before the
+        # subcommand; it is not the subcommand.
+        (( i++ ))
+        continue
+      fi
+      if [[ $word == -* && $word != - ]]; then
+        # An option. When it takes its value in the next word, that value
+        # is not the subcommand either (`git -C /tmp status`).
+        if zsh-pulse-highlight-option-takes-value "$subcommand_family" "$word"; then
+          (( i++ ))
+        fi
+        (( i++ ))
+        continue
+      fi
+      if zsh-pulse-highlight-is-subcommand "$subcommand_family" "$word"; then
+        ZSH_PULSE_COMMAND_ARGS+=( "--subcommand=$word" )
+        if (( subcommand_depth < ZSH_PULSE_MAX_SUBCOMMAND_DEPTH )) \
+           && zsh-pulse-highlight-is-subcommand-group "$subcommand_family" "$word"; then
+          # `git remote add`: the group is a subcommand, and its members
+          # are subcommands too.
+          subcommand_family+=" ${(Q)word}"
+          (( subcommand_depth++ ))
+          (( i++ ))
+          continue
+        fi
+      fi
+      # Not an allowed subcommand, or a leaf that has no allowed
+      # subcommands of its own. Nothing later in this simple command can
+      # be a subcommand.
+      subcommand_family=''
+      (( i++ ))
+      continue
+    fi
+
     # An ordinary argument.
     (( i++ ))
   done
@@ -330,6 +397,209 @@ zsh-pulse-highlight-is-precommand() {
       return 0
       ;;
   esac
+  return 1
+}
+
+# The command families whose first argument is a subcommand.
+#
+# This is knowledge about command-line tools, not about the shell: no
+# shell table can say that `git status` has a subcommand. The list is
+# deliberately bounded — five families most people type every day, not a
+# catalogue of every CLI — and a word that is not in it is left alone.
+#
+# The adapter answers a word only when it is in the family's list. The
+# module then applies the answer to that word and nothing else, so a
+# command whose grammar this table does not know simply keeps the
+# unhighlighted argument it had before.
+typeset -gA ZSH_PULSE_SUBCOMMAND_FAMILIES
+ZSH_PULSE_SUBCOMMAND_FAMILIES=(
+  git 'add am apply archive bisect blame branch bundle checkout cherry-pick
+       clean clone commit config describe diff difftool fetch format-patch
+       fsck gc grep help init log maintenance merge mergetool mv notes pull
+       push range-diff rebase reflog remote reset restore revert rm shortlog
+       show sparse-checkout stash status submodule switch tag worktree'
+  cargo 'add bench build check clean clippy doc fetch fix fmt generate-lockfile
+         help info init install locate-project login logout metadata new owner
+         package pkgid publish read-manifest remove report rm rustc rustdoc
+         search test tree uninstall update vendor verify-project version yank'
+  docker 'attach build builder commit compose container context cp create diff
+          events exec export history image images import info inspect kill load
+          login logout logs manifest network node pause plugin port ps pull push
+          rename restart rm rmi run save search secret service stack start stats
+          stop swarm system tag top trust unpause update version volume wait'
+  kubectl 'annotate api-resources api-versions apply attach auth autoscale
+           certificate cluster-info completion config cordon cp create delete
+           describe diff drain edit exec explain expose get kustomize label logs
+           options patch plugin port-forward proxy replace rollout run scale set
+           taint top uncordon version wait'
+  npm 'access adduser audit bugs cache ci clean-install completion config dedupe
+       deprecate diff dist-tag docs doctor edit exec explain explore find-dupes
+       fund help init install install-ci-test install-test link login logout ls
+       org outdated owner pack ping pkg prefix profile prune publish query
+       rebuild repo restart root run-script search set-script shrinkwrap star
+       stars start stop team test token uninstall unlink unpublish update
+       version view whoami'
+)
+
+# Selected groups whose first-level subcommand has subcommands of its own.
+#
+# `git remote add` is three words, and `remote` and `add` are both
+# subcommands. The table is keyed by the family and the first-level word;
+# only the pairs listed here are searched for a second level.
+typeset -gA ZSH_PULSE_SUBCOMMAND_GROUPS
+ZSH_PULSE_SUBCOMMAND_GROUPS=(
+  'git remote' 'add get-url prune remove rename set-head set-url show update'
+  'git stash' 'apply branch clear create drop list pop push save show store'
+  'git config' 'edit get list remove-section rename-section set unset'
+  'git submodule' 'add deinit foreach init set-branch set-url status summary sync update'
+  'git worktree' 'add list lock move prune remove repair unlock'
+  'git bisect' 'bad good log next replay reset run skip start terms visualize'
+  'git notes' 'add append copy edit list merge prune remove show'
+  'git sparse-checkout' 'add check-rules disable init list reapply set'
+  'docker builder' 'build prune'
+  'docker buildx' 'bake build create du inspect ls prune rm stop use version'
+  'docker compose' 'build config cp create down events exec images kill logs ls pause port ps pull push restart rm run start stop top unpause up version wait'
+  'docker container' 'attach commit cp create diff exec export inspect kill logs ls pause port prune rename restart rm run start stats stop top unpause update wait'
+  'docker context' 'create export import inspect ls rm update use'
+  'docker image' 'build history import inspect load ls prune pull push rm save tag'
+  'docker manifest' 'annotate create inspect push rm'
+  'docker network' 'connect create disconnect inspect ls prune rm'
+  'docker plugin' 'create disable enable inspect install ls push rm set upgrade'
+  'docker secret' 'create inspect ls rm'
+  'docker service' 'create inspect logs ls ps rm rollback scale update'
+  'docker stack' 'deploy ls ps rm services'
+  'docker swarm' 'ca init join leave unlock unlock-key update'
+  'docker system' 'df events info prune'
+  'docker volume' 'create inspect ls prune rm'
+  'kubectl auth' 'can-i reconcile'
+  'kubectl certificate' 'approve deny'
+  'kubectl config' 'current-context delete-cluster delete-context delete-user get-clusters get-contexts get-users rename-context set set-cluster set-context set-credentials unset use-context view'
+  'kubectl rollout' 'history pause restart resume status undo'
+)
+
+# The options that take a value as the next word, per family.
+#
+# The adapter skips an option before looking for the subcommand, because
+# `git -C /tmp status` has its subcommand after the option's value. A
+# short option is listed one character at a time; a value attached to the
+# option (`-C/tmp`) and a long option with `=` (`--git-dir=/tmp`) are
+# self-contained and need no entry here.
+#
+# This table is not an option schema. It covers the global options that
+# commonly stand between the command and its subcommand; an option it does
+# not know is treated as one without a value, which may hide a subcommand
+# behind an option's value. A missing highlight is the safe direction.
+typeset -gA ZSH_PULSE_SUBCOMMAND_SHORT_OPTIONS
+ZSH_PULSE_SUBCOMMAND_SHORT_OPTIONS=(
+  git 'Cc'
+  cargo 'ZFjp'
+  docker 'Hl'
+  kubectl 'nsv'
+  npm 'w'
+)
+
+typeset -gA ZSH_PULSE_SUBCOMMAND_LONG_OPTIONS
+ZSH_PULSE_SUBCOMMAND_LONG_OPTIONS=(
+  git '--git-dir --work-tree --namespace --super-prefix --config-env --attr-source'
+  cargo '--manifest-path --config --target-dir --color --message-format
+         --jobs --features --profile --target --bin --example --test --bench
+         --package --edition --rust-version'
+  docker '--host --config --log-level --context --tlscacert --tlscert --tlskey'
+  kubectl '--kubeconfig --context --cluster --user --namespace --server --token
+           --certificate-authority --client-certificate --client-key
+           --request-timeout --as --as-group --as-uid --cache-dir
+           --tls-server-name --username --password --v --vmodule'
+  npm '--prefix --registry --cache --userconfig --loglevel --workspace --omit
+       --include --save-prefix --tag --otp --scope --location --before --since'
+)
+
+# The same tables, as sets of `family/name` keys.
+#
+# The lists above are the readable form; a set turns "is this word in the
+# list?" into one associative lookup. The set is built once, when the
+# adapter is sourced.
+typeset -gA ZSH_PULSE_SUBCOMMANDS
+typeset -gA ZSH_PULSE_SUBCOMMAND_LONG_OPTION_NAMES
+
+zsh-pulse-highlight-init-subcommands() {
+  emulate -L zsh
+  setopt extendedglob noglob
+
+  local family name key
+  for family in ${(k)ZSH_PULSE_SUBCOMMAND_FAMILIES}; do
+    for name in ${=ZSH_PULSE_SUBCOMMAND_FAMILIES[$family]}; do
+      key="$family/$name"
+      ZSH_PULSE_SUBCOMMANDS[$key]=1
+    done
+  done
+  for family in ${(k)ZSH_PULSE_SUBCOMMAND_GROUPS}; do
+    for name in ${=ZSH_PULSE_SUBCOMMAND_GROUPS[$family]}; do
+      key="$family/$name"
+      ZSH_PULSE_SUBCOMMANDS[$key]=1
+    done
+  done
+  for family in ${(k)ZSH_PULSE_SUBCOMMAND_LONG_OPTIONS}; do
+    for name in ${=ZSH_PULSE_SUBCOMMAND_LONG_OPTIONS[$family]}; do
+      key="$family/$name"
+      ZSH_PULSE_SUBCOMMAND_LONG_OPTION_NAMES[$key]=1
+    done
+  done
+}
+zsh-pulse-highlight-init-subcommands
+
+# Whether the word is a subcommand of the family.
+#
+# The word is compared without its quoting, because `git "status"` runs
+# `git status`; the answer keeps the quoting, so that the module can match
+# it against the word in the line.
+zsh-pulse-highlight-is-subcommand() {
+  setopt localoptions extendedglob
+  local family=$1 name=${(Q)2}
+  local key="$family/$name"
+  [[ -n ${ZSH_PULSE_SUBCOMMANDS[$key]:-} ]]
+}
+
+# Whether the word is a group whose members are subcommands too.
+zsh-pulse-highlight-is-subcommand-group() {
+  setopt localoptions extendedglob
+  local family=$1 name=${(Q)2}
+  local key="$family $name"
+  [[ -n ${ZSH_PULSE_SUBCOMMAND_GROUPS[$key]:-} ]]
+}
+
+# Whether the option takes its value as the next word.
+#
+# A bundled short option ends the bundle where its value begins:
+# `-C/tmp` carries the value, `-nC /tmp` does not.
+zsh-pulse-highlight-option-takes-value() {
+  setopt localoptions extendedglob
+  local family=$1 word=$2 key
+  # A group's options are the family's global options (`git remote -v`).
+  family=${family%% *}
+
+  if [[ $word == --* ]]; then
+    # `--name=value` carries its own value.
+    [[ $word == *=* ]] && return 1
+    key="$family/$word"
+    [[ -n ${ZSH_PULSE_SUBCOMMAND_LONG_OPTION_NAMES[$key]:-} ]]
+    return
+  fi
+
+  local short=${ZSH_PULSE_SUBCOMMAND_SHORT_OPTIONS[$family]:-}
+  local characters=${word#-}
+  local index character
+  for (( index = 1; index <= ${#characters}; index++ )); do
+    character=${characters[index]}
+    # The table holds letters only; anything else cannot be a value-taking
+    # option, and treating it as a pattern would match too much.
+    [[ $character == [A-Za-z] ]] || continue
+    if [[ $short == *$character* ]]; then
+      # A value attached to the last character is part of this word; a
+      # value-taking option with nothing after it consumes the next word.
+      (( index == ${#characters} ))
+      return
+    fi
+  done
   return 1
 }
 
