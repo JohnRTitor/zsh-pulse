@@ -43,6 +43,8 @@ pub mod region;
 #[cfg(feature = "highlight")]
 pub mod highlight;
 #[cfg(feature = "highlight")]
+mod precommand;
+#[cfg(feature = "highlight")]
 pub use highlight::{BUILTIN_FULL, highlight_builtin, published_spans};
 
 #[cfg(any(

@@ -1264,6 +1264,213 @@ fn words_after_double_dash_are_not_options_on_zsh() {
 }
 
 // ---------------------------------------------------------------------------
+// Precommands: the command a precommand runs is a command
+// ---------------------------------------------------------------------------
+
+#[test]
+fn the_command_after_a_precommand_is_highlighted() {
+    require_zsh!();
+    // `sudo true` runs `true`. The lexer marks only `sudo` as a command;
+    // the adapter answers for `true` and the module colours it too.
+    let out = regions_for("sudo true");
+    assert!(
+        out.contains(
+            "REGIONS=<0 4 fg=cyan memo=zsh-pulse,\
+             5 9 fg=cyan memo=zsh-pulse>"
+        ),
+        "both sudo and the command it runs must be highlighted: {out}"
+    );
+}
+
+#[test]
+fn a_precommand_option_value_does_not_hide_the_command() {
+    require_zsh!();
+    // `root` is the value of `-u`, not the command; `true` is the command.
+    // The adapter answers both `root` and `true`; the module must style
+    // only `true`.
+    let out = regions_for("sudo -n -u root true");
+    assert!(
+        out.contains(
+            "REGIONS=<0 4 fg=cyan memo=zsh-pulse,\
+             5 7 fg=cyan memo=zsh-pulse,\
+             8 10 fg=cyan memo=zsh-pulse,\
+             16 20 fg=cyan memo=zsh-pulse>"
+        ),
+        "the option's value must not be highlighted as the command: {out}"
+    );
+    assert!(
+        !out.contains("11 15"),
+        "the option's value must not get a region: {out}"
+    );
+}
+
+#[test]
+fn an_unknown_command_after_a_precommand_is_red() {
+    require_zsh!();
+    let out = regions_for("sudo definitelynotacommand");
+    assert!(
+        out.contains(
+            "REGIONS=<0 4 fg=cyan memo=zsh-pulse,\
+             5 26 fg=red,bold memo=zsh-pulse>"
+        ),
+        "the command sudo runs must be judged like any other command: {out}"
+    );
+}
+
+#[test]
+fn a_precommand_chain_highlights_the_command_that_runs() {
+    require_zsh!();
+    // `sudo env true` runs `true`; `env` is both the command sudo runs and
+    // the precommand of `true`.
+    let out = regions_for("sudo env FOO=bar true");
+    assert!(
+        out.contains(
+            "REGIONS=<0 4 fg=cyan memo=zsh-pulse,\
+             5 8 fg=cyan memo=zsh-pulse,\
+             9 16 fg=blue memo=zsh-pulse,\
+             17 21 fg=cyan memo=zsh-pulse>"
+        ),
+        "every command of the chain must be highlighted: {out}"
+    );
+}
+
+#[test]
+fn command_v_highlights_every_command_name_it_asks_about() {
+    require_zsh!();
+    let out = regions_for("command -v echo file");
+    assert!(
+        out.contains(
+            "REGIONS=<0 7 fg=cyan memo=zsh-pulse,\
+             8 10 fg=cyan memo=zsh-pulse,\
+             11 15 fg=cyan memo=zsh-pulse,\
+             16 20 fg=cyan memo=zsh-pulse>"
+        ),
+        "every name after command -v is a command: {out}"
+    );
+}
+
+#[test]
+fn sudo_edit_operands_are_files_not_commands() {
+    require_zsh!();
+    // There is no command in `sudo -e file1 file2` or `sudoedit file1
+    // file2`; only the precommand and its options may be highlighted.
+    let cases = [
+        (
+            "sudo -e file1 file2",
+            "REGIONS=<0 4 fg=cyan memo=zsh-pulse,\
+             5 7 fg=cyan memo=zsh-pulse>",
+        ),
+        (
+            "sudoedit file1 file2",
+            "REGIONS=<0 8 fg=cyan memo=zsh-pulse>",
+        ),
+    ];
+    for (line, expected) in cases {
+        let out = regions_for(line);
+        assert!(
+            out.contains(expected),
+            "the files of sudo edit mode must not be commands: {line}: {out}"
+        );
+        assert!(
+            !out.contains("fg=red"),
+            "a file must not be called an unknown command: {line}: {out}"
+        );
+    }
+}
+
+#[test]
+fn a_redirection_does_not_hide_the_command_of_a_precommand() {
+    require_zsh!();
+    // `out` is the file `ls` writes to, not the command.
+    let out = regions_for("sudo >out ls");
+    assert!(
+        out.contains(
+            "REGIONS=<0 4 fg=cyan memo=zsh-pulse,\
+             5 6 fg=red memo=zsh-pulse,\
+             10 12 fg=cyan memo=zsh-pulse>"
+        ),
+        "the redirect target must not hide the command: {out}"
+    );
+    assert!(
+        !out.contains("6 9"),
+        "the redirect target must not get a region: {out}"
+    );
+}
+
+#[test]
+fn a_repeated_word_is_only_a_command_in_command_position() {
+    require_zsh!();
+    // The first `true` is the value of `-u`; the second one is the
+    // command. Both are answered by the shell, but only the second may be
+    // styled as a command.
+    let out = regions_for("sudo -u true true");
+    assert!(
+        out.contains(
+            "REGIONS=<0 4 fg=cyan memo=zsh-pulse,\
+             5 7 fg=cyan memo=zsh-pulse,\
+             13 17 fg=cyan memo=zsh-pulse>"
+        ),
+        "only the word in command position may be highlighted: {out}"
+    );
+    assert!(
+        !out.contains("8 12"),
+        "the option's value must not be highlighted: {out}"
+    );
+}
+
+#[test]
+fn a_precommand_inside_a_substitution_highlights_its_command() {
+    require_zsh!();
+    // The substitution is one shell word; the command inside it is a
+    // command of its own, and so is the command `sudo` runs.
+    let out = regions_for("echo $(sudo true)");
+    assert!(
+        out.contains(
+            "REGIONS=<0 4 fg=cyan memo=zsh-pulse,\
+             7 11 fg=cyan memo=zsh-pulse,\
+             12 16 fg=cyan memo=zsh-pulse,\
+             16 17 fg=red memo=zsh-pulse>"
+        ),
+        "the nested precommand's command must be highlighted: {out}"
+    );
+}
+
+#[test]
+fn time_and_nocorrect_stay_keywords_before_the_command() {
+    require_zsh!();
+    let out = regions_for("time definitelynotacommand");
+    assert!(
+        out.contains(
+            "REGIONS=<0 4 fg=blue memo=zsh-pulse,\
+             5 26 fg=red,bold memo=zsh-pulse>"
+        ),
+        "time is a keyword and the command it times is still a command: {out}"
+    );
+
+    let out = regions_for("nocorrect ls");
+    assert!(
+        out.contains(
+            "REGIONS=<0 9 fg=blue memo=zsh-pulse,\
+             10 12 fg=cyan memo=zsh-pulse>"
+        ),
+        "nocorrect is a keyword and ls is the command it protects: {out}"
+    );
+}
+
+#[test]
+fn the_dash_precommand_highlights_the_command_it_runs() {
+    require_zsh!();
+    let out = regions_for("- ls");
+    assert!(
+        out.contains(
+            "REGIONS=<0 1 fg=blue memo=zsh-pulse,\
+             2 4 fg=cyan memo=zsh-pulse>"
+        ),
+        "- is a keyword precommand and ls is the command it runs: {out}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Paths
 // ---------------------------------------------------------------------------
 

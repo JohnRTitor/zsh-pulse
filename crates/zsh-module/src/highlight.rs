@@ -12,7 +12,11 @@ use {
     zsh_abi::{Api, CappedRead, guard, raw::CStr},
 };
 
-use crate::{debug, debug_enabled, engine, has_argument, region, report_degraded, zsh};
+use crate::{
+    debug, debug_enabled, engine, has_argument,
+    precommand::{self, Role},
+    region, report_degraded, zsh,
+};
 
 static ECHO: OnceLock<bool> = OnceLock::new();
 
@@ -693,12 +697,26 @@ fn build_spans_with<F>(
 
     let mut i = 0;
     let mut after_double_dash = false;
+    // The word after a redirection names a file. It must not be mistaken
+    // for the command of a precommand: `sudo >out ls` runs `ls`, and
+    // `out` is the file `ls`'s output goes to.
+    let mut after_redirect = false;
+    // The precommand whose command word is still to come. `None` outside a
+    // precommand segment, and after its command has been found.
+    let mut precommand: Option<precommand::State> = None;
+
     while i < tokens.len() {
         let token = tokens[i];
         if !token.kind.is_word_part() {
-            // A command separator or pipe starts a new command context.
-            if token.kind == TokenKind::Operator {
-                after_double_dash = false;
+            match token.kind {
+                // A command separator or pipe starts a new command context.
+                TokenKind::Operator => {
+                    after_double_dash = false;
+                    after_redirect = false;
+                    precommand = None;
+                }
+                TokenKind::Redirect => after_redirect = true,
+                _ => {}
             }
             // Not a word: an operator, a redirection, a comment or a
             // here-document. It keeps the style the lexer gave it.
@@ -719,6 +737,54 @@ fn build_spans_with<F>(
         }
         let word = &tokens[start..end];
         let text = word_text(word, buffer);
+
+        // The target of a redirection is a file, whatever it looks like.
+        // A redirection does not end the precommand segment: `sudo >out ls`
+        // still runs `ls`.
+        if after_redirect {
+            after_redirect = false;
+            let style = argument_style(word, text, after_double_dash, path_style);
+            push_word(spans, word, buffer, answers, style);
+            i = end;
+            continue;
+        }
+
+        // A word of a precommand segment. The precommand decides whether
+        // it is its own command, an option, an option's value, or an
+        // operand; the shell's answer only says whether the command it
+        // found is known.
+        if let Some(state) = precommand.as_mut() {
+            let lexed_as_option = word
+                .first()
+                .is_some_and(|token| token.kind == TokenKind::Option);
+            let role = state.classify(text, lexed_as_option);
+            let done = state.is_done();
+            if text == b"--" {
+                after_double_dash = true;
+            }
+            let style = match role {
+                Role::Command | Role::CommandName => {
+                    command_style(word, buffer, answers, path_style)
+                }
+                Role::Assignment => WordStyle::Styled(StyleId::Assignment),
+                Role::Option | Role::OptionArgument | Role::Operand => {
+                    argument_style(word, text, after_double_dash, path_style)
+                }
+            };
+            push_word(spans, word, buffer, answers, style);
+            if done {
+                // The command has been found. If it is itself a
+                // precommand — `sudo env true` — its own command word is
+                // still to come; otherwise the rest of the simple command
+                // is its arguments.
+                precommand = match role {
+                    Role::Command => precommand::Kind::of(text).map(precommand::State::new),
+                    _ => None,
+                };
+            }
+            i = end;
+            continue;
+        }
 
         let is_cmd = is_command_word(word, buffer);
         if is_cmd {
@@ -744,21 +810,81 @@ fn build_spans_with<F>(
             command_style(word, buffer, answers, path_style)
         } else if subcommand {
             WordStyle::Styled(StyleId::Subcommand)
-        } else if after_double_dash && text != b"--" {
-            match path_style(word) {
-                Some(style) => WordStyle::Styled(style),
-                None => WordStyle::Styled(StyleId::Argument),
-            }
         } else {
-            match path_style(word) {
-                Some(style) => WordStyle::Styled(style),
-                None => WordStyle::AsLexed,
-            }
+            argument_style(word, text, after_double_dash, path_style)
         };
 
         push_word(spans, word, buffer, answers, style);
+
+        if is_cmd {
+            // A precommand runs the command that follows it, and that
+            // command is highlighted as a command. The next words are
+            // parsed by the precommand's own state.
+            if let Some(kind) = precommand::Kind::of(text) {
+                precommand = Some(precommand::State::new(kind));
+            }
+        } else if let Some(kind) = embedded_precommand(word, buffer) {
+            // A command inside a substitution is a command of its own.
+            // `echo $(sudo true)` runs `true` only when the substitution
+            // runs, but the word after the substitution is still `sudo`'s
+            // command and is highlighted like one.
+            precommand = Some(precommand::State::new(kind));
+        }
+
         i = end;
     }
+}
+
+/// The style of a word in argument position.
+///
+/// A word after `--` is an operand even when it looks like an option.
+/// Otherwise the lexer's style is kept; a word that names an existing file
+/// is styled as a path, and the filesystem is the only thing that can say
+/// so.
+fn argument_style<F>(
+    word: &[Token],
+    text: &[u8],
+    after_double_dash: bool,
+    path_style: &mut F,
+) -> WordStyle
+where
+    F: FnMut(&[Token]) -> Option<StyleId>,
+{
+    if after_double_dash && text != b"--" {
+        match path_style(word) {
+            Some(style) => WordStyle::Styled(style),
+            None => WordStyle::Styled(StyleId::Argument),
+        }
+    } else {
+        match path_style(word) {
+            Some(style) => WordStyle::Styled(style),
+            None => WordStyle::AsLexed,
+        }
+    }
+}
+
+/// The precommand inside a substitution, if the word holds one.
+///
+/// A substitution is one word, and the command inside it is one token of
+/// it (`echo $(sudo true)` is the words `echo`, `$(sudo`, `true`, `)`).
+/// The command token is styled on its own by [`push_word`]; this is what
+/// notices that it was a precommand, so that the word after the
+/// substitution is highlighted as its command.
+///
+/// The substitution token is required: a command token that merely
+/// touches another token is part of one word, not a command of its own.
+/// `sudo"foo"` is a single word whose command is named `sudofoo`.
+fn embedded_precommand(word: &[Token], buffer: &[u8]) -> Option<precommand::Kind> {
+    if !word
+        .iter()
+        .any(|token| token.kind == TokenKind::Substitution)
+    {
+        return None;
+    }
+    word.iter()
+        .rev()
+        .find(|token| token.kind == TokenKind::Command)
+        .and_then(|token| precommand::Kind::of(token_bytes(token, buffer)))
 }
 
 /// The spans the module publishes for a line.
@@ -2137,6 +2263,253 @@ mod tests {
         assert!(
             spans.iter().any(|s| s.style == StyleId::Command),
             "a command the shell knows is published: {spans:?}"
+        );
+    }
+
+    // --- precommands --------------------------------------------------------
+
+    #[test]
+    fn the_command_after_a_precommand_is_published_as_a_command() {
+        // `sudo true` runs `true`: both words are commands, and both must
+        // be coloured like one. The lexer only marks the first.
+        let answers = answers_from(&[b"--command-known=sudo", b"--command-known=true"]);
+        assert_eq!(
+            spans_of("sudo true", &answers),
+            vec![
+                HighlightSpan::new(0, 4, StyleId::Command),
+                HighlightSpan::new(5, 9, StyleId::Command),
+            ],
+            "the command sudo runs must be published as a command"
+        );
+    }
+
+    #[test]
+    fn a_precommand_option_value_is_not_the_command() {
+        // `root` is the value of `-u`, not the command; `true` is the
+        // command. A parser that stopped at the first non-option word would
+        // colour `root` and miss `true`.
+        let answers = answers_from(&[b"--command-known=sudo", b"--command-known=true"]);
+        assert_eq!(
+            spans_of("sudo -n -u root true", &answers),
+            vec![
+                HighlightSpan::new(0, 4, StyleId::Command),
+                HighlightSpan::new(5, 7, StyleId::Option),
+                HighlightSpan::new(8, 10, StyleId::Option),
+                HighlightSpan::new(11, 15, StyleId::Argument),
+                HighlightSpan::new(16, 20, StyleId::Command),
+            ],
+            "the option's value must not be mistaken for the command"
+        );
+    }
+
+    #[test]
+    fn a_precommand_chain_highlights_the_command_that_runs() {
+        // `sudo env true` runs `true`; `env` is both the command sudo runs
+        // and the precommand of `true`.
+        let answers = answers_from(&[
+            b"--command-known=sudo",
+            b"--command-known=env",
+            b"--command-known=true",
+        ]);
+        assert_eq!(
+            spans_of("sudo env true", &answers),
+            vec![
+                HighlightSpan::new(0, 4, StyleId::Command),
+                HighlightSpan::new(5, 8, StyleId::Command),
+                HighlightSpan::new(9, 13, StyleId::Command),
+            ],
+            "every command of the chain must be published"
+        );
+    }
+
+    #[test]
+    fn command_v_highlights_every_command_name() {
+        // `command -v` asks about a list of command names; every operand
+        // names a command, not an argument.
+        let answers = answers_from(&[
+            b"--command-known=command",
+            b"--command-known=echo",
+            b"--command-known=file",
+        ]);
+        assert_eq!(
+            spans_of("command -v echo file", &answers),
+            vec![
+                HighlightSpan::new(0, 7, StyleId::Command),
+                HighlightSpan::new(8, 10, StyleId::Option),
+                HighlightSpan::new(11, 15, StyleId::Command),
+                HighlightSpan::new(16, 20, StyleId::Command),
+            ],
+            "every name after command -v must be published as a command"
+        );
+    }
+
+    #[test]
+    fn an_env_assignment_is_not_the_command() {
+        // `env FOO=bar true` sets a variable and runs `true`.
+        let answers = answers_from(&[b"--command-known=env", b"--command-known=true"]);
+        assert_eq!(
+            spans_of("env FOO=bar true", &answers),
+            vec![
+                HighlightSpan::new(0, 3, StyleId::Command),
+                HighlightSpan::new(4, 11, StyleId::Assignment),
+                HighlightSpan::new(12, 16, StyleId::Command),
+            ],
+            "the assignment must not be mistaken for the command"
+        );
+    }
+
+    #[test]
+    fn sudo_edit_takes_files_not_a_command() {
+        // `sudo -e` and `sudoedit` edit files; there is no command to run
+        // and no operand may be coloured as one.
+        for line in ["sudo -e file1 file2", "sudo --edit file1 file2"] {
+            let answers = answers_from(&[b"--command-known=sudo", b"--command-known=file1"]);
+            let spans = spans_of(line, &answers);
+            assert_eq!(spans.first().map(|s| s.style), Some(StyleId::Command));
+            assert!(
+                !spans
+                    .iter()
+                    .any(|s| s.style == StyleId::Command && s.start > 8),
+                "a file of sudo edit mode must not be a command: {spans:?}"
+            );
+        }
+
+        let answers = answers_from(&[b"--command-known=sudoedit", b"--command-known=file1"]);
+        let spans = spans_of("sudoedit file1 file2", &answers);
+        assert_eq!(
+            spans,
+            vec![
+                HighlightSpan::new(0, 8, StyleId::Command),
+                HighlightSpan::new(9, 14, StyleId::Argument),
+                HighlightSpan::new(15, 20, StyleId::Argument),
+            ],
+            "sudoedit's operands are files, not commands"
+        );
+    }
+
+    #[test]
+    fn a_redirection_does_not_hide_the_precommand_target() {
+        // `sudo >out true` runs `true`: `out` is a file, not a command.
+        let answers = answers_from(&[b"--command-known=sudo", b"--command-known=true"]);
+        assert_eq!(
+            spans_of("sudo >out true", &answers),
+            vec![
+                HighlightSpan::new(0, 4, StyleId::Command),
+                HighlightSpan::new(5, 6, StyleId::Redirect),
+                HighlightSpan::new(6, 9, StyleId::Argument),
+                HighlightSpan::new(10, 14, StyleId::Command),
+            ],
+            "the redirect target must not be mistaken for the command"
+        );
+    }
+
+    #[test]
+    fn time_and_nocorrect_are_keywords_before_the_command() {
+        // `time` and `nocorrect` are reserved words, but the command that
+        // follows them still runs and is still a command.
+        let answers = answers_from(&[b"--command-reserved=time", b"--command-known=ls"]);
+        assert_eq!(
+            spans_of("time ls", &answers),
+            vec![
+                HighlightSpan::new(0, 4, StyleId::ReservedWord),
+                HighlightSpan::new(5, 7, StyleId::Command),
+            ],
+            "time is a keyword and ls is the command it times"
+        );
+
+        let answers = answers_from(&[
+            b"--command-reserved=nocorrect",
+            b"--command-unknown=definitelynotacommand",
+        ]);
+        assert_eq!(
+            spans_of("nocorrect definitelynotacommand", &answers),
+            vec![
+                HighlightSpan::new(0, 9, StyleId::ReservedWord),
+                HighlightSpan::new(10, 31, StyleId::UnknownCommand),
+            ],
+            "nocorrect is a keyword and the typo it protects is the command"
+        );
+    }
+
+    #[test]
+    fn a_precommand_inside_a_substitution_highlights_its_command() {
+        // The substitution is one shell word, and the command inside it is
+        // one token. `echo $(sudo true)` runs `true` only when the
+        // substitution runs, but the command is still `sudo`'s command.
+        let answers = answers_from(&[
+            b"--command-known=echo",
+            b"--command-known=sudo",
+            b"--command-known=true",
+        ]);
+        assert_eq!(
+            spans_of("echo $(sudo true)", &answers),
+            vec![
+                HighlightSpan::new(0, 4, StyleId::Command),
+                HighlightSpan::new(5, 7, StyleId::Substitution),
+                HighlightSpan::new(7, 11, StyleId::Command),
+                HighlightSpan::new(12, 16, StyleId::Command),
+                HighlightSpan::new(16, 17, StyleId::Operator),
+            ],
+            "the command of the nested precommand must be published"
+        );
+    }
+
+    #[test]
+    fn a_precommand_target_without_an_answer_is_left_alone() {
+        // The shell was asked about `sudo` only. The command it runs must
+        // not fall back to the lexer's green, and must not be called
+        // unknown either: nobody said anything about it.
+        let answers = answers_from(&[b"--command-known=sudo"]);
+        assert_eq!(
+            spans_of("sudo true", &answers),
+            vec![HighlightSpan::new(0, 4, StyleId::Command)],
+            "a command without an answer must not be published"
+        );
+    }
+
+    #[test]
+    fn a_repeated_word_gets_its_role_from_its_position() {
+        // The same text can be an option's value and then the command.
+        // Only the word in command position may be styled as a command.
+        let answers = answers_from(&[b"--command-known=sudo", b"--command-known=true"]);
+        assert_eq!(
+            spans_of("sudo -u true true", &answers),
+            vec![
+                HighlightSpan::new(0, 4, StyleId::Command),
+                HighlightSpan::new(5, 7, StyleId::Option),
+                HighlightSpan::new(8, 12, StyleId::Argument),
+                HighlightSpan::new(13, 17, StyleId::Command),
+            ],
+            "the option's value and the command must get different styles"
+        );
+    }
+
+    #[test]
+    fn a_precommand_target_after_double_dash_may_look_like_an_option() {
+        // `sudo -- -n` runs a command named `-n`, whatever the lexer
+        // thinks of a word that starts with a hyphen.
+        let answers = answers_from(&[b"--command-known=sudo", b"--command-known=-n"]);
+        assert_eq!(
+            spans_of("sudo -- -n", &answers),
+            vec![
+                HighlightSpan::new(0, 4, StyleId::Command),
+                HighlightSpan::new(5, 7, StyleId::Argument),
+                HighlightSpan::new(8, 10, StyleId::Command),
+            ],
+            "the command after -- may be named like an option"
+        );
+    }
+
+    #[test]
+    fn the_dash_precommand_highlights_the_command_it_runs() {
+        let answers = answers_from(&[b"--command-unknown=-", b"--command-known=ls"]);
+        assert_eq!(
+            spans_of("- ls", &answers),
+            vec![
+                HighlightSpan::new(0, 1, StyleId::UnknownCommand),
+                HighlightSpan::new(2, 4, StyleId::Command),
+            ],
+            "the command after - must be published as a command"
         );
     }
 

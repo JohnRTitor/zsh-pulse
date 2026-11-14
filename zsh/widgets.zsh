@@ -212,6 +212,11 @@ zsh-pulse-highlight-words() {
   integer nwords=${#words}
   # Whether the next word is expected to start a command.
   integer want_command=1
+  # Whether the current simple command is a precommand — `sudo`, `env`,
+  # `command`, ... — whose own command word is still to come.
+  integer in_precommand=0
+  # Whether `--` has ended the precommand's options.
+  integer precommand_end_of_options=0
   while (( i <= nwords )); do
     local word=${words[i]}
     if [[ -z $word ]]; then
@@ -250,6 +255,8 @@ zsh-pulse-highlight-words() {
       # a new command.
       (( i++ ))
       want_command=1
+      in_precommand=0
+      precommand_end_of_options=0
       continue
     fi
     if (( want_command )); then
@@ -262,12 +269,68 @@ zsh-pulse-highlight-words() {
       # This is a command word.
       zsh-pulse-highlight-answer "$word"
       want_command=0
+      if zsh-pulse-highlight-is-precommand "$word"; then
+        # `sudo true` runs `true`. Every word after the precommand is a
+        # candidate for being the command it runs, so every non-option
+        # word is answered until the next operator. The module knows
+        # which of them is really the command: it parses the options and
+        # their values. The adapter deliberately does not, because an
+        # option table in shell code would be a second, slower copy of
+        # the one in `precommand.rs`.
+        in_precommand=1
+        precommand_end_of_options=0
+      fi
+      (( i++ ))
+      continue
+    fi
+    if (( in_precommand )); then
+      if [[ $word == '--' ]]; then
+        precommand_end_of_options=1
+        (( i++ ))
+        continue
+      fi
+      if (( ! precommand_end_of_options )) && [[ $word == -* && $word != - ]]; then
+        # An option. Its value — if it takes one — is answered by the
+        # next turn; the module ignores an answer about a word that is
+        # not the command.
+        (( i++ ))
+        continue
+      fi
+      if [[ $word == ${~assignment} ]]; then
+        # `env FOO=bar cmd` sets a variable and runs `cmd`.
+        (( i++ ))
+        continue
+      fi
+      # A word the precommand may run — or one of its arguments. The
+      # module decides which; an answer about an argument is harmless,
+      # because the module never asks for one there.
+      zsh-pulse-highlight-answer "$word"
       (( i++ ))
       continue
     fi
     # An ordinary argument.
     (( i++ ))
   done
+}
+
+# Whether the word is a command that runs another command.
+#
+# The list is zsh-patina's (`assets/Packages/ShellScript/Bash.sublime-syntax`
+# in the reference tree), and it is kept here because the adapter is what
+# decides how far the command position extends. The *meaning* of each
+# precommand — which options take a value, where its command word is — is
+# in the module (`crates/zsh-module/src/precommand.rs`), so the two lists
+# have to agree only about the names.
+#
+# `time` and `nocorrect` are reserved words rather than commands, but they
+# still stand in front of a command and the word after them runs.
+zsh-pulse-highlight-is-precommand() {
+  case ${(Q)1} in
+    (-|builtin|command|exec|doas|env|nice|nohup|noglob|sudo|sudoedit|time|nocorrect)
+      return 0
+      ;;
+  esac
+  return 1
 }
 
 # Answer for the command inside a command or process substitution.
@@ -324,6 +387,14 @@ zsh-pulse-highlight-inside() {
 zsh-pulse-highlight-answer() {
   local word=$1
   local -i kind
+  # `-` is the precommand that runs a command with the default options.
+  # It is not in any of the shell's tables, so the lookup would call it
+  # unknown and paint it red; it is a keyword of the grammar, and is
+  # answered as one.
+  if [[ $word == '-' ]]; then
+    ZSH_PULSE_COMMAND_ARGS+=( "--command-reserved=$word" )
+    return 0
+  fi
   zsh-pulse-highlight-known "${(Q)word}"
   kind=$?
   case $kind in

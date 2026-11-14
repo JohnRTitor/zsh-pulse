@@ -673,6 +673,16 @@ impl Screen {
                 at = (end + 1).min(bytes.len());
                 continue;
             }
+            // A backspace moves the cursor back one cell. zsh's line editor
+            // redraws words in place with `\b`, so a screen model that
+            // ignored it would append every redraw instead of overwriting
+            // the word, and positions derived from the final text would
+            // point into an earlier copy.
+            if byte == 0x08 {
+                cursor = cursor.saturating_sub(1);
+                at += 1;
+                continue;
+            }
             if byte >= 0x20 {
                 let cell = Cell { byte, attrs };
                 if cursor < screen.cells.len() {
@@ -1124,6 +1134,80 @@ fn the_typed_command_is_highlighted_on_the_terminal() {
             term.palette.green.as_slice(),
             "the argument {ARGUMENT} was drawn inside the highlighted region: \
              an ordinary argument must not be styled.\n{}",
+            capture.dump()
+        );
+    }
+}
+
+/// The command a precommand runs must reach the terminal as a command.
+///
+/// `sudo true` is two command words, and the module colours both. A test
+/// on `region_highlight` would prove the regions were computed; this is
+/// the proof that they were drawn.
+#[test]
+#[cfg(feature = "highlight")]
+fn the_command_after_a_precommand_is_highlighted_on_the_terminal() {
+    require_zsh_pty!();
+    let Some(term) = colour_terminal() else {
+        skip(
+            "no terminal type with the standard xterm colour capabilities \
+             was found, so the bytes zsh writes for a command cannot be known \
+             in advance and asserting on them would be a guess.",
+        );
+        return;
+    };
+    let typed = "sudo true SPARGXYZ";
+    let capture = match capture(
+        &Scenario {
+            typed: typed.to_string(),
+            wait_for: ARGUMENT.as_bytes(),
+            load_module: true,
+            count: 1,
+        },
+        term.name,
+        "precommand",
+    ) {
+        Ok(capture) => capture,
+        Err(reason) => {
+            skip(&reason);
+            return;
+        }
+    };
+
+    assert!(
+        capture.contains(MODULE_LOADED.as_bytes()),
+        "the module did not load in the shell under the pty.\n{}",
+        capture.dump()
+    );
+
+    let drawn = capture.screen_occurrences(ARGUMENT.as_bytes());
+    let at = *drawn
+        .last()
+        .unwrap_or_else(|| panic!("the argument was never drawn.\n{}", capture.dump()));
+    let start = at
+        .checked_sub(typed.len() - ARGUMENT.len())
+        .unwrap_or_else(|| panic!("the line was not drawn as one piece.\n{}", capture.dump()));
+
+    let command = Attrs::of(&term.palette.cyan);
+    for offset in [0, 1, 2, 3] {
+        assert_eq!(
+            capture.attrs_at(start + offset),
+            Some(command),
+            "`sudo` was not drawn as a command (offset {offset}).\n{}",
+            capture.dump()
+        );
+    }
+    assert_ne!(
+        capture.attrs_at(start + 4),
+        Some(command),
+        "the space after `sudo` must not be inside its region.\n{}",
+        capture.dump()
+    );
+    for offset in [5, 6, 7, 8] {
+        assert_eq!(
+            capture.attrs_at(start + offset),
+            Some(command),
+            "`true` was not drawn as the command `sudo` runs (offset {offset}).\n{}",
             capture.dump()
         );
     }
