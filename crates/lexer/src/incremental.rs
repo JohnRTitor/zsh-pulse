@@ -34,11 +34,7 @@
 //! [`RelexOutcome`] reports how much work was actually done, so the claim
 //! "the incremental path is cheaper" can be checked rather than assumed.
 
-use crate::scanner::Scanner;
-use crate::ResumePoint;
-use crate::state::LexState;
-use crate::token::Token;
-use crate::LexError;
+use crate::{LexError, ResumePoint, scanner::Scanner, state::LexState, token::Token};
 
 /// The shortest line for which the incremental path is worth its overhead.
 ///
@@ -309,33 +305,29 @@ impl LexCache {
         // re-scan O(units log units).
         let mut cursor = 0usize;
         let mut probe = |token_index: usize, offset: usize, guard: usize, state: &LexState| {
-                if offset < suffix_start {
-                    return false;
-                }
-                let o = offset as isize - delta;
-                if !(0..=old_len as isize).contains(&o) {
-                    return false;
-                }
-                let o = o as usize;
-                while cursor < self.resumes.len()
-                    && (self.resumes[cursor].byte_offset as usize) < o
-                {
-                    cursor += 1;
-                }
-                if cursor >= self.resumes.len()
-                    || (self.resumes[cursor].byte_offset as usize) != o
-                {
-                    return false;
-                }
-                let old = &self.resumes[cursor];
-                // The key is a cheap fingerprint; the exact comparison is
-                // what decides.
-                if old.state.key() != state.key() || !old.state.same_parse(state) {
-                    return false;
-                }
-                convergence.set(Some((token_index, cursor, guard)));
-                scanned_to.set(offset);
-                true
+            if offset < suffix_start {
+                return false;
+            }
+            let o = offset as isize - delta;
+            if !(0..=old_len as isize).contains(&o) {
+                return false;
+            }
+            let o = o as usize;
+            while cursor < self.resumes.len() && (self.resumes[cursor].byte_offset as usize) < o {
+                cursor += 1;
+            }
+            if cursor >= self.resumes.len() || (self.resumes[cursor].byte_offset as usize) != o {
+                return false;
+            }
+            let old = &self.resumes[cursor];
+            // The key is a cheap fingerprint; the exact comparison is
+            // what decides.
+            if old.state.key() != state.key() || !old.state.same_parse(state) {
+                return false;
+            }
+            convergence.set(Some((token_index, cursor, guard)));
+            scanned_to.set(offset);
+            true
         };
         let (new_tokens, new_resumes, new_final_state) = {
             let scanner = Scanner::new_at(
@@ -566,8 +558,7 @@ impl LexCache {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::lex;
+    use {super::*, crate::lex};
 
     /// Re-lex a line and check the result against a full scan.
     fn check(old: &str, new: &str) -> RelexOutcome {
@@ -575,7 +566,9 @@ mod tests {
         cache.lex(old.as_bytes()).expect("old line scans");
         // The raw incremental path, so that the machinery is exercised even
         // for the short lines the policy would re-parse.
-        let outcome = cache.relex_incremental(new.as_bytes()).expect("new line scans");
+        let outcome = cache
+            .relex_incremental(new.as_bytes())
+            .expect("new line scans");
         let full = lex(new.as_bytes()).expect("full scan");
         assert_eq!(
             cache.tokens(),
@@ -637,14 +630,20 @@ mod tests {
         // An edit in the middle, so that there is a tail to splice.
         let edited = long.replace("cccc", "eeee");
         let outcome = cache.relex(edited.as_bytes()).expect("scannable");
-        assert!(outcome.spliced, "a long line must take the incremental path");
+        assert!(
+            outcome.spliced,
+            "a long line must take the incremental path"
+        );
     }
 
     #[test]
     fn a_mid_line_edit_produces_the_same_tokens_as_a_full_scan() {
         let outcome = check("echo hello world", "echo brave world");
         assert!(!outcome.unchanged);
-        assert!(outcome.rescanned_bytes < 17, "should not rescan the whole line");
+        assert!(
+            outcome.rescanned_bytes < 17,
+            "should not rescan the whole line"
+        );
     }
 
     #[test]
@@ -696,9 +695,15 @@ mod tests {
         // the restart point has to be chosen so that the character which
         // decided the previous token is not one of the edited ones.
         let mut cache = LexCache::new();
-        cache.lex(b"cat <<EOF\nbody line\nEOF\n").expect("scannable");
-        cache.relex(b"cat $<<EOF\nbody line\nEOF\n").expect("scannable");
-        cache.relex(b"cat $$<<EOF\nbody line\nEOF\n").expect("scannable");
+        cache
+            .lex(b"cat <<EOF\nbody line\nEOF\n")
+            .expect("scannable");
+        cache
+            .relex(b"cat $<<EOF\nbody line\nEOF\n")
+            .expect("scannable");
+        cache
+            .relex(b"cat $$<<EOF\nbody line\nEOF\n")
+            .expect("scannable");
         let full = lex(b"cat $$<<EOF\nbody line\nEOF\n").expect("scannable");
         assert_eq!(cache.tokens(), full.tokens.as_slice());
     }
@@ -726,7 +731,11 @@ mod tests {
             line.push(c);
             cache.relex(line.as_bytes()).expect("scannable");
             let full = lex(line.as_bytes()).expect("scannable");
-            assert_eq!(cache.tokens(), full.tokens.as_slice(), "after typing {line:?}");
+            assert_eq!(
+                cache.tokens(),
+                full.tokens.as_slice(),
+                "after typing {line:?}"
+            );
         }
     }
 
@@ -819,7 +828,11 @@ mod tests {
         let capacity = retained_capacity(&cache);
 
         for i in 0..1000 {
-            let line: &[u8] = if i % 2 == 0 { edited.as_bytes() } else { line.as_bytes() };
+            let line: &[u8] = if i % 2 == 0 {
+                edited.as_bytes()
+            } else {
+                line.as_bytes()
+            };
             cache.relex(line).expect("scannable");
         }
         assert_eq!(
@@ -842,7 +855,11 @@ mod tests {
         let capacity = retained_capacity(&cache);
 
         for i in 0..1000 {
-            let line: &[u8] = if i % 2 == 0 { edited.as_bytes() } else { line.as_bytes() };
+            let line: &[u8] = if i % 2 == 0 {
+                edited.as_bytes()
+            } else {
+                line.as_bytes()
+            };
             cache.relex(line).expect("scannable");
         }
         assert_eq!(

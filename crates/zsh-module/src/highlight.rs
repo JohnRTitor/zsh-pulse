@@ -1,17 +1,18 @@
 //! Syntax highlighting builtin: `zsh-pulse-highlight`.
 
-use std::os::unix::ffi::OsStrExt;
-use std::sync::OnceLock;
-use std::time::{Duration, Instant};
+use std::{
+    os::unix::ffi::OsStrExt,
+    sync::OnceLock,
+    time::{Duration, Instant},
+};
 
-use highlight::{char_offsets_into, ChangedRange, HighlightSpan, StyleId};
-use lexer::{LexCache, Token, TokenKind};
-use zsh_abi::guard;
-use zsh_abi::raw::CStr;
-use zsh_abi::{Api, CappedRead};
+use {
+    highlight::{ChangedRange, HighlightSpan, StyleId, char_offsets_into},
+    lexer::{LexCache, Token, TokenKind},
+    zsh_abi::{Api, CappedRead, guard, raw::CStr},
+};
 
-use crate::{debug, debug_enabled, engine, has_argument, report_degraded, zsh};
-use crate::region;
+use crate::{debug, debug_enabled, engine, has_argument, region, report_degraded, zsh};
 
 static ECHO: OnceLock<bool> = OnceLock::new();
 
@@ -99,6 +100,11 @@ struct Highlighter {
     scratch: PathScratch,
     /// The cursor offset from the last redraw.
     last_cursor: Option<i64>,
+    /// Whether the last published `region_highlight` contained non-ours entries.
+    ///
+    /// Used to take a cheaper clear path on bailout when no foreign regions
+    /// need to be preserved.
+    has_foreign_regions: bool,
 }
 
 impl Highlighter {
@@ -234,7 +240,11 @@ impl Highlighter {
         if !ascii {
             char_offsets_into(&mut self.offsets, buffer);
         }
-        let offsets = if ascii { None } else { Some(self.offsets.as_slice()) };
+        let offsets = if ascii {
+            None
+        } else {
+            Some(self.offsets.as_slice())
+        };
 
         if *debug_enabled() {
             // The diff is the "what changed" report: which ranges of the
@@ -244,7 +254,11 @@ impl Highlighter {
                 .iter()
                 .map(|c| format!("{}..{}", c.start, c.end))
                 .collect();
-            debug(&format!("{} range(s) restyled: {}", changes.len(), ranges.join(" ")));
+            debug(&format!(
+                "{} range(s) restyled: {}",
+                changes.len(),
+                ranges.join(" ")
+            ));
         }
 
         if started.elapsed() > BUDGET {
@@ -274,10 +288,11 @@ impl Highlighter {
             // and nothing to publish into: writing would create a *global*
             // parameter of that name in the user's shell.
             self.pushed = false;
+            self.has_foreign_regions = false;
             return;
         }
-        let (rows, truncated) =
-            self.entries.build_merged(&existing, &self.spans, offsets);
+        self.has_foreign_regions = existing.iter().any(|e| !region::is_our_entry(e));
+        let (rows, truncated) = self.entries.build_merged(&existing, &self.spans, offsets);
         if *debug_enabled() {
             debug(&format!("published {} regions", rows.len()));
         }
@@ -312,12 +327,16 @@ impl Highlighter {
         self.spans.clear();
         self.pushed_spans.clear();
         self.last_cursor = None;
+        self.has_foreign_regions = false;
         // A new line has a new parameter scope, so the cached answer about
         // `region_highlight` no longer applies.
         self.region_highlight_exists = None;
     }
 
     /// Remove every highlight from the display.
+    ///
+    /// Only our own `memo=zsh-pulse` entries are removed; regions published by
+    /// other plugins must remain visible on bailout/clear paths.
     fn clear(&mut self, api: &Api, publish: bool) {
         // The buffers are emptied, not replaced: a bail-out is usually
         // followed by an ordinary keystroke, and that keystroke must not have
@@ -326,15 +345,37 @@ impl Highlighter {
         self.pushed_spans.clear();
         self.entries.clear();
         self.last_cursor = None;
-        if !self.pushed {
-            // Nothing was ever published, so there is nothing to clear.
-            return;
-        }
+        let had_published = self.pushed;
         self.pushed = false;
-        if !publish || !api.in_zle() {
+        if !had_published {
+            // Nothing was ever published, so there is nothing to clear.
+            self.has_foreign_regions = false;
             return;
         }
-        api.set_param_array(c"region_highlight", &[]);
+        if !publish || !api.in_zle() {
+            // We are not publishing; leave foreign-state tracking to the next
+            // successful publish/read of the parameter.
+            self.has_foreign_regions = false;
+            return;
+        }
+        if !self.has_foreign_regions {
+            // No foreign entries needed preservation on the last publish, so
+            // clearing our regions can avoid reading/merging the whole array.
+            api.set_param_array(c"region_highlight", &[]);
+            self.has_foreign_regions = false;
+            return;
+        }
+        // Preserve foreign (non-ours) entries instead of wiping the whole array.
+        let mut existing: Vec<String> = Vec::new();
+        let known = api.get_param_array(c"region_highlight", &mut existing);
+        if !known {
+            self.has_foreign_regions = false;
+            return;
+        }
+        let foreign = region::merge_entries(&existing, &[]);
+        let foreign_refs: Vec<&std::ffi::CStr> = foreign.iter().map(|s| s.as_c_str()).collect();
+        api.set_param_array(c"region_highlight", &foreign_refs);
+        self.has_foreign_regions = false;
     }
 }
 
@@ -358,6 +399,8 @@ enum CommandKnowledge {
     Reserved,
     /// A global alias.
     GlobalAlias,
+    /// A recognized subcommand in argument position.
+    Subcommand,
 }
 
 /// One answer from the shell: what it said about one command word.
@@ -506,6 +549,8 @@ impl CommandAnswers {
                 self.push(word, CommandKnowledge::Reserved);
             } else if let Some(word) = bytes.strip_prefix(COMMAND_GLOBAL_ALIAS_ARGUMENT) {
                 self.push(word, CommandKnowledge::GlobalAlias);
+            } else if let Some(word) = bytes.strip_prefix(COMMAND_SUBCOMMAND_ARGUMENT) {
+                self.push(word, CommandKnowledge::Subcommand);
             }
         }
     }
@@ -525,6 +570,9 @@ const COMMAND_RESERVED_ARGUMENT: &[u8] = b"--command-reserved=";
 
 /// The argument that says the command word is a global alias.
 const COMMAND_GLOBAL_ALIAS_ARGUMENT: &[u8] = b"--command-global-alias=";
+
+/// The argument that says the word is a recognized subcommand.
+const COMMAND_SUBCOMMAND_ARGUMENT: &[u8] = b"--subcommand=";
 
 /// What to do with a word.
 ///
@@ -680,10 +728,22 @@ fn build_spans_with<F>(
         }
 
         // A command word is styled from the shell's answers; every other
-        // word is an argument, and may name a file that exists.
+        // word is an argument, and may name a file that exists. A recognized
+        // subcommand answer can override an argument-position word (adapter
+        // identifies subcommand position).
         // Words after `--` are treated as operands rather than options.
+        let subcommand = if !is_cmd && text != b"--" {
+            matches!(
+                answers.knowledge_of(text),
+                Some(CommandKnowledge::Subcommand)
+            )
+        } else {
+            false
+        };
         let style = if is_cmd {
             command_style(word, buffer, answers, path_style)
+        } else if subcommand {
+            WordStyle::Styled(StyleId::Subcommand)
         } else if after_double_dash && text != b"--" {
             match path_style(word) {
                 Some(style) => WordStyle::Styled(style),
@@ -729,6 +789,8 @@ pub fn published_spans(text: &[u8], answers: &[&[u8]]) -> Vec<HighlightSpan> {
             command_answers.push(word, CommandKnowledge::Reserved);
         } else if let Some(word) = answer.strip_prefix(COMMAND_GLOBAL_ALIAS_ARGUMENT) {
             command_answers.push(word, CommandKnowledge::GlobalAlias);
+        } else if let Some(word) = answer.strip_prefix(COMMAND_SUBCOMMAND_ARGUMENT) {
+            command_answers.push(word, CommandKnowledge::Subcommand);
         }
     }
     let mut spans = Vec::new();
@@ -787,6 +849,7 @@ fn push_word(
 fn command_token_style(token: &Token, buffer: &[u8], answers: &CommandAnswers) -> Option<StyleId> {
     match answers.knowledge_of(token_bytes(token, buffer)) {
         Some(CommandKnowledge::Known) => Some(StyleId::Command),
+        Some(CommandKnowledge::Subcommand) => Some(StyleId::Subcommand),
         Some(CommandKnowledge::Reserved) => Some(StyleId::ReservedWord),
         Some(CommandKnowledge::GlobalAlias) => Some(StyleId::GlobalAlias),
         Some(CommandKnowledge::Unknown) => Some(StyleId::UnknownCommand),
@@ -851,6 +914,7 @@ where
     // than not colouring it at all.
     match answers.knowledge_of(word_text(word, buffer)) {
         Some(CommandKnowledge::Known) => WordStyle::Styled(StyleId::Command),
+        Some(CommandKnowledge::Subcommand) => WordStyle::Styled(StyleId::Subcommand),
         Some(CommandKnowledge::Reserved) => WordStyle::Styled(StyleId::ReservedWord),
         Some(CommandKnowledge::GlobalAlias) => WordStyle::Styled(StyleId::GlobalAlias),
         Some(CommandKnowledge::Unknown) => match path_style(word) {
@@ -952,9 +1016,7 @@ fn is_literal(word: &[Token], buffer: &[u8]) -> bool {
     }
     // A `~` at the start of a word is a tilde expansion rather than a
     // glob, and the rest of the word is still literal text.
-    first.kind == TokenKind::Glob
-        && token_bytes(first, buffer) == b"~"
-        && rest.all(plain)
+    first.kind == TokenKind::Glob && token_bytes(first, buffer) == b"~" && rest.all(plain)
 }
 
 /// The bytes of the word.
@@ -1523,10 +1585,14 @@ pub unsafe extern "C" fn highlight_builtin(
 
         #[cfg(feature = "autocomplete")]
         if wants_autosuggest(args) {
-            let cwd = api.get_param_string(c"PWD")
+            let cwd = api
+                .get_param_string(c"PWD")
                 .map(std::path::PathBuf::from)
-                .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/")));
-            let home = api.get_param_string(c"HOME")
+                .unwrap_or_else(|| {
+                    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/"))
+                });
+            let home = api
+                .get_param_string(c"HOME")
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(|| std::path::PathBuf::from("/home"));
             let c_val = cursor.unwrap_or(0).max(0);
@@ -1618,7 +1684,6 @@ fn wants_autosuggest(args: *mut *mut std::ffi::c_char) -> bool {
 /// The full builtin name as zsh will register it: `zsh-pulse-highlight`.
 pub static BUILTIN_FULL: CStr = CStr::new(c"zsh-pulse-highlight");
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1662,7 +1727,10 @@ mod tests {
         assert!(s.too_long);
         s.buffer.extend_from_slice(b"ls");
         s.set_line(2, false);
-        assert!(!s.too_long, "the flag must be cleared once the line fits again");
+        assert!(
+            !s.too_long,
+            "the flag must be cleared once the line fits again"
+        );
         assert_eq!(s.buffer.len(), 2);
     }
 
@@ -1884,12 +1952,9 @@ mod tests {
         let tokens = tokens_of("~/bin/tool");
         let answers = answers_from(&[b"--command-unknown=~/bin/tool"]);
         assert_eq!(
-            command_style(
-                &tokens[..],
-                line,
-                &answers,
-                &mut |_word| Some(StyleId::PathToDir),
-            ),
+            command_style(&tokens[..], line, &answers, &mut |_word| Some(
+                StyleId::PathToDir
+            ),),
             WordStyle::Styled(StyleId::PathToDir),
             "a command word that names a file is a path"
         );
@@ -2156,7 +2221,11 @@ mod tests {
         let now = Instant::now();
         let dir = std::env::temp_dir();
         let first = cache.lookup(dir.to_string_lossy().as_bytes(), now);
-        assert_eq!(first, Some(PathKind::Dir), "the temporary directory is a directory");
+        assert_eq!(
+            first,
+            Some(PathKind::Dir),
+            "the temporary directory is a directory"
+        );
         // The second answer comes from the cache, and must be the same.
         assert_eq!(
             cache.lookup(dir.to_string_lossy().as_bytes(), now),
@@ -2181,10 +2250,7 @@ mod tests {
     /// directory would delete each other's files — a failure that would
     /// appear only when the machine was busy.
     fn scratch_dir(label: &str) -> std::path::PathBuf {
-        std::env::temp_dir().join(format!(
-            "zsh-pulse-path-ttl-{}-{label}",
-            std::process::id()
-        ))
+        std::env::temp_dir().join(format!("zsh-pulse-path-ttl-{}-{label}", std::process::id()))
     }
 
     #[test]
@@ -2269,5 +2335,4 @@ mod tests {
             cache.entries.len()
         );
     }
-
 }

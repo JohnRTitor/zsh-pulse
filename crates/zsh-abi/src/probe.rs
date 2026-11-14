@@ -53,7 +53,11 @@ impl Capabilities {
 impl fmt::Display for Capabilities {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Complete => write!(f, "all {} required symbols resolved", REQUIRED_SYMBOLS.len()),
+            Self::Complete => write!(
+                f,
+                "all {} required symbols resolved",
+                REQUIRED_SYMBOLS.len()
+            ),
             Self::Missing { symbols } => {
                 write!(f, "missing zsh symbols: {}", symbols.join(", "))
             }
@@ -126,7 +130,9 @@ mod tests {
 
     #[test]
     fn missing_symbols_are_reported_not_hidden() {
-        let caps = Capabilities::Missing { symbols: vec!["getsparam"] };
+        let caps = Capabilities::Missing {
+            symbols: vec!["getsparam"],
+        };
         assert!(!caps.is_complete());
         assert!(caps.to_string().contains("getsparam"));
     }
@@ -138,9 +144,13 @@ mod tests {
 
     #[test]
     fn resolve_refuses_when_incomplete() {
-        let caps = Capabilities::Missing { symbols: vec!["addbuiltins"] };
-        let resolved: Option<unsafe extern "C" fn()> =
-            unsafe { resolve_fn(&caps, "addbuiltins") };
-        assert!(resolved.is_none(), "must not resolve against a failed probe");
+        let caps = Capabilities::Missing {
+            symbols: vec!["addbuiltins"],
+        };
+        let resolved: Option<unsafe extern "C" fn()> = unsafe { resolve_fn(&caps, "addbuiltins") };
+        assert!(
+            resolved.is_none(),
+            "must not resolve against a failed probe"
+        );
     }
 }

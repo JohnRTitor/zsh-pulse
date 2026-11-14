@@ -45,10 +45,12 @@ mod scanner;
 #[cfg(test)]
 mod proptest;
 
-pub use incremental::{INCREMENTAL_MIN_LEN, LexCache, RelexOutcome};
-pub use scanner::LexError;
-pub use state::{Ctx, Heredoc, LexState, MAX_DEPTH, MAX_HEREDOC_LEN};
-pub use token::{Token, TokenKind};
+pub use {
+    incremental::{INCREMENTAL_MIN_LEN, LexCache, RelexOutcome},
+    scanner::LexError,
+    state::{Ctx, Heredoc, LexState, MAX_DEPTH, MAX_HEREDOC_LEN},
+    token::{Token, TokenKind},
+};
 
 /// A point at which a scan may be stopped and resumed.
 ///
@@ -105,22 +107,20 @@ pub fn lex(text: &[u8]) -> Result<Lexed, LexError> {
     let mut tokens = Vec::new();
     let mut resume_points = Vec::new();
     let final_state = {
-        let scanner = scanner::Scanner::new(
-            text,
-            LexState::new(),
-            &mut tokens,
-            &mut resume_points,
-        );
+        let scanner = scanner::Scanner::new(text, LexState::new(), &mut tokens, &mut resume_points);
         let (_, _, final_state) = scanner.run()?;
         final_state
     };
-    Ok(Lexed { tokens, resume_points, final_state })
+    Ok(Lexed {
+        tokens,
+        resume_points,
+        final_state,
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::token::TokenKind;
+    use {super::*, crate::token::TokenKind};
 
     fn kinds(text: &str) -> Vec<TokenKind> {
         lex(text.as_bytes())
@@ -156,10 +156,7 @@ mod tests {
         // character and is not exactly `--`. The reference implementation
         // styles every such word as an option
         // (`research/upstream/fsh/fast-highlight:869-881`).
-        assert_eq!(
-            kinds("cmd -l"),
-            vec![TokenKind::Command, TokenKind::Option]
-        );
+        assert_eq!(kinds("cmd -l"), vec![TokenKind::Command, TokenKind::Option]);
         assert_eq!(words("cmd -l"), vec!["cmd", "-l"]);
     }
 
@@ -199,10 +196,7 @@ mod tests {
     fn a_lone_hyphen_is_the_name_of_standard_input_not_an_option() {
         // `-` is the word "standard input". It is not an option, and
         // painting it like one would be wrong.
-        assert_eq!(
-            kinds("cmd -"),
-            vec![TokenKind::Command, TokenKind::Word]
-        );
+        assert_eq!(kinds("cmd -"), vec![TokenKind::Command, TokenKind::Word]);
         assert_eq!(words("cmd -"), vec!["cmd", "-"]);
     }
 
@@ -212,10 +206,7 @@ mod tests {
         // option. The reference implementation gives it a style of its own;
         // this one does not, because there is no style for "the end of the
         // options" in the palette it copies.
-        assert_eq!(
-            kinds("cmd --"),
-            vec![TokenKind::Command, TokenKind::Word]
-        );
+        assert_eq!(kinds("cmd --"), vec![TokenKind::Command, TokenKind::Word]);
         assert_eq!(words("cmd --"), vec!["cmd", "--"]);
     }
 
@@ -227,11 +218,7 @@ mod tests {
         assert_eq!(kinds("-l"), vec![TokenKind::Command]);
         assert_eq!(
             kinds("cmd | -l"),
-            vec![
-                TokenKind::Command,
-                TokenKind::Operator,
-                TokenKind::Command
-            ]
+            vec![TokenKind::Command, TokenKind::Operator, TokenKind::Command]
         );
     }
 
@@ -289,14 +276,14 @@ mod tests {
     }
 
     #[test]
-    fn an_option_after_the_end_of_options_marker_is_still_an_option() {
-        // The lexer is lexical: it does not know that `--` changes the
-        // meaning of the words that follow. The shell, not the lexer, is
-        // what turns `-- -l` into an operand.
+    fn an_operand_after_the_end_of_options_marker_is_not_an_option() {
+        // `--` ends option parsing for the command: words after it are
+        // operands even if they look like options.
         assert_eq!(
             kinds("cmd -- -l"),
-            vec![TokenKind::Command, TokenKind::Word, TokenKind::Option]
+            vec![TokenKind::Command, TokenKind::Word, TokenKind::Word]
         );
+        assert_eq!(words("cmd -- -l"), vec!["cmd", "--", "-l"]);
     }
 
     #[test]
@@ -384,7 +371,10 @@ mod tests {
 
     #[test]
     fn a_quoted_string_is_its_own_token() {
-        assert_eq!(kinds("echo 'hi there'"), vec![TokenKind::Command, TokenKind::SingleQuoted]);
+        assert_eq!(
+            kinds("echo 'hi there'"),
+            vec![TokenKind::Command, TokenKind::SingleQuoted]
+        );
         assert_eq!(words("echo 'hi there'"), vec!["echo", "'hi there'"]);
     }
 
@@ -416,14 +406,28 @@ mod tests {
     fn a_comment_starts_at_the_beginning_of_a_word_only() {
         assert_eq!(kinds("echo a#b"), vec![TokenKind::Command, TokenKind::Word]);
         assert_eq!(words("echo a#b"), vec!["echo", "a#b"]);
-        assert_eq!(kinds("echo a # b"), vec![TokenKind::Command, TokenKind::Word, TokenKind::Comment]);
+        assert_eq!(
+            kinds("echo a # b"),
+            vec![TokenKind::Command, TokenKind::Word, TokenKind::Comment]
+        );
     }
 
     #[test]
     fn a_redirection_breaks_the_word() {
         // zsh: `>` is in `lx2` and ends the word (zsh-src/Src/lex.c:412).
-        assert_eq!(kinds("echo hi>f"), vec![TokenKind::Command, TokenKind::Word, TokenKind::Redirect, TokenKind::Word]);
-        assert_eq!(kinds("echo 2>f"), vec![TokenKind::Command, TokenKind::Redirect, TokenKind::Word]);
+        assert_eq!(
+            kinds("echo hi>f"),
+            vec![
+                TokenKind::Command,
+                TokenKind::Word,
+                TokenKind::Redirect,
+                TokenKind::Word
+            ]
+        );
+        assert_eq!(
+            kinds("echo 2>f"),
+            vec![TokenKind::Command, TokenKind::Redirect, TokenKind::Word]
+        );
     }
 
     #[test]
@@ -437,13 +441,22 @@ mod tests {
 
     #[test]
     fn an_assignment_is_only_an_assignment_in_command_position() {
-        assert_eq!(kinds("FOO=bar cmd"), vec![TokenKind::Assignment, TokenKind::Command]);
-        assert_eq!(kinds("cmd FOO=bar"), vec![TokenKind::Command, TokenKind::Word]);
+        assert_eq!(
+            kinds("FOO=bar cmd"),
+            vec![TokenKind::Assignment, TokenKind::Command]
+        );
+        assert_eq!(
+            kinds("cmd FOO=bar"),
+            vec![TokenKind::Command, TokenKind::Word]
+        );
     }
 
     #[test]
     fn a_parenthesis_is_only_special_in_command_position() {
-        assert_eq!(kinds("(cmd)"), vec![TokenKind::Operator, TokenKind::Command, TokenKind::Operator]);
+        assert_eq!(
+            kinds("(cmd)"),
+            vec![TokenKind::Operator, TokenKind::Command, TokenKind::Operator]
+        );
         assert_eq!(kinds("echo a(b"), vec![TokenKind::Command, TokenKind::Word]);
     }
 
@@ -473,7 +486,10 @@ mod tests {
 
     #[test]
     fn a_parameter_expansion_is_a_parameter_expansion() {
-        assert_eq!(kinds("echo $HOME"), vec![TokenKind::Command, TokenKind::ParamExpansion]);
+        assert_eq!(
+            kinds("echo $HOME"),
+            vec![TokenKind::Command, TokenKind::ParamExpansion]
+        );
         // `${`, its contents and `}` are all part of the expansion.
         assert_eq!(
             kinds("echo ${HOME}"),
@@ -488,7 +504,10 @@ mod tests {
 
     #[test]
     fn a_glob_metacharacter_is_its_own_token() {
-        assert_eq!(kinds("ls *.rs"), vec![TokenKind::Command, TokenKind::Glob, TokenKind::Word]);
+        assert_eq!(
+            kinds("ls *.rs"),
+            vec![TokenKind::Command, TokenKind::Glob, TokenKind::Word]
+        );
     }
 
     #[test]
@@ -528,7 +547,10 @@ mod tests {
             .expect("a heredoc body");
         let text = &line[body.start as usize..body.end as usize];
         // The body token starts at the newline that ended the command.
-        assert_eq!(text, "\n\tbody\n\tEOF\n", "the body must end at the delimiter");
+        assert_eq!(
+            text, "\n\tbody\n\tEOF\n",
+            "the body must end at the delimiter"
+        );
     }
 
     #[test]
@@ -571,10 +593,7 @@ mod tests {
             let line = format!("cmd {op} file");
             let result = lex(line.as_bytes()).expect("scannable");
             assert!(
-                result
-                    .tokens
-                    .iter()
-                    .any(|t| t.kind == TokenKind::Redirect),
+                result.tokens.iter().any(|t| t.kind == TokenKind::Redirect),
                 "{op:?} must be a redirection: {:?}",
                 result.tokens
             );
@@ -596,7 +615,10 @@ mod tests {
             for t in &result.tokens {
                 assert!(t.start >= prev_end, "overlap in {line:?}: {t:?}");
                 assert!(t.end > t.start, "empty token in {line:?}: {t:?}");
-                assert!(t.end as usize <= line.len(), "out of range in {line:?}: {t:?}");
+                assert!(
+                    t.end as usize <= line.len(),
+                    "out of range in {line:?}: {t:?}"
+                );
                 prev_end = t.end;
             }
         }
@@ -606,14 +628,21 @@ mod tests {
     fn every_resume_point_describes_a_real_token() {
         // A resume point's token index and byte offset must agree, or the
         // state it carries belongs to a different token.
-        for line in ["echo hi | grep x", "FOO=bar cmd --flag", "cat <<EOF\nbody\nEOF\n"] {
+        for line in [
+            "echo hi | grep x",
+            "FOO=bar cmd --flag",
+            "cat <<EOF\nbody\nEOF\n",
+        ] {
             let result = lex(line.as_bytes()).expect("scannable");
             for rp in &result.resume_points {
                 let token = result
                     .tokens
                     .get(rp.token_index as usize)
                     .unwrap_or_else(|| panic!("resume point {rp:?} has no token"));
-                assert_eq!(token.start, rp.byte_offset, "resume point {rp:?} vs {token:?}");
+                assert_eq!(
+                    token.start, rp.byte_offset,
+                    "resume point {rp:?} vs {token:?}"
+                );
             }
         }
     }
@@ -640,8 +669,7 @@ mod tests {
             };
             let expected = &full.tokens[rp.token_index as usize..];
             assert_eq!(
-                tokens,
-                expected,
+                tokens, expected,
                 "resuming at {} gave a different token stream",
                 rp.byte_offset
             );

@@ -93,6 +93,22 @@
 - [x] Prefix `menuselect` movement bindings with dot (`.up-line-or-history`, `.down-line-or-history`, etc.) to invoke internal C built-ins directly and prevent user-wrapped widgets (e.g. from `zsh-autosuggestions`) from aborting menu selection
 - [x] Fix race condition in `zsh_integration` path tests using atomic counters
 
+
+### Phase 15: Syntax Highlighting Parity (zsh-patina default, bounded)
+*Incremental parity work toward zsh-patina default behavior (no theme/config foundation). See [known-limitations.md](../known-limitations.md).*
+
+- [x] Establish a 26-case baseline corpus (B1–B9, zsh-specific, and dynamic cases) comparing behavior against zsh-patina defaults
+- [x] Align default style attributes with patina for existing `StyleId` mappings and add `StyleId::Subcommand` with semantic `--subcommand=` application
+- [x] Preserve foreign (non-`memo=zsh-pulse`) `region_highlight` entries across publish, clear, bailout, and unpublishable paths by merging/replacing only owned entries and invalidating stale owned publish state for recovery
+- [x] Implement per-context lexical `--` end-of-options handling so operands after `--` are not highlighted as options, with correct resets across command boundaries and command-context entry
+- [x] Tokenize process substitutions `<(...)` and `>(...)` (including optional fd prefixes) as substitutions, lex/highlight inner command lists, and preserve correct `--` scoping within substitutions
+- [x] Add bounded wrapper/precommand command discovery for `command`, `builtin`, `exec`, `noglob`, `nocorrect`, `nice`, `nohup`, `time`, `env`, and `sudo` (common option/option-argument forms, `--`, and `env` assignments)
+- [x] Add allowlisted subcommand detection for `git`, `cargo`, `docker`, `kubectl`, and `npm`, including bounded second-level nested subcommands for selected `docker`/`git` groups with heuristic option-argument consumption (schema-unaware)
+- [x] Expand lexer and zsh-module test coverage (unit/incremental, integration, and PTY) and pass formatting, targeted crate tests, and `cargo test --workspace`
+- [ ] Add command-schema/option-arity awareness and general multi-level CLI grammar support
+- [ ] Improve non-exhaustive process-substitution/composition parity and address broader Phase 2–4 grammar/dynamic parity gaps
+
+
 ---
 
 ## Part II: Research Spikes & Foundational Stages (Stages B–E)

@@ -26,8 +26,7 @@ use core::ffi::{c_char, c_int, c_void};
 pub type Options = *mut c_char;
 
 /// zsh's `HandlerFunc` (`zsh-src/Src/zsh.h:1436`)
-pub type HandlerFunc =
-    unsafe extern "C" fn(*mut c_char, *mut *mut c_char, Options, c_int) -> c_int;
+pub type HandlerFunc = unsafe extern "C" fn(*mut c_char, *mut *mut c_char, Options, c_int) -> c_int;
 
 /// zsh's `Module`: opaque handle passed to every module entry point.
 pub type Module = *mut c_void;
@@ -108,7 +107,6 @@ pub type ModuleFeaturesFunc = unsafe extern "C" fn(Module, *mut *mut *mut c_char
 
 /// Type of the `enables_` entry point. (`zsh-src/Src/zsh.h:1537`)
 pub type ModuleEnablesFunc = unsafe extern "C" fn(Module, *mut *mut c_int) -> c_int;
-
 
 /// Names of the zsh symbols this module resolves at load time.
 ///
@@ -202,8 +200,10 @@ pub mod dl {
 
 #[cfg(test)]
 mod layout_tests {
-    use super::*;
-    use core::mem::{align_of, size_of};
+    use {
+        super::*,
+        core::mem::{align_of, size_of},
+    };
 
     // Exact sizes observed on x86_64 Linux against zsh 5.9.2. These assertions
     // are what stops us writing a subtly-wrong struct into zsh's builtin table.

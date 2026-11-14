@@ -35,10 +35,12 @@ pub mod guard;
 pub mod probe;
 pub mod raw;
 
-pub use guard::{guard, is_degraded};
-pub use probe::{Capabilities, REQUIRED_SYMBOLS};
-pub use api::{Api, CappedRead, GetAparamFn};
-pub use raw::{Builtin, CStr, HashNode, Module, Options};
+pub use {
+    api::{Api, CappedRead, GetAparamFn},
+    guard::{guard, is_degraded},
+    probe::{Capabilities, REQUIRED_SYMBOLS},
+    raw::{Builtin, CStr, HashNode, Module, Options},
+};
 
 /// Name this module registers its builtins under.
 pub const BUILTIN_PREFIX: &str = "zsh-pulse-";
@@ -77,6 +79,10 @@ mod tests {
 
     #[test]
     fn builtin_prefix_has_no_illegal_characters() {
-        assert!(BUILTIN_PREFIX.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'));
+        assert!(
+            BUILTIN_PREFIX
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+        );
     }
 }

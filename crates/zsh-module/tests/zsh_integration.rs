@@ -54,13 +54,16 @@ fn no_garbage_names_appear_in_the_builtin_table() {
     let mut lines: Vec<&str> = out.lines().filter(|l| l.contains("zsh-pulse")).collect();
     lines.sort_unstable();
     let mut expected = Vec::new();
-    #[cfg(any(feature = "autocomplete", feature = "history", feature = "history-navigation"))]
+    #[cfg(any(
+        feature = "autocomplete",
+        feature = "history",
+        feature = "history-navigation"
+    ))]
     expected.push("zsh-pulse-complete");
     #[cfg(feature = "highlight")]
     expected.push("zsh-pulse-highlight");
     assert_eq!(
-        lines,
-        expected,
+        lines, expected,
         "unexpected entries in the builtin table: {lines:?}"
     );
 }
@@ -124,10 +127,18 @@ fn loading_twice_is_harmless() {
          whence -w zsh-pulse-highlight\n",
         mp = mp.display()
     );
-    let out = Command::new("zsh").arg("-f").arg("-c").arg(&script).output().expect("zsh");
+    let out = Command::new("zsh")
+        .arg("-f")
+        .arg("-c")
+        .arg(&script)
+        .output()
+        .expect("zsh");
     let text = String::from_utf8_lossy(&out.stdout).into_owned();
     assert!(out.status.success(), "second load broke the shell: {text}");
-    assert!(text.contains("builtin"), "builtin lost after reload: {text}");
+    assert!(
+        text.contains("builtin"),
+        "builtin lost after reload: {text}"
+    );
 }
 
 #[test]
@@ -160,7 +171,10 @@ fn worker_thread_runs_inside_real_zsh_and_answers() {
         out.contains("worker ready"),
         "the worker never reported ready; {out}"
     );
-    assert!(out.contains("WORKER_PATH_OK"), "shell did not finish: {out}");
+    assert!(
+        out.contains("WORKER_PATH_OK"),
+        "shell did not finish: {out}"
+    );
 
     // zsh is single-threaded; if we added ours there must be more than one.
     let threads = out
@@ -196,7 +210,10 @@ fn zsh_survives_signals_delivered_while_a_worker_is_alive() {
     // covers the crash case too.
     assert!(ok, "zsh died while signals hit a live worker thread: {out}");
     assert!(out.contains("SIGNALS_SURVIVED"), "loop aborted: {out}");
-    assert!(out.contains("STILL_WORKS"), "builtin broke after signals: {out}");
+    assert!(
+        out.contains("STILL_WORKS"),
+        "builtin broke after signals: {out}"
+    );
 }
 
 #[test]
@@ -213,7 +230,10 @@ fn a_missing_module_fails_cleanly_and_the_shell_survives() {
         .output()
         .expect("zsh");
     let text = String::from_utf8_lossy(&out.stdout);
-    assert!(text.contains("SHELL_STILL_WORKS"), "shell did not survive: {text}");
+    assert!(
+        text.contains("SHELL_STILL_WORKS"),
+        "shell did not survive: {text}"
+    );
     assert!(out.status.success(), "shell exited badly: {text}");
 }
 
@@ -272,7 +292,10 @@ fn reads_live_buffer_and_cursor_from_inside_zsh() {
     );
     // CURSOR is parsed to an i64, so it reports as `Some(n)` rather than a
     // quoted string.
-    assert!(out.contains("CURSOR=Some(24)"), "CURSOR not read correctly: {out}");
+    assert!(
+        out.contains("CURSOR=Some(24)"),
+        "CURSOR not read correctly: {out}"
+    );
 }
 
 #[test]
@@ -542,7 +565,11 @@ fn the_adapter_is_valid_zsh_and_does_not_break_the_shell() {
     // The adapter is what a user sources from their `.zshrc`. It must parse,
     // and sourcing it in a shell without a terminal must not fail.
     let adapter = adapter_path();
-    assert!(adapter.exists(), "the adapter is missing at {}", adapter.display());
+    assert!(
+        adapter.exists(),
+        "the adapter is missing at {}",
+        adapter.display()
+    );
 
     let out = Command::new("zsh")
         .arg("-n")
@@ -571,7 +598,10 @@ fn the_adapter_is_valid_zsh_and_does_not_break_the_shell() {
         .expect("run zsh");
     let text = String::from_utf8_lossy(&out.stdout).into_owned();
     assert!(out.status.success(), "sourcing the adapter failed: {text}");
-    assert!(text.contains("ADAPTER_OK"), "the adapter broke the shell: {text}");
+    assert!(
+        text.contains("ADAPTER_OK"),
+        "the adapter broke the shell: {text}"
+    );
     assert!(
         text.contains("zsh-pulse-highlight: builtin"),
         "the module was not loaded: {text}"
@@ -670,12 +700,19 @@ fn every_adapter_file_parses() {
     require_zsh!();
     // A syntax error in `widgets.zsh` makes the `source` inside `init.zsh`
     // fail, and zsh carries on — so the adapter would look half-installed.
-    let dir = adapter_path().parent().expect("the zsh directory").to_path_buf();
+    let dir = adapter_path()
+        .parent()
+        .expect("the zsh directory")
+        .to_path_buf();
     let mut checked = 0;
     for entry in std::fs::read_dir(&dir).expect("read the zsh directory") {
         let path = entry.expect("a directory entry").path();
         if path.extension().is_some_and(|e| e == "zsh") {
-            let out = Command::new("zsh").arg("-n").arg(&path).output().expect("run zsh -n");
+            let out = Command::new("zsh")
+                .arg("-n")
+                .arg(&path)
+                .output()
+                .expect("run zsh -n");
             assert!(
                 out.status.success(),
                 "{} does not parse: {}",
@@ -685,7 +722,10 @@ fn every_adapter_file_parses() {
             checked += 1;
         }
     }
-    assert!(checked >= 2, "expected the adapter to be more than one file");
+    assert!(
+        checked >= 2,
+        "expected the adapter to be more than one file"
+    );
 }
 
 #[test]
@@ -911,7 +951,10 @@ fn the_shells_own_tables_decide_what_the_shell_knows() {
         ("if", "fg=yellow"),
     ];
     for (word, attr) in cases {
-        let expected = format!("WORD={word} REGIONS=<0 {} {attr} memo=zsh-pulse>", word.len());
+        let expected = format!(
+            "WORD={word} REGIONS=<0 {} {attr} memo=zsh-pulse>",
+            word.len()
+        );
         assert!(
             out.contains(&expected),
             "the shell knows `{word}` through its own tables, so it must have attribute {attr}: {out}"
@@ -1035,9 +1078,7 @@ fn a_leading_assignment_does_not_hide_the_command() {
     // is not an assignment.
     let out = regions_for("FOO=bar ls");
     assert!(
-        out.contains(
-            "REGIONS=<0 7 fg=yellow memo=zsh-pulse,8 10 fg=green memo=zsh-pulse>"
-        ),
+        out.contains("REGIONS=<0 7 fg=yellow memo=zsh-pulse,8 10 fg=green memo=zsh-pulse>"),
         "the command word is the first word that is not an assignment: {out}"
     );
 }
@@ -1203,9 +1244,7 @@ fn an_option_is_cyan() {
     require_zsh!();
     let out = regions_for("git commit --amend");
     assert!(
-        out.contains(
-            "REGIONS=<0 3 fg=green memo=zsh-pulse,11 18 fg=cyan memo=zsh-pulse>"
-        ),
+        out.contains("REGIONS=<0 3 fg=green memo=zsh-pulse,11 18 fg=cyan memo=zsh-pulse>"),
         "an option must be cyan: {out}"
     );
 }
@@ -1235,7 +1274,10 @@ fn words_after_double_dash_are_not_options_on_zsh() {
 fn existing_paths() -> (std::path::PathBuf, std::path::PathBuf) {
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("zsh-pulse-path-test-{}-{count}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!(
+        "zsh-pulse-path-test-{}-{count}",
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create the test directory");
     let file = dir.join("a-file");
@@ -1348,10 +1390,7 @@ fn a_bare_file_name_is_magenta() {
     // as `./Cargo.toml` does. The reference implementation looks every
     // word up (`research/upstream/fsh/fast-highlight:1265-1295`), and so
     // does this one.
-    let dir = std::env::temp_dir().join(format!(
-        "zsh-pulse-bare-name-test-{}",
-        std::process::id()
-    ));
+    let dir = std::env::temp_dir().join(format!("zsh-pulse-bare-name-test-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("create the test directory");
     std::fs::write(dir.join("a-file"), b"a file\n").expect("write the test file");
     let out = regions_for_in(&dir, "cat a-file");
@@ -1364,10 +1403,7 @@ fn a_bare_file_name_is_magenta() {
 #[test]
 fn a_bare_directory_name_is_magenta_and_underlined() {
     require_zsh!();
-    let dir = std::env::temp_dir().join(format!(
-        "zsh-pulse-bare-dir-test-{}",
-        std::process::id()
-    ));
+    let dir = std::env::temp_dir().join(format!("zsh-pulse-bare-dir-test-{}", std::process::id()));
     // The directory is removed first: a run that left it behind would
     // find the name already there, and the first half of this test would
     // fail.
@@ -1406,7 +1442,11 @@ fn an_append_assignment_does_not_hide_the_command() {
 }
 
 #[test]
-#[cfg(any(feature = "autocomplete", feature = "history", feature = "history-navigation"))]
+#[cfg(any(
+    feature = "autocomplete",
+    feature = "history",
+    feature = "history-navigation"
+))]
 fn complete_builtin_populates_matches_for_files() {
     require_zsh!();
     let (ok, out) = run_zsh(
@@ -1459,7 +1499,11 @@ fn typeahead_line_cap_follows_the_terminal_and_buffer_height() {
 }
 
 #[test]
-#[cfg(any(feature = "autocomplete", feature = "history", feature = "history-navigation"))]
+#[cfg(any(
+    feature = "autocomplete",
+    feature = "history",
+    feature = "history-navigation"
+))]
 fn complete_builtin_on_large_dir_does_not_hang() {
     require_zsh!();
     let store = std::path::Path::new("/nix/store");
@@ -1477,10 +1521,7 @@ fn complete_builtin_on_large_dir_does_not_hang() {
         elapsed < std::time::Duration::from_millis(500),
         "completion took too long: {elapsed:?}"
     );
-    assert!(
-        out.contains("m3y7"),
-        "expected /nix/store match: {out}"
-    );
+    assert!(out.contains("m3y7"), "expected /nix/store match: {out}");
 }
 
 #[test]
@@ -1543,7 +1584,11 @@ fn brackets_inside_double_quotes_do_not_break_outer_brackets_on_zsh() {
 }
 
 #[test]
-#[cfg(any(feature = "autocomplete", feature = "history", feature = "history-navigation"))]
+#[cfg(any(
+    feature = "autocomplete",
+    feature = "history",
+    feature = "history-navigation"
+))]
 fn complete_builtin_tilde_expansion_preserves_tilde_slash() {
     require_zsh!();
 

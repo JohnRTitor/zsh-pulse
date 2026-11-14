@@ -276,12 +276,7 @@ mod tests {
 
     #[test]
     fn top_k_ranking_returns_best_sorted() {
-        let items: &[&[u8]] = &[
-            b"arbitrary_string",
-            b"checkout",
-            b"check",
-            b"che",
-        ];
+        let items: &[&[u8]] = &[b"arbitrary_string", b"checkout", b"check", b"che"];
         let ranked = rank_top_k(items.len(), |i| items[i], b"che", 2);
         assert_eq!(ranked.len(), 2);
         assert_eq!(items[ranked[0].index], b"che"); // exact match first

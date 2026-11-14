@@ -9,8 +9,7 @@
 //! The generator is a small deterministic PRNG, so a failure is
 //! reproducible: the seed is part of the test name.
 
-use crate::incremental::LexCache;
-use crate::lex;
+use crate::{incremental::LexCache, lex};
 
 /// A tiny xorshift generator.
 ///
@@ -37,8 +36,7 @@ impl Rng {
 ///
 /// It mixes the characters that make the lexer interesting: quotes, dollars,
 /// backslashes, redirections, operators and blanks.
-const ALPHABET: &[u8] =
-    b"ab cd'\"`$\\<>|&;(){}=*?#~!-\n\t0123456789";
+const ALPHABET: &[u8] = b"ab cd'\"`$\\<>|&;(){}=*?#~!-\n\t0123456789";
 
 /// A random line, built to be *mostly* lexable.
 fn random_line(rng: &mut Rng, len: usize) -> String {
@@ -153,7 +151,9 @@ fn check_resume_points_are_consistent(cache: &LexCache, text: &str) {
             "resume point {rp:?} is past the end of {text:?}"
         );
         assert!(
-            bytes[guard..offset].iter().all(|b| *b == b' ' || *b == b'\t'),
+            bytes[guard..offset]
+                .iter()
+                .all(|b| *b == b' ' || *b == b'\t'),
             "resume point {rp:?} has a guard that is not the end of the \
              previous unit: {text:?}"
         );
@@ -217,7 +217,9 @@ fn typing_a_whole_line_one_character_at_a_time_always_agrees() {
             };
             // Re-lex from the *previous* line, the way the module does.
             let mut incremental = LexCache::new();
-            incremental.lex(previous.as_bytes()).expect("the previous line scans");
+            incremental
+                .lex(previous.as_bytes())
+                .expect("the previous line scans");
             incremental
                 .relex_incremental(typed.as_bytes())
                 .expect("the typed line scans");
@@ -249,7 +251,11 @@ fn deleting_characters_one_at_a_time_always_agrees() {
                 Err(_) => break,
             };
             cache.relex_incremental(line.as_bytes()).expect("relex");
-            assert_eq!(cache.tokens(), full.tokens.as_slice(), "after deleting from {original:?}");
+            assert_eq!(
+                cache.tokens(),
+                full.tokens.as_slice(),
+                "after deleting from {original:?}"
+            );
             check_resume_points_are_consistent(&cache, &line);
         }
     }

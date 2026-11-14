@@ -30,7 +30,7 @@
 
 #![forbid(unsafe_code)]
 
-use highlight::{char_offset, HighlightSpan, StyleId};
+use highlight::{HighlightSpan, StyleId, char_offset};
 
 /// The `memo=` token that identifies our entries.
 pub const MEMO: &str = "memo=zsh-pulse";
@@ -74,56 +74,55 @@ pub fn merge_entries(existing: &[String], ours: &[std::ffi::CString]) -> Vec<std
 /// `None` means "leave this alone": an ordinary argument is shown exactly as
 /// the user typed it, which is also what zsh would do without us.
 ///
-/// The colours are the ones the reference implementation uses
-/// (`research/upstream/fsh/fast-highlight:58-93`):
-///
-/// | style | reference | attribute |
-/// |---|---|---|
-/// | a command the shell knows | `command` | `fg=green` |
-/// | a command the shell does not know | `unknown-token` | `fg=red,bold` |
-/// | an option | `double-hyphen-option` | `fg=cyan` |
-/// | a path | `path` | `fg=magenta` |
-/// | a directory | `path-to-dir` | `fg=magenta,underline` |
-///
-/// zsh's attribute parser accepts all of them: `match_highlight`
-/// (`research/upstream/zsh-src/Src/prompt.c:2031`) reads the colour after
-/// `fg=`, skips the `,` and then reads the attributes — `bold`,
-/// `underline` and the rest — from the `highlights[]` table
-/// (`research/upstream/zsh-src/Src/prompt.c:1896`).
+/// The defaults aim to match zsh-patina's default theme as closely as the
+/// current `StyleId` set allows (hard-coded, no theme/config foundation).
+/// Mappings are constrained by the styles the highlighter distinguishes
+/// today.
+/// TODO: will do finer-grained token kinds.
 pub fn attribute(style: StyleId) -> Option<&'static str> {
     match style {
-        // The shell knows this command: it is an alias, a function, a
-        // builtin, a command on `$PATH` or a suffix alias. The reference
-        // colours all of those green.
-        StyleId::Command => Some("fg=green"),
-        // The shell does not know this command. The reference calls this
-        // `unknown-token` and makes it bold, so that it stands out.
+        // callable-known (patina `dynamic.callable`): cyan.
+        StyleId::Command => Some("fg=cyan"),
+        // callable-missing (patina `dynamic.callable.missing`): red.
+        // Bold is kept for visibility; patina specifies colour, not weight.
         StyleId::UnknownCommand => Some("fg=red,bold"),
-        // A reserved word (`if`, `then`, `for`, `while`, `[[`, etc.).
-        // The reference implementation colours these yellow.
-        StyleId::ReservedWord => Some("fg=yellow"),
-        // A global alias. The reference implementation uses a blue background.
+        // keyword (patina `keyword`): blue.
+        StyleId::ReservedWord => Some("fg=blue"),
+        // global alias: no dedicated patina key; keep a distinct highlight.
         StyleId::GlobalAlias => Some("bg=blue"),
-        // The reference has one style for a single hyphen and one for a
-        // double hyphen; both are cyan.
+        // options/flags: no dedicated patina key; keep cyan.
         StyleId::Option => Some("fg=cyan"),
-        // A path is magenta; a directory is underlined as well, so that the
-        // two can be told apart at a glance.
-        StyleId::Path => Some("fg=magenta"),
-        StyleId::PathToDir => Some("fg=magenta,underline"),
-        StyleId::Assignment => Some("fg=yellow"),
-        StyleId::SingleQuoted => Some("fg=yellow"),
-        StyleId::DoubleQuoted => Some("fg=yellow"),
-        StyleId::Escape => Some("fg=magenta"),
-        StyleId::Comment => Some("fg=blue"),
-        StyleId::Operator => Some("fg=red"),
-        StyleId::Redirect => Some("fg=red"),
-        StyleId::Substitution => Some("fg=magenta"),
-        StyleId::ParamExpansion => Some("fg=cyan"),
+        // dynamic.path (patina): underline. Directory keeps the underline;
+        // without a distinct "path type" style it cannot be told apart yet.
+        StyleId::Path => Some("underline"),
+        StyleId::PathToDir => Some("underline"),
+        // storage / variable assignment (patina `storage`): blue.
+        StyleId::Assignment => Some("fg=blue"),
+        // string (patina `string`): green.
+        StyleId::SingleQuoted | StyleId::DoubleQuoted | StyleId::Heredoc => Some("fg=green"),
+        // constant.character.escape (patina): yellow.
+        StyleId::Escape => Some("fg=yellow"),
+        // comment (patina): #a0a0a0. zsh attributes only support the 8
+        // named colours, so this is the closest available mapping.
+        StyleId::Comment => Some("fg=white"),
+        // operators/punctuation: no exact patina key in this set; keep red.
+        StyleId::Operator | StyleId::Redirect => Some("fg=red"),
+        // command substitution / grouping punctuation: patina resets command
+        // substitution parens to terminal defaults; with a single style we
+        // leave the construct uncoloured rather than miscolour it.
+        StyleId::Substitution => None,
+        // variable/parameter expansion (patina `variable.other` /
+        // `punctuation.definition.variable`): yellow.
+        StyleId::ParamExpansion => Some("fg=yellow"),
+        // globs: no dedicated patina key; keep a visible style.
         StyleId::Glob => Some("fg=blue,bold"),
-        StyleId::Heredoc => Some("fg=green"),
-        StyleId::PairedBracket => Some("bg=blue"),
+        // bracket pair highlight at cursor: patina `punctuation.section` is
+        // yellow; standout keeps it readable against the cursor context.
+        StyleId::PairedBracket => Some("fg=yellow,bold"),
+        // unmatched bracket: patina marks errors red.
         StyleId::BracketError => Some("fg=red,bold"),
+        // A recognized subcommand (adapter-provided): mark as callable/prominent.
+        StyleId::Subcommand => Some("fg=cyan"),
         StyleId::Argument => None,
     }
 }
@@ -164,7 +163,9 @@ impl Entries {
     fn build_into(&mut self, spans: &[HighlightSpan], offsets: Option<&[u32]>) -> bool {
         let mut truncated = false;
         for span in spans {
-            let Some(attr) = attribute(span.style) else { continue };
+            let Some(attr) = attribute(span.style) else {
+                continue;
+            };
             if self.count >= MAX_ENTRIES {
                 truncated = true;
                 break;
@@ -300,8 +301,7 @@ fn write_number(out: &mut Vec<u8>, mut n: u32) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use highlight::StyleId;
+    use {super::*, highlight::StyleId};
 
     #[test]
     fn an_argument_is_not_highlighted() {
@@ -310,15 +310,27 @@ mod tests {
     }
 
     #[test]
-    fn the_new_styles_have_the_attributes_the_reference_uses() {
-        // The exact strings matter: they are what zsh parses, and the
-        // reference implementation is what the user is comparing against
-        // (`research/upstream/fsh/fast-highlight:58-93`).
-        assert_eq!(attribute(StyleId::Command), Some("fg=green"));
+    fn styles_match_patina_default_intent_where_representable() {
+        // Patina defaults (see /tmp/opencode/zsh-patina/themes/patina.toml):
+        // callable-known cyan, callable-missing red, keyword/storage blue,
+        // string green, escape yellow, comment #a0a0a0 (approximated),
+        // parameter/variable yellow, dynamic.path underline.
+        assert_eq!(attribute(StyleId::Command), Some("fg=cyan"));
         assert_eq!(attribute(StyleId::UnknownCommand), Some("fg=red,bold"));
-        assert_eq!(attribute(StyleId::Option), Some("fg=cyan"));
-        assert_eq!(attribute(StyleId::Path), Some("fg=magenta"));
-        assert_eq!(attribute(StyleId::PathToDir), Some("fg=magenta,underline"));
+        assert_eq!(attribute(StyleId::ReservedWord), Some("fg=blue"));
+        assert_eq!(attribute(StyleId::Assignment), Some("fg=blue"));
+        assert_eq!(attribute(StyleId::SingleQuoted), Some("fg=green"));
+        assert_eq!(attribute(StyleId::DoubleQuoted), Some("fg=green"));
+        assert_eq!(attribute(StyleId::Heredoc), Some("fg=green"));
+        assert_eq!(attribute(StyleId::Escape), Some("fg=yellow"));
+        assert_eq!(attribute(StyleId::Comment), Some("fg=white"));
+        assert_eq!(attribute(StyleId::ParamExpansion), Some("fg=yellow"));
+        assert_eq!(attribute(StyleId::Path), Some("underline"));
+        assert_eq!(attribute(StyleId::PathToDir), Some("underline"));
+        assert_eq!(attribute(StyleId::PairedBracket), Some("fg=yellow,bold"));
+        assert_eq!(attribute(StyleId::BracketError), Some("fg=red,bold"));
+        // Patina resets command substitution parens to terminal defaults.
+        assert_eq!(attribute(StyleId::Substitution), None);
     }
 
     #[test]
@@ -336,9 +348,7 @@ mod tests {
             "black", "red", "green", "yellow", "blue", "magenta", "cyan", "white",
         ];
         // The `highlights[]` table of `research/upstream/zsh-src/Src/prompt.c:1896`.
-        const ATTRIBUTES: [&str; 6] = [
-            "reset", "bold", "faint", "standout", "underline", "italic",
-        ];
+        const ATTRIBUTES: [&str; 6] = ["reset", "bold", "faint", "standout", "underline", "italic"];
         for style in [
             StyleId::Command,
             StyleId::UnknownCommand,
@@ -360,22 +370,20 @@ mod tests {
             StyleId::Heredoc,
             StyleId::PairedBracket,
             StyleId::BracketError,
+            StyleId::Subcommand,
         ] {
-            let Some(attr) = attribute(style) else { continue };
-            let mut parts = attr.split(',');
-            let colour = parts.next().expect("at least one part");
-            let colour_name = colour
-                .strip_prefix("fg=")
-                .or_else(|| colour.strip_prefix("bg="))
-                .unwrap_or(colour);
-            assert!(
-                COLOURS.contains(&colour_name),
-                "{style:?} has the colour {colour_name:?}, which zsh does not know"
-            );
-            for extra in parts {
+            let Some(attr) = attribute(style) else {
+                continue;
+            };
+            for part in attr.split(',') {
+                let is_colour = part
+                    .strip_prefix("fg=")
+                    .or_else(|| part.strip_prefix("bg="))
+                    .is_some_and(|name| COLOURS.contains(&name));
+                let is_attribute = ATTRIBUTES.contains(&part);
                 assert!(
-                    ATTRIBUTES.contains(&extra),
-                    "{style:?} has the attribute {extra:?}, which zsh does not know"
+                    is_colour || is_attribute,
+                    "{style:?} has the token {part:?}, which zsh does not know"
                 );
             }
         }
@@ -391,7 +399,7 @@ mod tests {
         let rows = entries.rows();
         assert_eq!(rows.len(), 1);
         // `'héllo'` starts at character 5 and is six characters long.
-        assert_eq!(rows[0].to_bytes(), b"5 11 fg=yellow memo=zsh-pulse");
+        assert_eq!(rows[0].to_bytes(), b"5 11 fg=green memo=zsh-pulse");
     }
 
     #[test]
@@ -399,7 +407,7 @@ mod tests {
         let spans = [HighlightSpan::new(0, 4, StyleId::Command)];
         let mut entries = Entries::new();
         entries.build(&spans, None);
-        assert_eq!(entries.rows()[0].to_bytes(), b"0 4 fg=green memo=zsh-pulse");
+        assert_eq!(entries.rows()[0].to_bytes(), b"0 4 fg=cyan memo=zsh-pulse");
     }
 
     #[test]
@@ -408,28 +416,39 @@ mod tests {
         let spans = [
             HighlightSpan::new(0, 4, StyleId::Command),
             HighlightSpan::new(5, 7, StyleId::Argument),
+            // Patina resets command substitution parens; unstyled spans are skipped.
+            HighlightSpan::new(0, 1, StyleId::Substitution),
         ];
         let mut entries = Entries::new();
         entries.build(&spans, Some(&offsets));
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries.rows()[0].to_bytes(), b"0 4 fg=green memo=zsh-pulse");
+        assert_eq!(entries.rows()[0].to_bytes(), b"0 4 fg=cyan memo=zsh-pulse");
     }
 
     #[test]
     fn the_output_buffer_is_reused() {
         let offsets = highlight::char_offsets(b"echo hi");
         let mut entries = Entries::new();
-        entries.build(&[HighlightSpan::new(0, 4, StyleId::Command)], Some(&offsets));
+        entries.build(
+            &[HighlightSpan::new(0, 4, StyleId::Command)],
+            Some(&offsets),
+        );
         assert_eq!(entries.len(), 1);
         entries.build(&[], Some(&offsets));
-        assert!(entries.is_empty(), "the buffer must be cleared, not appended to");
+        assert!(
+            entries.is_empty(),
+            "the buffer must be cleared, not appended to"
+        );
     }
 
     #[test]
     fn an_empty_region_is_not_emitted() {
         let offsets = highlight::char_offsets(b"echo");
         let mut entries = Entries::new();
-        entries.build(&[HighlightSpan::new(2, 2, StyleId::Command)], Some(&offsets));
+        entries.build(
+            &[HighlightSpan::new(2, 2, StyleId::Command)],
+            Some(&offsets),
+        );
         assert!(entries.is_empty());
     }
 

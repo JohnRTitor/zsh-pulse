@@ -170,76 +170,70 @@ pub fn analyze_brackets(buffer: &[u8]) -> BracketAnalysis {
             b'[' => {
                 stack.push(Delimiter::Bracket(pos));
             }
-            b')' => {
-                match stack.pop() {
-                    Some(Delimiter::Paren(open)) | Some(Delimiter::CmdSubst(open)) => {
-                        pairs.push(BracketPair { open, close: pos });
-                    }
-                    Some(other) => {
-                        let open = match other {
-                            Delimiter::Brace(p)
-                            | Delimiter::Bracket(p)
-                            | Delimiter::ParamExp(p)
-                            | Delimiter::DoubleQuote(p)
-                            | Delimiter::SingleQuote(p)
-                            | Delimiter::Backtick(p) => p,
-                            _ => pos,
-                        };
-                        errors.push(open);
-                        errors.push(pos);
-                    }
-                    None => {
-                        errors.push(pos);
-                    }
+            b')' => match stack.pop() {
+                Some(Delimiter::Paren(open)) | Some(Delimiter::CmdSubst(open)) => {
+                    pairs.push(BracketPair { open, close: pos });
                 }
-            }
-            b'}' => {
-                match stack.pop() {
-                    Some(Delimiter::Brace(open)) | Some(Delimiter::ParamExp(open)) => {
-                        pairs.push(BracketPair { open, close: pos });
-                    }
-                    Some(other) => {
-                        let open = match other {
-                            Delimiter::Paren(p)
-                            | Delimiter::Bracket(p)
-                            | Delimiter::CmdSubst(p)
-                            | Delimiter::DoubleQuote(p)
-                            | Delimiter::SingleQuote(p)
-                            | Delimiter::Backtick(p) => p,
-                            _ => pos,
-                        };
-                        errors.push(open);
-                        errors.push(pos);
-                    }
-                    None => {
-                        errors.push(pos);
-                    }
+                Some(other) => {
+                    let open = match other {
+                        Delimiter::Brace(p)
+                        | Delimiter::Bracket(p)
+                        | Delimiter::ParamExp(p)
+                        | Delimiter::DoubleQuote(p)
+                        | Delimiter::SingleQuote(p)
+                        | Delimiter::Backtick(p) => p,
+                        _ => pos,
+                    };
+                    errors.push(open);
+                    errors.push(pos);
                 }
-            }
-            b']' => {
-                match stack.pop() {
-                    Some(Delimiter::Bracket(open)) => {
-                        pairs.push(BracketPair { open, close: pos });
-                    }
-                    Some(other) => {
-                        let open = match other {
-                            Delimiter::Paren(p)
-                            | Delimiter::Brace(p)
-                            | Delimiter::CmdSubst(p)
-                            | Delimiter::ParamExp(p)
-                            | Delimiter::DoubleQuote(p)
-                            | Delimiter::SingleQuote(p)
-                            | Delimiter::Backtick(p) => p,
-                            _ => pos,
-                        };
-                        errors.push(open);
-                        errors.push(pos);
-                    }
-                    None => {
-                        errors.push(pos);
-                    }
+                None => {
+                    errors.push(pos);
                 }
-            }
+            },
+            b'}' => match stack.pop() {
+                Some(Delimiter::Brace(open)) | Some(Delimiter::ParamExp(open)) => {
+                    pairs.push(BracketPair { open, close: pos });
+                }
+                Some(other) => {
+                    let open = match other {
+                        Delimiter::Paren(p)
+                        | Delimiter::Bracket(p)
+                        | Delimiter::CmdSubst(p)
+                        | Delimiter::DoubleQuote(p)
+                        | Delimiter::SingleQuote(p)
+                        | Delimiter::Backtick(p) => p,
+                        _ => pos,
+                    };
+                    errors.push(open);
+                    errors.push(pos);
+                }
+                None => {
+                    errors.push(pos);
+                }
+            },
+            b']' => match stack.pop() {
+                Some(Delimiter::Bracket(open)) => {
+                    pairs.push(BracketPair { open, close: pos });
+                }
+                Some(other) => {
+                    let open = match other {
+                        Delimiter::Paren(p)
+                        | Delimiter::Brace(p)
+                        | Delimiter::CmdSubst(p)
+                        | Delimiter::ParamExp(p)
+                        | Delimiter::DoubleQuote(p)
+                        | Delimiter::SingleQuote(p)
+                        | Delimiter::Backtick(p) => p,
+                        _ => pos,
+                    };
+                    errors.push(open);
+                    errors.push(pos);
+                }
+                None => {
+                    errors.push(pos);
+                }
+            },
             _ => {}
         }
 
@@ -271,7 +265,11 @@ pub fn bracket_spans(buffer: &[u8], cursor_byte: Option<usize>) -> Vec<Highlight
 
     // 1. Errors: unclosed or mismatched brackets/quotes
     for err_pos in analysis.errors {
-        spans.push(HighlightSpan::new(err_pos, err_pos + 1, StyleId::BracketError));
+        spans.push(HighlightSpan::new(
+            err_pos,
+            err_pos + 1,
+            StyleId::BracketError,
+        ));
     }
 
     // 2. Cursor touch: cursor touching either opening or closing of a pair.
@@ -295,8 +293,16 @@ pub fn bracket_spans(buffer: &[u8], cursor_byte: Option<usize>) -> Vec<Highlight
         }
 
         if let Some(pair) = best_pair {
-            spans.push(HighlightSpan::new(pair.open, pair.open + 1, StyleId::PairedBracket));
-            spans.push(HighlightSpan::new(pair.close, pair.close + 1, StyleId::PairedBracket));
+            spans.push(HighlightSpan::new(
+                pair.open,
+                pair.open + 1,
+                StyleId::PairedBracket,
+            ));
+            spans.push(HighlightSpan::new(
+                pair.close,
+                pair.close + 1,
+                StyleId::PairedBracket,
+            ));
         }
     }
 
@@ -337,28 +343,30 @@ mod tests {
     fn unclosed_bracket_is_error() {
         let line = b"echo (hello";
         let spans = bracket_spans(line, None);
-        assert_eq!(
-            spans,
-            vec![HighlightSpan::new(5, 6, StyleId::BracketError)]
-        );
+        assert_eq!(spans, vec![HighlightSpan::new(5, 6, StyleId::BracketError)]);
     }
 
     #[test]
     fn unclosed_quote_is_error() {
         let line = b"echo \"hello";
         let spans = bracket_spans(line, None);
-        assert_eq!(
-            spans,
-            vec![HighlightSpan::new(5, 6, StyleId::BracketError)]
-        );
+        assert_eq!(spans, vec![HighlightSpan::new(5, 6, StyleId::BracketError)]);
     }
 
     #[test]
     fn mismatched_bracket_is_error() {
         let line = b"echo (hello]";
         let spans = bracket_spans(line, None);
-        assert!(spans.iter().any(|s| s.start == 5 && s.style == StyleId::BracketError));
-        assert!(spans.iter().any(|s| s.start == 11 && s.style == StyleId::BracketError));
+        assert!(
+            spans
+                .iter()
+                .any(|s| s.start == 5 && s.style == StyleId::BracketError)
+        );
+        assert!(
+            spans
+                .iter()
+                .any(|s| s.start == 11 && s.style == StyleId::BracketError)
+        );
     }
 
     #[test]
@@ -376,7 +384,11 @@ mod tests {
     fn brackets_inside_double_quotes_do_not_interfere() {
         let line = b"echo ( \"foo ) bar\" )";
         let analysis = analyze_brackets(line);
-        assert!(analysis.errors.is_empty(), "expected 0 errors, got: {:?}", analysis.errors);
+        assert!(
+            analysis.errors.is_empty(),
+            "expected 0 errors, got: {:?}",
+            analysis.errors
+        );
         assert_eq!(analysis.pairs.len(), 2);
         // Outer parens: ( at 5, ) at 19
         assert!(analysis.pairs.contains(&BracketPair { open: 5, close: 19 }));
@@ -388,7 +400,11 @@ mod tests {
     fn nested_command_substitution_quotes() {
         let line = b"echo \"$(echo 'hello')\"";
         let analysis = analyze_brackets(line);
-        assert!(analysis.errors.is_empty(), "expected 0 errors, got: {:?}", analysis.errors);
+        assert!(
+            analysis.errors.is_empty(),
+            "expected 0 errors, got: {:?}",
+            analysis.errors
+        );
         assert_eq!(analysis.pairs.len(), 3);
     }
 }

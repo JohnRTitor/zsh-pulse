@@ -15,11 +15,13 @@
 
 #![forbid(unsafe_code)]
 
-use std::collections::HashSet;
-use std::fs::File;
-use std::io::{self, Read, Seek, SeekFrom};
-use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::{
+    collections::HashSet,
+    fs::File,
+    io::{self, Read, Seek, SeekFrom},
+    path::{Path, PathBuf},
+    time::SystemTime,
+};
 
 /// A single recorded history entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -316,11 +318,17 @@ fn parse_extended_header(line: &[u8]) -> Option<(u64, &[u8])> {
 
 fn clean_and_push_entry(entries: &mut Vec<HistoryEntry>, timestamp: Option<u64>, mut cmd: Vec<u8>) {
     // Trim trailing whitespace or newlines
-    while cmd.last().is_some_and(|&b| b == b'\r' || b == b'\n' || b == b' ' || b == b'\t') {
+    while cmd
+        .last()
+        .is_some_and(|&b| b == b'\r' || b == b'\n' || b == b' ' || b == b'\t')
+    {
         cmd.pop();
     }
     if !cmd.is_empty() {
-        entries.push(HistoryEntry { timestamp, command: cmd });
+        entries.push(HistoryEntry {
+            timestamp,
+            command: cmd,
+        });
     }
 }
 
@@ -333,7 +341,10 @@ mod tests {
         let data = b"cargo build\nls -la\ncargo test\n";
         let history = HistoryIndex::from_bytes(data);
         assert_eq!(history.len(), 3);
-        assert_eq!(history.find_most_recent_prefix(b"cargo"), Some(&b"cargo test"[..]));
+        assert_eq!(
+            history.find_most_recent_prefix(b"cargo"),
+            Some(&b"cargo test"[..])
+        );
         assert_eq!(history.find_most_recent_prefix(b"cargo test"), None); // equal is skipped
     }
 
@@ -342,7 +353,10 @@ mod tests {
         let data = b"git commit \\\n-m \"initial commit\"\nls\n";
         let history = HistoryIndex::from_bytes(data);
         assert_eq!(history.len(), 2);
-        assert_eq!(history.entries[0].command, b"git commit \n-m \"initial commit\"");
+        assert_eq!(
+            history.entries[0].command,
+            b"git commit \n-m \"initial commit\""
+        );
     }
 
     #[test]
@@ -371,7 +385,10 @@ mod tests {
         let history = HistoryIndex::from_bytes(data);
         let results = history.search_prefix(b"cargo", 10);
         // Newest unique first: build, check, test
-        assert_eq!(results, vec![&b"cargo build"[..], &b"cargo check"[..], &b"cargo test"[..]]);
+        assert_eq!(
+            results,
+            vec![&b"cargo build"[..], &b"cargo check"[..], &b"cargo test"[..]]
+        );
     }
 
     #[test]

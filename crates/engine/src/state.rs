@@ -15,7 +15,9 @@ pub struct LineSnapshot {
 impl LineSnapshot {
     /// Create a snapshot at revision 0.
     pub const fn new() -> Self {
-        Self { revision: AtomicU64::new(0) }
+        Self {
+            revision: AtomicU64::new(0),
+        }
     }
 
     /// The current revision.
@@ -45,16 +47,24 @@ pub enum EngineStatus {
     Degraded,
 }
 
-/// The engine's shared state.
-///
-#[cfg(any(feature = "autocomplete", feature = "history", feature = "history-navigation"))]
-use std::path::PathBuf;
 #[cfg(any(feature = "history", feature = "history-navigation"))]
 use std::path::Path;
+/// The engine's shared state.
+///
+#[cfg(any(
+    feature = "autocomplete",
+    feature = "history",
+    feature = "history-navigation"
+))]
+use std::path::PathBuf;
 #[cfg(any(feature = "history", feature = "history-navigation"))]
 use std::sync::RwLock;
 
-#[cfg(any(feature = "autocomplete", feature = "history", feature = "history-navigation"))]
+#[cfg(any(
+    feature = "autocomplete",
+    feature = "history",
+    feature = "history-navigation"
+))]
 use completion::{CompletionContext, CompletionOutcome};
 #[cfg(any(feature = "history", feature = "history-navigation"))]
 use history::HistoryIndex;
@@ -69,7 +79,11 @@ pub struct EngineState {
     #[cfg(feature = "highlight")]
     highlight_calls: AtomicU64,
     /// How many times the completion entry point has been invoked.
-    #[cfg(any(feature = "autocomplete", feature = "history", feature = "history-navigation"))]
+    #[cfg(any(
+        feature = "autocomplete",
+        feature = "history",
+        feature = "history-navigation"
+    ))]
     completion_calls: AtomicU64,
     /// In-memory history index.
     #[cfg(any(feature = "history", feature = "history-navigation"))]
@@ -90,7 +104,11 @@ impl EngineState {
             line: LineSnapshot::new(),
             #[cfg(feature = "highlight")]
             highlight_calls: AtomicU64::new(0),
-            #[cfg(any(feature = "autocomplete", feature = "history", feature = "history-navigation"))]
+            #[cfg(any(
+                feature = "autocomplete",
+                feature = "history",
+                feature = "history-navigation"
+            ))]
             completion_calls: AtomicU64::new(0),
             #[cfg(any(feature = "history", feature = "history-navigation"))]
             history: RwLock::new(HistoryIndex::new()),
@@ -131,7 +149,11 @@ impl EngineState {
     }
 
     /// Total completion invocations.
-    #[cfg(any(feature = "autocomplete", feature = "history", feature = "history-navigation"))]
+    #[cfg(any(
+        feature = "autocomplete",
+        feature = "history",
+        feature = "history-navigation"
+    ))]
     pub fn completion_calls(&self) -> u64 {
         self.completion_calls.load(Ordering::Relaxed)
     }

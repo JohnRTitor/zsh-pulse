@@ -23,8 +23,8 @@ Companion documents: [architecture](architecture.md) ·
 - **Latency Resolution**: In [`bench/bench_zpty.zsh`](../bench/bench_zpty.zsh), the median interactive round-trip is **68.0 µs per keystroke** (versus 45.1 µs without the plugin). The 23 µs difference is dominated by Zsh line editor redraw routines and PTY IPC round-trips. The native Rust module execution itself accounts for ~0.86 µs.
 
 ### 1.3 `region_highlight` Merge and Clearing
-- **Behavior**: `zsh-pulse` tags its regions with `memo=zsh-pulse`. On each redraw, it retains third-party highlight entries, drops only its own previous regions, and appends updated spans ([`crates/zsh-module/src/region.rs`](../crates/zsh-module/src/region.rs)).
-- **Limitation**: On fatal parsing bailout (e.g. lines exceeding 4 KiB or 1 ms timeout), the module clears the entire `region_highlight` array to prevent stale visual artifacts. Third-party highlights are cleared during this emergency reset.
+- **Behavior**: `zsh-pulse` tags its regions with `memo=zsh-pulse`. On each redraw, it retains third-party highlight entries, drops only its own previous regions, and appends updated spans ([`crates/zsh-module/src/region.rs`](../crates/zsh-module/src/region.rs), [`crates/zsh-module/src/highlight.rs`](../crates/zsh-module/src/highlight.rs)).
+- **Bailout/unpublishable recovery**: on lines exceeding limits/budget, parse errors, or unpublishable ZLE states, the module aims to clear only its own (`memo=zsh-pulse`) regions and preserve foreign entries when the parameter is readable/publishable; if `region_highlight` is unavailable or unpublishable, stale owned publish state is invalidated so recovery is clean on the next publishable update. (See coexistence/recovery coverage in `crates/zsh-module/tests/zsh_integration.rs`.)
 
 ### 1.4 Incremental Lexer Crossover Threshold
 - **Threshold**: Commands shorter than 128 bytes (`INCREMENTAL_MIN_LEN`) bypass incremental checkpoint splicing and perform an allocation-free full re-parse ([`crates/lexer/src/incremental.rs`](../crates/lexer/src/incremental.rs)).
@@ -33,10 +33,14 @@ Companion documents: [architecture](architecture.md) ·
 ### 1.5 Whole-Line Styling Scope & Deliberate Edges
 1. **Quoted Command Words**: Command words enclosed in quotes (e.g. `'ls'` or `"cat"`) are styled as literal quote tokens (`fg=yellow`), not executable commands.
 2. **Compound Statements**: In constructs like `if true; then echo hi; fi`, `echo` is treated as an argument rather than a top-level command token.
-3. **Tilde Expansion**: `~` and `~/...` resolve against `$HOME`. User-specific expansion (`~username`) is not resolved to prevent synchronous `/etc/passwd` lookups on the interactive thread.
-4. **Symlink Resolution**: Filesystem validation uses `stat`, following symlinks to target types.
-5. **Cache Expiration**: Command resolution and filesystem `stat` caches expire after 2 seconds.
-6. **Lookup Caps**: Bounded to at most 16 filesystem lookups per line (`MAX_PATH_LOOKUPS`) and 32 published regions (`MAX_ENTRIES`).
+3. **Process substitutions and `--` semantics (bounded):** `<(...)/>(...)` (including fd-prefixed whole-word forms) are lexed as substitution command contexts so inner commands/options can be highlighted in supported cases; adapter command discovery inside substitutions is best-effort for common whole-word forms. `--` end-of-options handling is lexical and scoped per command context. Wrapper/precommand command-position handling and subcommand detection are bounded heuristics (allowlisted wrappers/families, heuristic option-argument consumption, limited nested subcommands) and **not** command-schema or option-arity aware.
+4. **Subcommand and CLI-grammar coverage (bounded):** subcommand styling/classification is limited to allowlisted command families/groups and limited nesting depth; there is no general multi-level CLI grammar or universal option-arity model, so some forms may be misclassified or left unclassified.
+5. **Tilde Expansion**: `~` and `~/...` resolve against `$HOME`. User-specific expansion (`~username`) is not resolved to prevent synchronous `/etc/passwd` lookups on the interactive thread.
+6. **Symlink Resolution**: Filesystem validation uses `stat`, following symlinks to target types.
+7. **Cache Expiration**: Command resolution and filesystem `stat` caches expire after 2 seconds.
+8. **Lookup Caps**: Bounded to at most 16 filesystem lookups per line (`MAX_PATH_LOOKUPS`) and 32 published regions (`MAX_ENTRIES`).
+
+Syntax-highlighting parity with zsh-patina defaults remains incremental (no theme/config foundation): process-substitution inner command contexts, lexical `--` scoping, bounded wrapper/subcommand heuristics, and improved foreign `region_highlight` preservation are implemented in supported cases, while broader grammar/dynamic parity (keywords/reserved/functions/history expansion/$'...'/tilde/fds/heredoc delim-body/$(( ))/richer param expansion, AUTO_CD/named-dir/cdpath/dynamic taxonomy, exhaustive compositions) remains outstanding.
 
 ### 1.6 Line Length & Buffer Limits
 - `ZSH_PULSE_MAX_LINE` (4 KiB): Input buffers exceeding 4,096 bytes are bypassed prior to word splitting.
@@ -92,7 +96,7 @@ The following features were evaluated during design and are explicitly **out of 
 |---|---|---|---|
 | Keystroke cost scales with line length | Performance | Low at typical command lengths | Sub-linear scanning; 0.5 µs at 1,389 bytes |
 | PTY harness resolution limited by IPC | Testing | Medium | Validated with direct microsecond benchmarks |
-| Emergency reset clears third-party highlights | Correctness | Low (emergency paths only) | Steady-state path merges with `memo=zsh-pulse` |
+| Third-party highlight coexistence on bailout/unpublishable paths | Correctness | Low | Own regions tagged `memo=zsh-pulse`; clear/merge paths preserve foreign entries where readable/publishable and invalidate stale owned state for recovery |
 | Native compsys typeahead is synchronous | Completion / Performance | Context-dependent (ms to slow on heavy completers) | Capped rendered lines, queued-key/menu suppression, `ZSH_PULSE_COMPLETION=0` toggle |
 | Bounded filesystem traversal (1,024 items) | Completion | Intended Design | Eliminates multi-second freezes on `/nix/store` |
 | Hard-coded syntax color defaults | Configuration | Medium | Standard ANSI colors chosen for universal contrast |

@@ -47,11 +47,13 @@
 
 mod common;
 
-use std::fs;
-use std::io::Read as _;
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, ExitStatus, Stdio};
-use std::time::{Duration, Instant};
+use std::{
+    fs,
+    io::Read as _,
+    path::{Path, PathBuf},
+    process::{Child, Command, ExitStatus, Stdio},
+    time::{Duration, Instant},
+};
 
 use common::{adapter_path, install_module, require_zsh};
 
@@ -2497,7 +2499,8 @@ fn history_prefix_search_up_down_restores_original_buffer() {
         return;
     };
 
-    let history = b": 1700000000:0;echo match_old\n: 1700000001:0;ls other\n: 1700000002:0;echo match_new\n";
+    let history =
+        b": 1700000000:0;echo match_old\n: 1700000001:0;ls other\n: 1700000002:0;echo match_new\n";
     let capture = match capture_with_history(
         &Scenario {
             // Type "echo match_", Up (match_new), Up (match_old), Down (match_new), Down (echo match_), type "custom_tail", Enter

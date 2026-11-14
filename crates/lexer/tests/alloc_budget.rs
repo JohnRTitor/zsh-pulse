@@ -17,8 +17,10 @@
 //! The budget is a *bound*, not zero: a few allocations per keystroke are
 //! acceptable, one per token is not.
 
-use std::alloc::{GlobalAlloc, Layout, System};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::{
+    alloc::{GlobalAlloc, Layout, System},
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 use lexer::LexCache;
 
@@ -80,10 +82,14 @@ fn a_steady_state_relex_stays_within_the_allocation_budget() {
     cache.lex(original).expect("scannable");
 
     // Warm the cache up: the first re-lex also grows the buffers.
-    cache.relex(b"git commit --amend --no-edit!").expect("scannable");
+    cache
+        .relex(b"git commit --amend --no-edit!")
+        .expect("scannable");
 
     let before = allocations();
-    cache.relex(b"git commit --amend --no-edit!!").expect("scannable");
+    cache
+        .relex(b"git commit --amend --no-edit!!")
+        .expect("scannable");
     let used = allocations() - before;
 
     println!("a re-lex of a 28-byte line allocated {used} times (budget {BUDGET})");

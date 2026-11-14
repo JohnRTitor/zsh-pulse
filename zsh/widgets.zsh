@@ -219,11 +219,12 @@ zsh-pulse-highlight-words() {
       (( i++ ))
       continue
     fi
-    # A word may hold a command of its own — `$(cmd)` does — and the
-    # module finds that command, so it has to be answered as well. The
-    # test is here rather than inside the function: a zsh function call is
-    # not free, and this runs for every word of the line.
-    if [[ $word == *'$('* || $word == *'`'* ]]; then
+    # A word may hold a command of its own — `$(cmd)`, backticks, or a
+    # process substitution `<(cmd)`/`>(cmd)` — and the module finds that
+    # command, so it has to be answered as well. The test is here rather than
+    # inside the function: a zsh function call is not free, and this runs for
+    # every word of the line.
+    if [[ $word == *'$('* || $word == *'`'* || $word == '<('*')' || $word == '>('*')' ]]; then
       zsh-pulse-highlight-inside "$word"
     fi
     if [[ $word != ${~has_non_redirect_char} && $word == ${~has_redirect_char} ]]; then
@@ -269,16 +270,16 @@ zsh-pulse-highlight-words() {
   done
 }
 
-# Answer for the command inside a command substitution.
+# Answer for the command inside a command or process substitution.
 #
-# `$(cmd)` and `` `cmd` `` hold a command of their own, and the module
-# finds it: the answer has to be about the word *inside* the substitution,
-# not about the whole `$(cmd)`, because that is the text the module
-# compares its own command word with.
+# `$(cmd)`, `` `cmd` ``, `<(cmd)`, and `>(cmd)` hold a command of their own,
+# and the module finds it: the answer has to be about the word *inside* the
+# substitution, not about the whole substitution, because that is the text the
+# module compares its own command word with.
 #
 # Only a substitution that makes up the whole word is looked inside. The
-# text between the `$(` and the `)` is then exactly the command, and the
-# words of that text are found the same way the words of the line are.
+# text between the opener and the final `)`/backtick is then walked the same
+# way the words of the line are.
 zsh-pulse-highlight-inside() {
   local word=$1
   local inner
@@ -289,6 +290,12 @@ zsh-pulse-highlight-inside() {
   elif [[ ${#word} -gt 1 && $word == '`'*'`' ]]; then
     inner=${word#'`'}
     inner=${inner%'`'}
+  elif [[ $word == '<('*')' ]]; then
+    inner=${word#'<('}
+    inner=${inner%')'}
+  elif [[ $word == '>('*')' ]]; then
+    inner=${word#'>('}
+    inner=${inner%')'}
   else
     return 0
   fi

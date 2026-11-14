@@ -21,8 +21,10 @@
 
 use core::ffi::{c_char, c_int};
 
-use crate::raw::{Builtin, Options};
-use crate::probe::Capabilities;
+use crate::{
+    probe::Capabilities,
+    raw::{Builtin, Options},
+};
 
 /// zsh's `String` (`char *`), as produced by `dupstring`/`ztrdup`.
 pub type ZshString = *mut c_char;
@@ -285,7 +287,11 @@ impl Api {
             return None;
         }
         // SAFETY: zsh NUL-terminates parameter values.
-        Some(unsafe { std::ffi::CStr::from_ptr(p) }.to_string_lossy().into_owned())
+        Some(
+            unsafe { std::ffi::CStr::from_ptr(p) }
+                .to_string_lossy()
+                .into_owned(),
+        )
     }
 
     /// Read an array parameter's elements into `out`.
@@ -336,11 +342,7 @@ impl Api {
     /// another parameter read.
     ///
     /// Returns the number of bytes written.
-    pub fn read_param_bytes(
-        &self,
-        name: &std::ffi::CStr,
-        out: &mut Vec<u8>,
-    ) -> Option<usize> {
+    pub fn read_param_bytes(&self, name: &std::ffi::CStr, out: &mut Vec<u8>) -> Option<usize> {
         // SAFETY: caller guarantees zsh context and a valid name.
         let p = unsafe { (self.getsparam_u)(name.as_ptr() as *mut c_char) };
         out.clear();
@@ -390,11 +392,7 @@ impl Api {
     ///
     /// `scratch` is reused to hold the raw bytes for diagnostics; pass a
     /// zero-capacity vector and ignore it if that is not needed.
-    pub fn read_param_i64(
-        &self,
-        name: &std::ffi::CStr,
-        scratch: &mut Vec<u8>,
-    ) -> Option<i64> {
+    pub fn read_param_i64(&self, name: &std::ffi::CStr, scratch: &mut Vec<u8>) -> Option<i64> {
         // SAFETY: caller guarantees zsh context and a valid name.
         let p = unsafe { (self.getsparam_u)(name.as_ptr() as *mut c_char) };
         if p.is_null() {
@@ -520,7 +518,9 @@ mod tests {
         // The safety contract is "we are inside zsh"; here we deliberately are
         // not, and the probe reports that, so resolution must refuse rather than
         // hand back garbage pointers.
-        let caps = Capabilities::Missing { symbols: vec!["getsparam"] };
+        let caps = Capabilities::Missing {
+            symbols: vec!["getsparam"],
+        };
         assert!(unsafe { Api::resolve(&caps) }.is_none());
     }
 
@@ -549,7 +549,11 @@ mod tests {
         assert_eq!(parse_i64(b"a12"), None);
         assert_eq!(parse_i64(b" 12"), None);
         assert_eq!(parse_i64(b"12 "), None);
-        assert_eq!(parse_i64(b"+12"), None, "a leading + is not produced by zsh");
+        assert_eq!(
+            parse_i64(b"+12"),
+            None,
+            "a leading + is not produced by zsh"
+        );
         assert_eq!(parse_i64(b"1.0"), None);
     }
 
@@ -582,18 +586,15 @@ mod tests {
         let Some(rows) = rows else {
             return std::ptr::null_mut();
         };
-        let mut array: Vec<*mut c_char> = rows
-            .iter()
-            .map(|row| row.as_ptr() as *mut c_char)
-            .collect();
+        let mut array: Vec<*mut c_char> =
+            rows.iter().map(|row| row.as_ptr() as *mut c_char).collect();
         array.push(std::ptr::null_mut());
         Box::into_raw(array.into_boxed_slice()) as *mut *mut c_char
     }
 
     /// A `CStr` with bytes that are not valid UTF-8.
     fn invalid_utf8_cstr() -> &'static std::ffi::CStr {
-        let bytes: &'static mut [u8] =
-            Box::leak(b"\xff\xfe region\0".to_vec().into_boxed_slice());
+        let bytes: &'static mut [u8] = Box::leak(b"\xff\xfe region\0".to_vec().into_boxed_slice());
         std::ffi::CStr::from_bytes_with_nul(bytes).expect("fixture ends with a NUL")
     }
 
@@ -606,7 +607,10 @@ mod tests {
         // Safety: the fake stands in for zsh's `getaparam`.
         let read = unsafe { read_array(Some(fake_getaparam), c"region_highlight", &mut out) };
         assert!(read, "an existing array must be reported as read");
-        assert_eq!(out, vec!["0 12 red".to_string(), "5 20 underline".to_string()]);
+        assert_eq!(
+            out,
+            vec!["0 12 red".to_string(), "5 20 underline".to_string()]
+        );
     }
 
     #[test]

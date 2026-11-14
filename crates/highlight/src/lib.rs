@@ -81,10 +81,12 @@ pub enum StyleId {
     PairedBracket,
     /// An unclosed bracket or quote, or a mismatched closing bracket.
     BracketError,
+    /// A subcommand in an argument position recognized by the shell adapter.
+    Subcommand,
 }
 
 pub mod bracket;
-pub use bracket::{analyze_brackets, bracket_spans, BracketAnalysis, BracketPair};
+pub use bracket::{BracketAnalysis, BracketPair, analyze_brackets, bracket_spans};
 
 impl StyleId {
     /// The style a token of this kind is given.
@@ -245,7 +247,11 @@ pub fn diff(old: &SpanSet, new: &SpanSet) -> Vec<ChangedRange> {
         // end of a gap.
         let mut end = u32::MAX;
         for spans in [old.spans(), new.spans()] {
-            let idx = if std::ptr::eq(spans, old.spans()) { i } else { j };
+            let idx = if std::ptr::eq(spans, old.spans()) {
+                i
+            } else {
+                j
+            };
             if let Some(s) = spans.get(idx) {
                 if s.start > pos {
                     end = end.min(s.start);
@@ -258,7 +264,11 @@ pub fn diff(old: &SpanSet, new: &SpanSet) -> Vec<ChangedRange> {
         }
 
         if so != sn {
-            out.push(ChangedRange { start: pos, end, style: sn.unwrap_or(StyleId::Argument) });
+            out.push(ChangedRange {
+                start: pos,
+                end,
+                style: sn.unwrap_or(StyleId::Argument),
+            });
         }
         pos = end;
         while old.spans().get(i).is_some_and(|s| s.end <= pos) {
@@ -382,15 +392,15 @@ pub fn char_offsets_into(out: &mut Vec<u32>, text: &[u8]) {
 
 /// The character offset of a byte offset.
 pub fn char_offset(offsets: &[u32], byte: u32) -> u32 {
-    offsets.get(byte as usize).copied().unwrap_or_else(|| {
-        offsets.last().copied().unwrap_or(0)
-    })
+    offsets
+        .get(byte as usize)
+        .copied()
+        .unwrap_or_else(|| offsets.last().copied().unwrap_or(0))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use lexer::lex;
+    use {super::*, lexer::lex};
 
     fn spans_of(line: &str) -> Vec<(u32, u32, StyleId)> {
         let l = lex(line.as_bytes()).expect("scannable");
@@ -521,7 +531,10 @@ mod tests {
         let offsets = char_offsets(text);
         assert_eq!(offsets[0], 0);
         assert_eq!(offsets[1], 1, "'h' is one character");
-        assert_eq!(offsets[2], 1, "the first byte of 'é' does not start a new character");
+        assert_eq!(
+            offsets[2], 1,
+            "the first byte of 'é' does not start a new character"
+        );
         assert_eq!(offsets[3], 2, "'é' is one character");
         assert_eq!(offsets[text.len()], 5);
     }
@@ -538,7 +551,11 @@ mod tests {
         // wrong length: the map is what converts the lexer's byte offsets
         // into zsh's character offsets, and a wrong map silently misplaces
         // every highlight after the bad byte.
-        for text in [b"a\x80b".as_slice(), b"\x80abc".as_slice(), b"\xff\xfe".as_slice()] {
+        for text in [
+            b"a\x80b".as_slice(),
+            b"\x80abc".as_slice(),
+            b"\xff\xfe".as_slice(),
+        ] {
             let offsets = char_offsets(text);
             assert_eq!(offsets.len(), text.len() + 1, "for {text:?}");
             for pair in offsets.windows(2) {

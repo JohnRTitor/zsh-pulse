@@ -43,9 +43,11 @@
 //! as a [`LexError`] rather than being silently mis-parsed. The caller is
 //! expected to fall back to unstyled text.
 
-use crate::state::{Ctx, Flags, Heredoc, LexState, MAX_DEPTH, MAX_HEREDOC_LEN};
-use crate::ResumePoint;
-use crate::token::{Token, TokenKind};
+use crate::{
+    ResumePoint,
+    state::{Ctx, Flags, Heredoc, LexState, MAX_DEPTH, MAX_HEREDOC_LEN},
+    token::{Token, TokenKind},
+};
 
 /// Why a scan could not be completed.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -127,7 +129,10 @@ fn is_name_cont(c: u8) -> bool {
 
 /// The single-character special parameters (`$?`, `$!`, `$$`, …).
 fn is_special_param(c: u8) -> bool {
-    matches!(c, b'?' | b'!' | b'#' | b'*' | b'@' | b'-' | b'$' | b'0'..=b'9')
+    matches!(
+        c,
+        b'?' | b'!' | b'#' | b'*' | b'@' | b'-' | b'$' | b'0'..=b'9'
+    )
 }
 
 /// A callback consulted at the start of every unit.
@@ -227,7 +232,9 @@ impl<'a> Scanner<'a> {
 
     /// Ask the probe whether the scan should stop here.
     fn probe_unit(&mut self) {
-        let Some(probe) = self.probe.as_mut() else { return };
+        let Some(probe) = self.probe.as_mut() else {
+            return;
+        };
         // `LexState` is `Copy`, so the state can be read while the probe
         // holds the mutable borrow of the scanner.
         let state = self.state;
@@ -288,7 +295,11 @@ impl<'a> Scanner<'a> {
         // The first unit of a resumed scan keeps the guard the caller
         // resumed from; the rest use the character that ended the previous
         // unit.
-        self.unit_guard = if self.first_unit { self.initial_guard } else { guard };
+        self.unit_guard = if self.first_unit {
+            self.initial_guard
+        } else {
+            guard
+        };
         self.first_unit = false;
         self.unit_recorded = false;
     }
@@ -332,7 +343,9 @@ impl<'a> Scanner<'a> {
             while matches!(self.peek(), Some(b' ' | b'\t')) {
                 self.pos += 1;
             }
-            let Some(b) = self.peek() else { return Ok(false) };
+            let Some(b) = self.peek() else {
+                return Ok(false);
+            };
             self.begin_unit(guard);
             self.probe_unit();
             if self.stopped {
@@ -411,9 +424,7 @@ impl<'a> Scanner<'a> {
                         self.scan_word(mode)?
                     }
                 }
-                b'<' | b'>' => {
-                    self.scan_redirect()?
-                }
+                b'<' | b'>' => self.scan_redirect()?,
                 b'0'..=b'9' => {
                     if self.digit_starts_redirect() {
                         self.scan_redirect()?
@@ -463,6 +474,7 @@ impl<'a> Scanner<'a> {
         self.emit(start, self.pos, TokenKind::Operator);
         self.state.set_after_redirect(false);
         self.state.set_expect_command(true);
+        self.state.set_after_end_of_options(false);
         Ok(())
     }
 
@@ -482,6 +494,7 @@ impl<'a> Scanner<'a> {
         self.emit(start, self.pos, TokenKind::Operator);
         self.state.set_after_redirect(false);
         self.state.set_expect_command(true);
+        self.state.set_after_end_of_options(false);
     }
 
     /// `&`, `&&`, `&!`, `&|`, or the `&>` family of redirections.
@@ -493,12 +506,14 @@ impl<'a> Scanner<'a> {
                 self.emit(start, self.pos, TokenKind::Operator);
                 self.state.set_after_redirect(false);
                 self.state.set_expect_command(true);
+                self.state.set_after_end_of_options(false);
             }
             Some(b'!') | Some(b'|') => {
                 self.pos += 2;
                 self.emit(start, self.pos, TokenKind::Operator);
                 self.state.set_after_redirect(false);
                 self.state.set_expect_command(true);
+                self.state.set_after_end_of_options(false);
             }
             Some(b'>') => {
                 // `&>`, `&>>`, `&>!`, `&>|`
@@ -517,6 +532,7 @@ impl<'a> Scanner<'a> {
                 self.emit(start, self.pos, TokenKind::Operator);
                 self.state.set_after_redirect(false);
                 self.state.set_expect_command(true);
+                self.state.set_after_end_of_options(false);
             }
         }
         Ok(())
@@ -534,6 +550,9 @@ impl<'a> Scanner<'a> {
     }
 
     /// A redirection operator, optionally with a file-descriptor prefix.
+    ///
+    /// `<(` and `>(` are process substitutions (command-list contexts producing a
+    /// path-like word), tokenized like `$(` so inner commands are lexed/styled.
     fn scan_redirect(&mut self) -> Result<bool, LexError> {
         let start = self.pos;
         // Optional fd prefix.
@@ -556,6 +575,16 @@ impl<'a> Scanner<'a> {
                         self.scan_heredoc_delimiter(strip_tabs)?;
                         return Ok(false);
                     }
+                    Some(b'(') => {
+                        // `<( ... )` process substitution (input).
+                        self.pos += 1;
+                        self.emit(start, self.pos, TokenKind::Substitution);
+                        self.push(Ctx::Paren, Flags::command_context())?;
+                        self.state.set_after_redirect(false);
+                        self.state.set_after_end_of_options(false);
+                        self.state.set_expect_command(true);
+                        return Ok(true);
+                    }
                     Some(b'&') | Some(b'>') => {
                         self.pos += 1;
                     }
@@ -565,6 +594,16 @@ impl<'a> Scanner<'a> {
             Some(b'>') => {
                 self.pos += 1;
                 match self.peek() {
+                    Some(b'(') => {
+                        // `>( ... )` process substitution (output).
+                        self.pos += 1;
+                        self.emit(start, self.pos, TokenKind::Substitution);
+                        self.push(Ctx::Paren, Flags::command_context())?;
+                        self.state.set_after_redirect(false);
+                        self.state.set_after_end_of_options(false);
+                        self.state.set_expect_command(true);
+                        return Ok(true);
+                    }
                     Some(b'>') => {
                         self.pos += 1;
                     }
@@ -676,7 +715,10 @@ impl<'a> Scanner<'a> {
             dbuf[..d.len()].copy_from_slice(d);
             d.len()
         };
-        let strip_tabs = self.state.pending_heredoc().is_some_and(Heredoc::strip_tabs);
+        let strip_tabs = self
+            .state
+            .pending_heredoc()
+            .is_some_and(Heredoc::strip_tabs);
 
         let body_start = self.pos;
         loop {
@@ -693,7 +735,11 @@ impl<'a> Scanner<'a> {
                 }
             }
             if cmp == &dbuf[..dlen] {
-                let end = if line_end < self.text.len() { line_end + 1 } else { line_end };
+                let end = if line_end < self.text.len() {
+                    line_end + 1
+                } else {
+                    line_end
+                };
                 self.emit(body_start, end, TokenKind::Heredoc);
                 self.pos = end;
                 self.state.clear_pending_heredoc();
@@ -780,6 +826,16 @@ impl<'a> Scanner<'a> {
             }
         }
         self.flush(plain_start, self.pos, kind);
+        // `--` ends option parsing for the rest of this simple command.
+        if kind == TokenKind::Word
+            && !self.state.expect_command()
+            && !self.state.after_redirect()
+            && !self.state.after_end_of_options()
+            && mode != Mode::Brace
+            && self.text[word_start..self.pos] == b"--"[..]
+        {
+            self.state.set_after_end_of_options(true);
+        }
         self.finish_word(kind);
         Ok(false)
     }
@@ -797,7 +853,11 @@ impl<'a> Scanner<'a> {
             return TokenKind::Word;
         }
         if !self.state.expect_command() {
-            // Argument position: the word may be an option.
+            // Argument position: the word may be an option, unless the
+            // end-of-options marker `--` has already been seen.
+            if self.state.after_end_of_options() {
+                return TokenKind::Word;
+            }
             return if self.looks_like_option(start) {
                 TokenKind::Option
             } else {
@@ -850,7 +910,9 @@ impl<'a> Scanner<'a> {
     /// (`zsh-src/Src/lex.c:1229-1260`).
     fn looks_like_assignment(&self, start: usize) -> bool {
         let mut i = start;
-        let Some(first) = self.text.get(i).copied() else { return false };
+        let Some(first) = self.text.get(i).copied() else {
+            return false;
+        };
         if !is_name_start(first) {
             return false;
         }

@@ -28,9 +28,11 @@
 
 use std::time::Instant;
 
-use highlight::{char_offsets_into, StyleId};
-use lexer::lex;
-use zshpulse_core::{published_spans, region};
+use {
+    highlight::{StyleId, char_offsets_into},
+    lexer::lex,
+    zshpulse_core::{published_spans, region},
+};
 
 /// A command line with a realistic number of styled regions.
 fn line() -> String {
@@ -103,9 +105,13 @@ fn main() {
     let rows = entries.rows();
     let first = rows.first().map(|r| r.to_string_lossy().into_owned());
     println!("first entry:  {first:?}");
-    println!("last entry:   {:?}", rows.last().map(|r| r.to_string_lossy().into_owned()));
+    println!(
+        "last entry:   {:?}",
+        rows.last().map(|r| r.to_string_lossy().into_owned())
+    );
     assert!(
-        rows.iter().all(|r| r.to_bytes().ends_with(b"memo=zsh-pulse")),
+        rows.iter()
+            .all(|r| r.to_bytes().ends_with(b"memo=zsh-pulse")),
         "every entry must carry the memo so another plugin can tell it apart"
     );
     assert!(

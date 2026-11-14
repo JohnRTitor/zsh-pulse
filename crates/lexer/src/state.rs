@@ -80,8 +80,12 @@ pub struct Heredoc {
 
 impl Heredoc {
     /// The empty, "no pending here-document" value.
-    pub const EMPTY: Self =
-        Self { buf: [0; MAX_HEREDOC_LEN], len: 0, strip_tabs: false, quoted: false };
+    pub const EMPTY: Self = Self {
+        buf: [0; MAX_HEREDOC_LEN],
+        len: 0,
+        strip_tabs: false,
+        quoted: false,
+    };
 
     /// Build a pending here-document from its delimiter bytes.
     ///
@@ -93,7 +97,12 @@ impl Heredoc {
         }
         let mut buf = [0u8; MAX_HEREDOC_LEN];
         buf[..delimiter.len()].copy_from_slice(delimiter);
-        Some(Self { buf, len: delimiter.len() as u8, strip_tabs, quoted })
+        Some(Self {
+            buf,
+            len: delimiter.len() as u8,
+            strip_tabs,
+            quoted,
+        })
     }
 
     /// The delimiter bytes.
@@ -119,6 +128,7 @@ pub struct Flags(u8);
 impl Flags {
     const EXPECT_COMMAND: u8 = 1 << 0;
     const AFTER_REDIRECT: u8 = 1 << 1;
+    const AFTER_END_OF_OPTIONS: u8 = 1 << 2;
 
     /// Flags for a context that holds a string: the contents are not a
     /// command list, so nothing is in command position.
@@ -160,6 +170,22 @@ impl Flags {
             self.0 |= Self::AFTER_REDIRECT;
         } else {
             self.0 &= !Self::AFTER_REDIRECT;
+        }
+    }
+
+    /// Whether the end-of-options marker `--` has been seen in this command.
+    ///
+    /// After it, option-like operands in argument position are not options.
+    pub fn after_end_of_options(self) -> bool {
+        self.0 & Self::AFTER_END_OF_OPTIONS != 0
+    }
+
+    /// Set or clear "the end-of-options marker `--` has been seen".
+    pub fn set_after_end_of_options(&mut self, on: bool) {
+        if on {
+            self.0 |= Self::AFTER_END_OF_OPTIONS;
+        } else {
+            self.0 &= !Self::AFTER_END_OF_OPTIONS;
         }
     }
 }
@@ -264,6 +290,16 @@ impl LexState {
     /// Set or clear "the previous token was a redirection".
     pub fn set_after_redirect(&mut self, on: bool) {
         self.flags.set_after_redirect(on);
+    }
+
+    /// Whether the end-of-options marker `--` has been seen in this command.
+    pub fn after_end_of_options(&self) -> bool {
+        self.flags.after_end_of_options()
+    }
+
+    /// Set or clear "the end-of-options marker `--` has been seen".
+    pub fn set_after_end_of_options(&mut self, on: bool) {
+        self.flags.set_after_end_of_options(on);
     }
 
     /// Whether the scanner is inside a here-document body.
@@ -388,7 +424,10 @@ mod tests {
         s.push(Ctx::Paren, Flags::command_context()).expect("room");
         assert!(s.expect_command(), "inside `$( )` a command is expected");
         s.pop();
-        assert!(!s.expect_command(), "the outer level's flags must come back");
+        assert!(
+            !s.expect_command(),
+            "the outer level's flags must come back"
+        );
     }
 
     #[test]
@@ -425,6 +464,9 @@ mod tests {
         let b = LexState::new();
         a.set_pending_heredoc(Heredoc::new(b"EOF", false, false).unwrap());
         assert!(!a.same_parse(&b));
-        assert_eq!(a.pending_heredoc().map(|h| h.delimiter()), Some(&b"EOF"[..]));
+        assert_eq!(
+            a.pending_heredoc().map(|h| h.delimiter()),
+            Some(&b"EOF"[..])
+        );
     }
 }

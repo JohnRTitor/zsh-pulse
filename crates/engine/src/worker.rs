@@ -48,10 +48,14 @@
 //! waits for it, and leaves the slot empty so that the next [`shared`]
 //! starts a fresh worker.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::{
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc::{Receiver, RecvTimeoutError, Sender, channel},
+    },
+    time::Duration,
+};
 
 /// Default time to wait for a result before giving up.
 ///
@@ -141,7 +145,13 @@ impl Worker {
             .spawn(move || {
                 while let Ok(job) = rx.recv() {
                     let checksum = checksum(&job.payload);
-                    if out_tx.send(Reply { revision: job.revision, checksum }).is_err() {
+                    if out_tx
+                        .send(Reply {
+                            revision: job.revision,
+                            checksum,
+                        })
+                        .is_err()
+                    {
                         break;
                     }
                     if flag.load(Ordering::Relaxed) {
@@ -228,7 +238,8 @@ impl Worker {
             let Some(tx) = guard.as_ref() else {
                 return Err(WorkerError::Disconnected);
             };
-            tx.send(Job { revision, payload }).map_err(|_| WorkerError::Disconnected)?;
+            tx.send(Job { revision, payload })
+                .map_err(|_| WorkerError::Disconnected)?;
         }
         let rx = self.rx.lock().unwrap_or_else(|e| e.into_inner());
         let reply = match rx.recv_timeout(timeout) {
@@ -357,7 +368,9 @@ mod tests {
     fn worker_answers_with_the_same_revision_and_checksum() {
         let _g = serialise_threads();
         let w = Worker::spawn().expect("spawn");
-        let reply = w.submit(7, b"hello".to_vec(), Duration::from_secs(2)).expect("reply");
+        let reply = w
+            .submit(7, b"hello".to_vec(), Duration::from_secs(2))
+            .expect("reply");
         assert_eq!(reply.revision, 7, "the revision guard depends on this");
         assert_eq!(reply.checksum, checksum(b"hello"));
     }
@@ -369,7 +382,9 @@ mod tests {
         // rather than a silently wrong answer.
         let _g = serialise_threads();
         let w = Worker::spawn().expect("spawn");
-        let r = w.submit(3, b"x".to_vec(), Duration::from_secs(2)).expect("reply");
+        let r = w
+            .submit(3, b"x".to_vec(), Duration::from_secs(2))
+            .expect("reply");
         assert_eq!(r.revision, 3);
     }
 
@@ -379,7 +394,9 @@ mod tests {
         let w = Worker::spawn().expect("spawn");
         for rev in 0..64u64 {
             let payload = vec![(rev % 251) as u8; 8];
-            let r = w.submit(rev, payload.clone(), Duration::from_secs(2)).expect("reply");
+            let r = w
+                .submit(rev, payload.clone(), Duration::from_secs(2))
+                .expect("reply");
             assert_eq!(r.revision, rev);
             assert_eq!(r.checksum, checksum(&payload));
         }
@@ -394,7 +411,9 @@ mod tests {
         let _g = serialise_threads();
         let before = settled_worker_thread_count();
         let w = Worker::spawn().expect("spawn");
-        let r = w.submit(1, b"x".to_vec(), Duration::from_secs(2)).expect("reply");
+        let r = w
+            .submit(1, b"x".to_vec(), Duration::from_secs(2))
+            .expect("reply");
         assert_eq!(r.checksum, checksum(b"x"));
         // Asserting on *our own thread by name* rather than a global count, so
         // parallel tests cannot perturb the result. Use a settled baseline and
@@ -413,7 +432,9 @@ mod tests {
         let _g = serialise_threads();
         let w = Worker::spawn().expect("spawn");
         let payload: Vec<u8> = (0..64 * 1024).map(|i| (i % 256) as u8).collect();
-        let r = w.submit(2, payload.clone(), Duration::from_secs(5)).expect("reply");
+        let r = w
+            .submit(2, payload.clone(), Duration::from_secs(5))
+            .expect("reply");
         assert_eq!(r.checksum, checksum(&payload));
     }
 
@@ -421,7 +442,8 @@ mod tests {
     fn stop_makes_further_submissions_fail_rather_than_hang() {
         let _g = serialise_threads();
         let w = Worker::spawn().expect("spawn");
-        w.submit(1, b"x".to_vec(), Duration::from_secs(2)).expect("first");
+        w.submit(1, b"x".to_vec(), Duration::from_secs(2))
+            .expect("first");
         w.stop();
         assert!(w.is_stopping());
         assert!(
@@ -475,7 +497,9 @@ mod tests {
         let before = settled_worker_thread_count();
         let worker = shared().expect("shared worker");
         assert!(
-            worker.submit(1, b"x".to_vec(), Duration::from_secs(2)).is_ok(),
+            worker
+                .submit(1, b"x".to_vec(), Duration::from_secs(2))
+                .is_ok(),
             "the shared worker must answer before it is shut down"
         );
         assert_eq!(

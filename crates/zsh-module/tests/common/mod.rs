@@ -14,8 +14,10 @@
 
 #![allow(dead_code)]
 
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::{
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+};
 
 /// The path of the zsh adapter.
 pub fn adapter_path() -> PathBuf {
@@ -88,7 +90,10 @@ fn candidate_cdylib_paths(target_dir: &Path) -> Vec<PathBuf> {
     if let Ok(exe) = std::env::current_exe() {
         // Fallback hints for unusual test-binary locations (e.g. build-script out dirs).
         for anc in exe.ancestors() {
-            if anc.file_name().is_some_and(|n| n == "debug" || n == "release") {
+            if anc
+                .file_name()
+                .is_some_and(|n| n == "debug" || n == "release")
+            {
                 paths.push(anc.join(&lib));
             }
         }

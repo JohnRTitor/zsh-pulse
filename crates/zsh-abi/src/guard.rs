@@ -15,8 +15,10 @@
 //! `panic = "unwind"` (see the root `Cargo.toml`) precisely because abort-on-
 //! panic would make this mechanism ineffective.
 
-use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::{
+    panic::{AssertUnwindSafe, catch_unwind},
+    sync::atomic::{AtomicBool, Ordering},
+};
 
 static DEGRADED: AtomicBool = AtomicBool::new(false);
 
@@ -78,7 +80,10 @@ mod tests {
         reset_degraded();
         let r = guard(-1, || panic!("boom"));
         assert_eq!(r, -1);
-        assert!(is_degraded(), "a caught panic must mark the engine degraded");
+        assert!(
+            is_degraded(),
+            "a caught panic must mark the engine degraded"
+        );
     }
 
     #[test]

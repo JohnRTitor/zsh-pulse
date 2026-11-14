@@ -12,8 +12,10 @@
 
 #![forbid(unsafe_code)]
 
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 #[cfg(feature = "history")]
 use history::HistoryIndex;
@@ -245,7 +247,11 @@ pub fn complete_filesystem(ctx: &CompletionContext) -> Vec<Candidate> {
         let desc = if is_dir { "dir" } else { "file" };
 
         let score = if is_dir { 10 } else { 0 }
-            + if name_str.starts_with(&file_prefix) { 50 } else { 20 };
+            + if name_str.starts_with(&file_prefix) {
+                50
+            } else {
+                20
+            };
 
         matches.push(Candidate {
             value,
@@ -261,17 +267,69 @@ pub fn complete_filesystem(ctx: &CompletionContext) -> Vec<Candidate> {
 
 /// Common shell builtins.
 pub const SHELL_BUILTINS: &[&str] = &[
-    "alias", "autoload", "bg", "bindkey", "break", "builtin", "cd", "command",
-    "compadd", "continue", "dirs", "echo", "eval", "exec", "exit", "export",
-    "false", "fc", "fg", "functions", "getopts", "hash", "history", "jobs",
-    "kill", "let", "local", "popd", "print", "printf", "pushd", "pwd", "read",
-    "readonly", "return", "set", "setopt", "shift", "source", "test", "times",
-    "trap", "true", "type", "typeset", "ulimit", "umask", "unalias", "unfunction",
-    "unhash", "unset", "unsetopt", "wait", "which", "zmodload", "zstyle",
+    "alias",
+    "autoload",
+    "bg",
+    "bindkey",
+    "break",
+    "builtin",
+    "cd",
+    "command",
+    "compadd",
+    "continue",
+    "dirs",
+    "echo",
+    "eval",
+    "exec",
+    "exit",
+    "export",
+    "false",
+    "fc",
+    "fg",
+    "functions",
+    "getopts",
+    "hash",
+    "history",
+    "jobs",
+    "kill",
+    "let",
+    "local",
+    "popd",
+    "print",
+    "printf",
+    "pushd",
+    "pwd",
+    "read",
+    "readonly",
+    "return",
+    "set",
+    "setopt",
+    "shift",
+    "source",
+    "test",
+    "times",
+    "trap",
+    "true",
+    "type",
+    "typeset",
+    "ulimit",
+    "umask",
+    "unalias",
+    "unfunction",
+    "unhash",
+    "unset",
+    "unsetopt",
+    "wait",
+    "which",
+    "zmodload",
+    "zstyle",
 ];
 
 /// Complete commands, builtins, and history.
-pub fn complete_commands(ctx: &CompletionContext, history: Option<&HistoryIndex>) -> Vec<Candidate> {
+pub fn complete_commands(
+    ctx: &CompletionContext,
+    history: Option<&HistoryIndex>,
+) -> Vec<Candidate> {
     let prefix_str = match std::str::from_utf8(&ctx.prefix) {
         Ok(s) => s,
         Err(_) => return Vec::new(),
@@ -433,10 +491,7 @@ pub fn complete_history(
 }
 
 /// Compute bounded filesystem path candidates only.
-pub fn complete_paths(
-    ctx: &CompletionContext,
-    max_candidates: usize,
-) -> CompletionOutcome {
+pub fn complete_paths(ctx: &CompletionContext, max_candidates: usize) -> CompletionOutcome {
     let mut candidates = complete_filesystem(ctx);
     let target_k = max_candidates.min(candidates.len());
     let ranked = if candidates.len() > target_k && target_k > 0 {
@@ -635,7 +690,10 @@ mod tests {
         let ctx = CompletionContext::new(line, line.len(), cwd, home);
         let outcome = complete_paths(&ctx, 10);
         for c in &outcome.candidates {
-            assert!(matches!(c.kind, CandidateKind::File | CandidateKind::Directory));
+            assert!(matches!(
+                c.kind,
+                CandidateKind::File | CandidateKind::Directory
+            ));
         }
     }
 
@@ -647,7 +705,11 @@ mod tests {
         let ctx = CompletionContext::new(line, line.len(), cwd, home);
         let outcome = complete_paths(&ctx, 10);
         for c in &outcome.candidates {
-            assert!(c.value.starts_with("~/"), "value should start with ~/: {}", c.value);
+            assert!(
+                c.value.starts_with("~/"),
+                "value should start with ~/: {}",
+                c.value
+            );
         }
     }
 }

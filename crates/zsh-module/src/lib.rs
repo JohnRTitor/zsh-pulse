@@ -27,12 +27,15 @@
 )))]
 compile_error!("At least one feature must be enabled: 'highlight', 'autocomplete', or 'history'.");
 
-use std::ptr::addr_of_mut;
-use std::sync::OnceLock;
+use std::{ptr::addr_of_mut, sync::OnceLock};
 
-use engine::EngineState;
-use zsh_abi::raw::{Builtin, Module};
-use zsh_abi::{guard, probe, Api};
+use {
+    engine::EngineState,
+    zsh_abi::{
+        Api, guard, probe,
+        raw::{Builtin, Module},
+    },
+};
 
 #[cfg(feature = "highlight")]
 pub mod region;
@@ -40,12 +43,20 @@ pub mod region;
 #[cfg(feature = "highlight")]
 pub mod highlight;
 #[cfg(feature = "highlight")]
-pub use highlight::{highlight_builtin, published_spans, BUILTIN_FULL};
+pub use highlight::{BUILTIN_FULL, highlight_builtin, published_spans};
 
-#[cfg(any(feature = "autocomplete", feature = "history", feature = "history-navigation"))]
+#[cfg(any(
+    feature = "autocomplete",
+    feature = "history",
+    feature = "history-navigation"
+))]
 pub mod complete;
-#[cfg(any(feature = "autocomplete", feature = "history", feature = "history-navigation"))]
-pub use complete::{complete_builtin, BUILTIN_COMPLETE};
+#[cfg(any(
+    feature = "autocomplete",
+    feature = "history",
+    feature = "history-navigation"
+))]
+pub use complete::{BUILTIN_COMPLETE, complete_builtin};
 
 /// Process-wide engine state, created on first use.
 static ENGINE: OnceLock<EngineState> = OnceLock::new();
@@ -147,7 +158,9 @@ pub(crate) fn install_panic_hook() {
     ONCE.get_or_init(|| {
         std::panic::set_hook(Box::new(|info| {
             use std::io::Write as _;
-            let location = info.location().map(|l| format!("{}:{}", l.file(), l.line()));
+            let location = info
+                .location()
+                .map(|l| format!("{}:{}", l.file(), l.line()));
             let message = info
                 .payload()
                 .downcast_ref::<&str>()
@@ -215,10 +228,24 @@ pub(crate) fn char_offsets_into(out: &mut Vec<u32>, text: &[u8]) {
 // The builtin table
 // ---------------------------------------------------------------------------
 
-#[cfg(all(feature = "highlight", any(feature = "autocomplete", feature = "history", feature = "history-navigation")))]
+#[cfg(all(
+    feature = "highlight",
+    any(
+        feature = "autocomplete",
+        feature = "history",
+        feature = "history-navigation"
+    )
+))]
 const BUILTIN_COUNT: usize = 2;
 
-#[cfg(not(all(feature = "highlight", any(feature = "autocomplete", feature = "history", feature = "history-navigation"))))]
+#[cfg(not(all(
+    feature = "highlight",
+    any(
+        feature = "autocomplete",
+        feature = "history",
+        feature = "history-navigation"
+    )
+)))]
 const BUILTIN_COUNT: usize = 1;
 
 static mut PULSE_BUILTINS: [Builtin; BUILTIN_COUNT + 1] = [
@@ -236,7 +263,11 @@ static mut PULSE_BUILTINS: [Builtin; BUILTIN_COUNT + 1] = [
         optstr: std::ptr::null_mut(),
         defopts: std::ptr::null_mut(),
     },
-    #[cfg(any(feature = "autocomplete", feature = "history", feature = "history-navigation"))]
+    #[cfg(any(
+        feature = "autocomplete",
+        feature = "history",
+        feature = "history-navigation"
+    ))]
     Builtin {
         node: zsh_abi::raw::HashNode {
             next: std::ptr::null_mut(),
@@ -289,7 +320,10 @@ mod tests {
     #[test]
     fn builtin_table_is_null_terminated() {
         let t = builtins();
-        assert!(t[BUILTIN_COUNT].node.nam.is_null(), "builtin table must be NULL-terminated");
+        assert!(
+            t[BUILTIN_COUNT].node.nam.is_null(),
+            "builtin table must be NULL-terminated"
+        );
         for b in &t[..BUILTIN_COUNT] {
             assert!(!b.node.nam.is_null());
         }
@@ -298,18 +332,44 @@ mod tests {
     #[test]
     fn builtin_name_matches_the_declared_prefix() {
         let t = builtins();
-        #[cfg(all(feature = "highlight", any(feature = "autocomplete", feature = "history", feature = "history-navigation")))]
+        #[cfg(all(
+            feature = "highlight",
+            any(
+                feature = "autocomplete",
+                feature = "history",
+                feature = "history-navigation"
+            )
+        ))]
         {
-            assert_eq!(builtin_name(&t[0]).to_bytes_with_nul(), b"zsh-pulse-highlight\0");
-            assert_eq!(builtin_name(&t[1]).to_bytes_with_nul(), b"zsh-pulse-complete\0");
+            assert_eq!(
+                builtin_name(&t[0]).to_bytes_with_nul(),
+                b"zsh-pulse-highlight\0"
+            );
+            assert_eq!(
+                builtin_name(&t[1]).to_bytes_with_nul(),
+                b"zsh-pulse-complete\0"
+            );
         }
-        #[cfg(all(feature = "highlight", not(any(feature = "autocomplete", feature = "history", feature = "history-navigation"))))]
+        #[cfg(all(
+            feature = "highlight",
+            not(any(
+                feature = "autocomplete",
+                feature = "history",
+                feature = "history-navigation"
+            ))
+        ))]
         {
-            assert_eq!(builtin_name(&t[0]).to_bytes_with_nul(), b"zsh-pulse-highlight\0");
+            assert_eq!(
+                builtin_name(&t[0]).to_bytes_with_nul(),
+                b"zsh-pulse-highlight\0"
+            );
         }
         #[cfg(not(feature = "highlight"))]
         {
-            assert_eq!(builtin_name(&t[0]).to_bytes_with_nul(), b"zsh-pulse-complete\0");
+            assert_eq!(
+                builtin_name(&t[0]).to_bytes_with_nul(),
+                b"zsh-pulse-complete\0"
+            );
         }
     }
 
@@ -366,11 +426,7 @@ pub unsafe extern "C" fn setup_(_m: Module) -> std::ffi::c_int {
             )
         };
         unsafe {
-            (api.addbuiltins)(
-                builtin_nam,
-                builtin_ptr,
-                builtin_count,
-            );
+            (api.addbuiltins)(builtin_nam, builtin_ptr, builtin_count);
         }
         debug("setup_ registered builtins");
         0
@@ -386,7 +442,10 @@ pub unsafe extern "C" fn boot_(_m: Module) -> std::ffi::c_int {
                 b"zsh-pulse-probe".to_vec(),
                 std::time::Duration::from_millis(200),
             ) {
-                debug(&format!("worker ready: rev={} checksum={}", reply.revision, reply.checksum));
+                debug(&format!(
+                    "worker ready: rev={} checksum={}",
+                    reply.revision, reply.checksum
+                ));
             }
         } else {
             debug("worker unavailable; continuing single-threaded");

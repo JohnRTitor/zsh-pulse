@@ -1,7 +1,6 @@
 //! Completion and autosuggestion builtin: `zsh-pulse-complete`.
 
-use zsh_abi::guard;
-use zsh_abi::raw::CStr;
+use zsh_abi::{guard, raw::CStr};
 
 use crate::{char_offsets_into, engine, zsh};
 
@@ -86,10 +85,14 @@ pub unsafe extern "C" fn complete_builtin(
                 .min(buffer.len())
         };
 
-        let cwd = api.get_param_string(c"PWD")
+        let cwd = api
+            .get_param_string(c"PWD")
             .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/")));
-        let home = api.get_param_string(c"HOME")
+            .unwrap_or_else(|| {
+                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/"))
+            });
+        let home = api
+            .get_param_string(c"HOME")
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::PathBuf::from("/home"));
 

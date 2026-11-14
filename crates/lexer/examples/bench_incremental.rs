@@ -34,7 +34,7 @@
 
 use std::time::Instant;
 
-use lexer::{lex, LexCache, INCREMENTAL_MIN_LEN};
+use lexer::{INCREMENTAL_MIN_LEN, LexCache, lex};
 
 /// A realistic long command line: many arguments, some quoted, some not.
 fn long_line(words: usize) -> String {
@@ -111,7 +111,9 @@ fn main() {
         let mut cache = LexCache::new();
         let incremental = time_rounds(rounds, || {
             cache.lex(line.as_bytes()).expect("the line scans");
-            cache.relex_incremental(edited.as_bytes()).expect("the edited line scans");
+            cache
+                .relex_incremental(edited.as_bytes())
+                .expect("the edited line scans");
         });
 
         // --- the full path ---------------------------------------------------
@@ -124,7 +126,9 @@ fn main() {
         let mut full_cache = LexCache::new();
         let full = time_rounds(rounds, || {
             full_cache.lex(line.as_bytes()).expect("the line scans");
-            full_cache.lex(edited.as_bytes()).expect("the edited line scans");
+            full_cache
+                .lex(edited.as_bytes())
+                .expect("the edited line scans");
         });
 
         // --- the policy ------------------------------------------------------
@@ -134,7 +138,9 @@ fn main() {
         let mut policy_cache = LexCache::new();
         let policy = time_rounds(rounds, || {
             policy_cache.lex(line.as_bytes()).expect("the line scans");
-            policy_cache.relex(edited.as_bytes()).expect("the edited line scans");
+            policy_cache
+                .relex(edited.as_bytes())
+                .expect("the edited line scans");
         });
 
         // --- the checks ------------------------------------------------------
@@ -146,7 +152,9 @@ fn main() {
 
         let mut check = LexCache::new();
         check.lex(line.as_bytes()).expect("the line scans");
-        let report = check.relex(edited.as_bytes()).expect("the edited line scans");
+        let report = check
+            .relex(edited.as_bytes())
+            .expect("the edited line scans");
 
         // The saving is the meaningful number: every arm includes the same
         // re-priming, so the *difference* between the arms is what the
@@ -161,7 +169,14 @@ fn main() {
             (full - incremental) * 1e9,
             report.rescanned_bytes
         );
-        rows.push((w, line.len(), full, incremental, report.rescanned_bytes, policy));
+        rows.push((
+            w,
+            line.len(),
+            full,
+            incremental,
+            report.rescanned_bytes,
+            policy,
+        ));
     }
 
     println!();
@@ -212,7 +227,10 @@ fn main() {
     // Above the threshold the incremental path must actually save something.
     let above: Vec<_> = rows.iter().filter(|r| r.1 >= INCREMENTAL_MIN_LEN).collect();
     if !above.is_empty() {
-        let best = above.iter().map(|r| r.2 - r.3).fold(f64::INFINITY, f64::min);
+        let best = above
+            .iter()
+            .map(|r| r.2 - r.3)
+            .fold(f64::INFINITY, f64::min);
         if best <= 0.0 {
             eprintln!(
                 "FAIL: the incremental path does not save anything above the \

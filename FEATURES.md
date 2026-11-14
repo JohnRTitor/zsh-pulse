@@ -27,20 +27,23 @@ This document provides the authoritative, complete catalog of all features imple
 - **Latency**: ~0.08 µs full re-parse for typical commands; ~0.21 µs incremental re-lex on 169-byte lines (1.7× faster than re-parse).
 
 ### 1.2 Semantic Token Roles & Syntax Palette
-- **Implementation**: [`crates/highlight/src/lib.rs`](crates/highlight/src/lib.rs), [`crates/zsh-module/src/highlight.rs`](crates/zsh-module/src/highlight.rs)
-- **Token Classification**:
-  - `Command`: Known commands, functions, builtins, and aliases (`fg=green`); unknown commands (`fg=red,bold`).
-  - `Option`: Command-line switches (e.g. `-a`, `--long-flag`) rendered in `fg=cyan`.
-  - `Param` / `Argument`: Standard command arguments.
-  - `Quote`: Single quotes (`'...'`), double quotes (`"..."`), and backticks (`` `...` ``) styled in `fg=yellow`.
-  - `Escape`: ANSI escape sequences and backslash escapes (`\n`, `\t`, `\x1b`).
-  - `Redirection`: File and descriptor redirections (`>`, `<`, `>>`, `2>&1`, `&>`).
-  - `Terminator`: Command separators and pipeline operators (`;`, `|`, `||`, `&&`, `&`).
-  - `Assignment`: Environment variable assignments preceding commands (`VAR=val`, `PATH+=:/bin`).
+- **Implementation**: [`crates/highlight/src/lib.rs`](crates/highlight/src/lib.rs), [`crates/zsh-module/src/highlight.rs`](crates/zsh-module/src/highlight.rs), [`zsh/widgets.zsh`](zsh/widgets.zsh)
+- **Token Classification (representative, hard-coded defaults):**
+  - `Command`: known/resolved command words styled as callable (`fg=cyan`); unknown/missing commands styled distinctly (`fg=red,bold`).
+  - `Subcommand` (bounded): allowlisted command families/groups (e.g. `git`, `cargo`, `docker`, `kubectl`, `npm`, selected nested groups) can receive subcommand styling via adapter answers and semantic overrides.
+  - `Option`: command-line switches/options (e.g. `-a`, `--long-flag`) rendered in `fg=cyan` when lexed as options.
+  - `Strings/quotes`: single and double quoted strings styled as strings; escapes highlighted distinctly.
+  - `Param` / expansions: parameter/expansion-related tokens styled with dedicated defaults (e.g. parameter expansion styling).
+  - `Redirection` / operators / separators: shell operators, redirections, and command separators highlighted with syntax-aware styling.
+  - `Assignment`: environment variable assignments in command position highlighted with assignment styling.
+  - `Process substitutions`: `<(...)/>(...)` (including fd-prefixed whole-word forms) are tokenized as substitution command contexts so inner commands/options can be highlighted in supported cases.
+- **Bounded heuristics:** wrapper/precommand handling, option-argument consumption, and subcommand detection are lexical/heuristic (not command-schema/option-arity aware). See [`docs/known-limitations.md`](docs/known-limitations.md).
 
-### 1.3 Option Delimiter Semantics (`--`)
-- **Implementation**: [`crates/lexer/src/scanner.rs`](crates/lexer/src/scanner.rs)
-- Following POSIX and Fish shell conventions, any token exactly matching `--` is treated as the end-of-options delimiter. All subsequent tokens starting with `-` (e.g. `rm -- -rf`) are treated as literal arguments/operands rather than flags.
+### 1.3 Option / End-of-Options Semantics (`--`, lexical)
+- **Implementation**: [`crates/lexer/src/scanner.rs`](crates/lexer/src/scanner.rs), [`crates/lexer/src/state.rs`](crates/lexer/src/state.rs), [`crates/zsh-module/src/highlight.rs`](crates/zsh-module/src/highlight.rs)
+- `--` is handled as an end-of-options marker in the active command context: operands after `--` are not lexed/styled as options in that context.
+- End-of-options state is scoped/reset per command context (including process/command substitution contexts) and across command boundaries/operators.
+- This behavior is lexical/heuristic and **not** command-schema or option-arity aware. See [`docs/known-limitations.md`](docs/known-limitations.md).
 
 ### 1.4 Live Filesystem Path Validation
 - **Implementation**: [`crates/zsh-module/src/highlight.rs`](crates/zsh-module/src/highlight.rs)
@@ -59,9 +62,10 @@ This document provides the authoritative, complete catalog of all features imple
   - **Context Immunity**: Brackets inside comments (`# (foo)`) or double-quoted strings (`"hello (world)"`) are excluded from syntax errors and bracket pairing stacks. Nested command substitutions (`$(...)`, `${...}`) maintain independent nested stacks.
 
 ### 1.6 Direct C `region_highlight` Integration
-- **Implementation**: [`crates/zsh-module/src/region.rs`](crates/zsh-module/src/region.rs)
+- **Implementation**: [`crates/zsh-module/src/region.rs`](crates/zsh-module/src/region.rs), [`crates/zsh-module/src/highlight.rs`](crates/zsh-module/src/highlight.rs)
 - **Zero Subshells**: Directly writes to Zsh's C `region_highlight` special array using `zalloc` and `ztrdup` pointers owned by ZLE. No `$(...)` forks or inter-process communication occurs.
-- **Coexistence**: Preserves entries created by other plugins by attaching `memo=zsh-pulse`. On each redraw, `zsh-pulse` strips only its own memoized spans and appends updated highlights.
+- **Coexistence**: Preserves entries created by other plugins by attaching `memo=zsh-pulse`. On each redraw/publish, `zsh-pulse` merges/replaces only its own memoized spans and preserves foreign entries.
+- **Bailout/unpublishable recovery**: when highlighting cannot be published (limits/budget/parse/unpublishable ZLE states), the module aims to clear owned regions while preserving foreign entries where readable/publishable and invalidates stale owned publish state for recovery.
 - **Guard Rails**: Capped at 32 highlight regions per line (`MAX_ENTRIES`) and 4 KiB buffer length (`MAX_LINE`) to prevent pathological input freezes.
 
 ---
