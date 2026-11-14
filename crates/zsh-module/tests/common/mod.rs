@@ -28,127 +28,188 @@ pub fn adapter_path() -> PathBuf {
         .join("init.zsh")
 }
 
-/// Newest mtime of any source file in the workspace.
+/// Platform-specific cdylib filename produced by Cargo for this crate.
 ///
-/// The whole workspace is scanned, not just this crate: the module links the
-/// `lexer`, `highlight` and `zsh-abi` crates, so a change in any of them
-/// makes the built `cdylib` stale. Scanning only this crate would let the
-/// tests run against a module built from an older lexer — and the pty test,
-/// the only end-to-end evidence there is, would happily pass.
-fn newest_source_mtime(dir: &std::path::Path) -> Option<std::time::SystemTime> {
-    let mut newest: Option<std::time::SystemTime> = None;
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return None;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let mtime = if path.is_dir() {
-            // `target/` holds build artifacts, not sources; the test
-            // directories hold tests, not the library.
-            //
-            // A test file is not part of the library, and treating it as a
-            // reason to rebuild would make every edit to a test trigger a
-            // `cargo build` from *inside* a test — and that build blocks on
-            // the build lock the `cargo test` running it already holds.
-            if path
-                .file_name()
-                .is_some_and(|n| n == "target" || n == "tests" || n == "benches" || n == "examples")
-            {
-                None
-            } else {
-                newest_source_mtime(&path)
-            }
-        } else if path.extension().is_some_and(|e| e == "rs" || e == "toml") {
-            std::fs::metadata(&path).ok()?.modified().ok()
-        } else {
-            None
-        };
-        if let Some(t) = mtime {
-            newest = Some(match newest {
-                Some(n) if n > t => n,
-                _ => t,
-            });
-        }
-    }
-    newest
+/// The built artifact is named e.g. `libzshpulse_core.so` (Linux),
+/// `libzshpulse_core.dylib` (macOS), etc. The module is later installed as
+/// `zshpulse/core.so` for `zmodload zshpulse/core` (zsh module naming/layout).
+fn cdylib_filename() -> String {
+    format!(
+        "{}zshpulse_core{}",
+        std::env::consts::DLL_PREFIX,
+        std::env::consts::DLL_SUFFIX
+    )
 }
 
-/// Locate the built `cdylib`, rebuilding it first if it is stale.
-///
-/// `CARGO_BUILT_LIB_DIR` is nightly-only, so the artifact is found relative to
-/// the test executable (`target/<profile>/deps/<test>`).
-///
-/// **Why the explicit rebuild:** `cargo test` builds this crate's rlib for
-/// the test harness but does not refresh the `cdylib`. Without this check the
-/// integration tests silently ran a `libzshpulse_core.so` built hours
-/// earlier — passing against code that was no longer there.
-pub fn module_so() -> PathBuf {
-    let exe = std::env::current_exe().expect("test executable path");
-    let profile_dir = exe
+fn workspace_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
-        .and_then(std::path::Path::parent)
-        .expect("target/<profile>");
-    let so = profile_dir.join("libzshpulse_core.so");
+        .and_then(Path::parent)
+        .expect("workspace root from CARGO_MANIFEST_DIR")
+        .to_path_buf()
+}
 
-    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let workspace = manifest.parent().expect("workspace root");
-    let newest = newest_source_mtime(workspace).expect("scan workspace sources");
+fn cargo_target_dir(workspace: &Path) -> PathBuf {
+    std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| workspace.join("target"))
+}
 
-    let feature_stamp_path = profile_dir.join("libzshpulse_core.features");
-    let current_features = {
-        let mut f = Vec::new();
-        if cfg!(feature = "highlight") {
-            f.push("highlight");
-        }
-        if cfg!(feature = "autocomplete") {
-            f.push("autocomplete");
-        }
-        if cfg!(any(feature = "history", feature = "history-navigation")) {
-            f.push("history");
-        }
-        f.join(",")
-    };
-    let feature_changed = match std::fs::read_to_string(&feature_stamp_path) {
-        Ok(prev) => prev != current_features,
-        Err(_) => true,
-    };
-
-    let stale = feature_changed
-        || match std::fs::metadata(&so).and_then(|m| m.modified()) {
-            Ok(built) => built < newest,
-            Err(_) => true,
-        };
-    if stale {
-        // The target directory has to be passed explicitly: the default one
-        // is not where the test executable lives when `CARGO_TARGET_DIR` or
-        // `--target-dir` is in use, and the rebuild would then write the
-        // module somewhere the tests do not look.
-        let target_dir = profile_dir.parent().expect("target directory");
-        let mut cmd = Command::new(env!("CARGO"));
-        cmd.args(["build", "-p", "zsh-module", "--lib"]);
-        #[cfg(not(all(feature = "highlight", feature = "autocomplete", feature = "history")))]
-        {
-            cmd.arg("--no-default-features");
-            if !current_features.is_empty() {
-                cmd.arg("--features").arg(&current_features);
+fn candidate_profiles() -> Vec<String> {
+    let mut profiles = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        for anc in exe.ancestors() {
+            if let Some(name) = anc.file_name().and_then(|n| n.to_str()) {
+                let under_target = anc
+                    .ancestors()
+                    .any(|a| a.file_name().is_some_and(|n| n == "target"));
+                if under_target && matches!(name, "debug" | "release") {
+                    profiles.push(name.to_string());
+                }
             }
         }
-        let status = cmd
-            .arg("--target-dir")
-            .arg(target_dir)
-            .current_dir(workspace)
-            .status()
-            .expect("run cargo build");
-        assert!(status.success(), "rebuilding the cdylib failed: {status}");
-        let _ = std::fs::write(&feature_stamp_path, &current_features);
+    }
+    profiles.push("debug".to_string());
+    profiles.push("release".to_string());
+    profiles.sort();
+    profiles.dedup();
+    profiles
+}
+
+fn candidate_cdylib_paths(target_dir: &Path) -> Vec<PathBuf> {
+    let lib = cdylib_filename();
+    let mut paths = Vec::new();
+    for profile in candidate_profiles() {
+        paths.push(target_dir.join(&profile).join(&lib));
+        if let Ok(triple) = std::env::var("CARGO_BUILD_TARGET") {
+            paths.push(target_dir.join(&triple).join(&profile).join(&lib));
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        // Fallback hints for unusual test-binary locations (e.g. build-script out dirs).
+        for anc in exe.ancestors() {
+            if anc.file_name().is_some_and(|n| n == "debug" || n == "release") {
+                paths.push(anc.join(&lib));
+            }
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    paths
+}
+
+fn current_test_features() -> Vec<&'static str> {
+    let mut features = Vec::new();
+    if cfg!(feature = "highlight") {
+        features.push("highlight");
+    }
+    if cfg!(feature = "autocomplete") {
+        features.push("autocomplete");
+    }
+    // `history-navigation` is an alias used by this crate's feature wiring.
+    if cfg!(any(feature = "history", feature = "history-navigation")) {
+        features.push("history");
+    }
+    features
+}
+
+fn rebuild_cdylib(workspace: &Path, target_dir: &Path) {
+    let mut cmd = Command::new(env!("CARGO"));
+    cmd.current_dir(workspace)
+        .args(["build", "-p", "zsh-module", "--lib"])
+        .arg("--target-dir")
+        .arg(target_dir);
+
+    if let Ok(profile) = std::env::var("ZSH_PULSE_CARGO_PROFILE") {
+        cmd.args(["--profile", &profile]);
     }
 
-    assert!(
-        so.exists(),
-        "cdylib not found at {} — run `cargo build -p zsh-module` first",
-        so.display()
+    // Prefer explicit overrides; otherwise mirror the test binary's enabled
+    // features so the rebuilt cdylib matches what the integration tests expect.
+    if let Ok(features) = std::env::var("ZSH_PULSE_CARGO_FEATURES") {
+        if std::env::var("ZSH_PULSE_CARGO_NO_DEFAULT_FEATURES")
+            .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        {
+            cmd.arg("--no-default-features");
+        }
+        if !features.is_empty() {
+            cmd.args(["--features", &features]);
+        }
+    } else {
+        let features = current_test_features();
+        // If all default features are enabled, build with defaults to avoid
+        // feature-string drift; otherwise rebuild with the exact subset.
+        if !(cfg!(feature = "highlight")
+            && cfg!(feature = "autocomplete")
+            && cfg!(any(feature = "history", feature = "history-navigation")))
+        {
+            cmd.arg("--no-default-features");
+            if !features.is_empty() {
+                cmd.args(["--features", &features.join(",")]);
+            }
+        }
+    }
+
+    if let Ok(target) = std::env::var("CARGO_BUILD_TARGET") {
+        cmd.args(["--target", &target]);
+    }
+    let status = cmd.status().expect("run cargo build for zsh-module cdylib");
+    assert!(status.success(), "rebuilding the cdylib failed: {status}");
+}
+
+/// Locate the built `cdylib` for the zsh module.
+///
+/// Resolution is based on Cargo target/profile conventions and environment
+/// (`CARGO_TARGET_DIR`, `CARGO_BUILD_TARGET`, test executable location hints)
+/// rather than assuming a fixed `target/<profile>/deps/...` layout. The source
+/// artifact name is platform-specific (`DLL_PREFIX`/`DLL_SUFFIX`); tests install
+/// it as `zshpulse/core.so` for `zmodload zshpulse/core`.
+///
+/// `cargo test` does not reliably guarantee an up-to-date cdylib for external
+/// loading, so this helper always attempts `cargo build -p zsh-module --lib`
+/// before resolving the artifact (Cargo's cache keeps repeated builds cheap).
+/// You can override build flags with `ZSH_PULSE_CARGO_PROFILE`,
+/// `ZSH_PULSE_CARGO_FEATURES`, and `ZSH_PULSE_CARGO_NO_DEFAULT_FEATURES`.
+pub fn module_so() -> PathBuf {
+    if let Some(p) = std::env::var_os("ZSH_PULSE_CDYLIB_PATH") {
+        let p = PathBuf::from(p);
+        assert!(
+            p.exists(),
+            "ZSH_PULSE_CDYLIB_PATH is set but does not exist: {}",
+            p.display()
+        );
+        return p;
+    }
+
+    let workspace = workspace_root();
+    let target_dir = cargo_target_dir(&workspace);
+
+    // Always attempt a build so tests don't load a missing/stale cdylib. Cargo
+    // will no-op when artifacts are already up to date.
+    rebuild_cdylib(&workspace, &target_dir);
+
+    let candidates = candidate_cdylib_paths(&target_dir);
+    if let Some(found) = candidates.iter().find(|p| p.exists()) {
+        return found.clone();
+    }
+
+    panic!(
+        "cdylib not found after building zsh-module.\n\
+         Searched:\n  - {}\n\n\
+         Attempted build target dir:\n  - {}\n\n\
+         Notes:\n\
+         - Source artifact name is platform-specific ({}zshpulse_core{}).\n\
+         - Tests copy the artifact to zshpulse/core.so for `zmodload zshpulse/core`.\n\
+         - Set ZSH_PULSE_CDYLIB_PATH to override discovery.",
+        candidates
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join("\n  - "),
+        target_dir.display(),
+        std::env::consts::DLL_PREFIX,
+        std::env::consts::DLL_SUFFIX,
     );
-    so
 }
 
 /// Create a temporary `$module_path` containing `zshpulse/core.so`.
