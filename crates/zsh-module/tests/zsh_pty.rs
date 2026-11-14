@@ -813,7 +813,9 @@ fn write_child_rc_full(dir: &Path, load_module: bool, extra_rc: &str, after_rc: 
     rc.push_str("export ZSH_PULSE_USE_FZF=0\n");
     rc.push_str(extra_rc);
     if load_module {
-        rc.push_str("autoload -Uz compinit && compinit -D 2>/dev/null\n");
+        // `-u` avoids an interactive "insecure directories" prompt on CI
+        // runners where the temporary ZDOTDIR permissions trip compaudit.
+        rc.push_str("autoload -Uz compinit && compinit -u -D 2>/dev/null\n");
         // The adapter looks for the module here, exactly as a user who
         // ran `bench/install.sh` would have it.
         rc.push_str(&format!(

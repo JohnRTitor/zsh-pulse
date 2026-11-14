@@ -101,19 +101,23 @@ fn the_allocation_count_does_not_grow_with_the_length_of_the_line() {
     // hundred times more than a line of ten.
     let short: String = "word ".repeat(10);
     let long: String = "word ".repeat(100);
+    let short_x = format!("{short}x");
+    let short_xx = format!("{short}xx");
+    let long_x = format!("{long}x");
+    let long_xx = format!("{long}xx");
 
     let mut cache = LexCache::new();
     cache.lex(short.as_bytes()).expect("scannable");
-    cache.relex(format!("{short}x").as_bytes()).expect("scannable");
+    cache.relex(short_x.as_bytes()).expect("scannable");
     let before = allocations();
-    cache.relex(format!("{short}xx").as_bytes()).expect("scannable");
+    cache.relex(short_xx.as_bytes()).expect("scannable");
     let short_used = allocations() - before;
 
     let mut cache = LexCache::new();
     cache.lex(long.as_bytes()).expect("scannable");
-    cache.relex(format!("{long}x").as_bytes()).expect("scannable");
+    cache.relex(long_x.as_bytes()).expect("scannable");
     let before = allocations();
-    cache.relex(format!("{long}xx").as_bytes()).expect("scannable");
+    cache.relex(long_xx.as_bytes()).expect("scannable");
     let long_used = allocations() - before;
 
     assert!(
