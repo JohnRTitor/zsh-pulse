@@ -34,6 +34,10 @@ rustPlatform.buildRustPackage {
 
   cargoLock.lockFile = ../../Cargo.lock;
 
+  # We install the module at $out/lib/zshpulse/core.so (and adapter files)
+  # ourselves; skip cargoInstallHook's default copy of cdylibs into $out/lib.
+  dontCargoInstall = true;
+
   # Integration tests drive a real zsh and need the module installed under a
   # module_path first (see bench/install.sh), so they are not run here.
   doCheck = false;
