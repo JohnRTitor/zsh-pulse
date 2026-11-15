@@ -4,6 +4,8 @@ PREFIX ?= /usr
 LIBDIR ?= $(PREFIX)/lib
 DATADIR ?= $(PREFIX)/share
 
+ZSH ?= zsh
+
 CARGO_TARGET_DIR ?= target
 DEBUG ?= 0
 ifeq ($(DEBUG),0)
@@ -20,7 +22,7 @@ MODULE_PATH_DIR ?= $(LIBDIR)/$(NAME)
 MODULE_DST_DIR := $(DESTDIR)$(LIBDIR)/$(MODULE_LIB_SUBDIR)
 ADAPTER_DST_DIR := $(DESTDIR)$(DATADIR)/$(NAME)
 
-.PHONY: all build clean install install-files install-init
+.PHONY: all build clean install install-files install-init install-zcompile
 
 all: build
 
@@ -49,4 +51,10 @@ install-init:
 	  > $(ADAPTER_DST_DIR)/init.zsh
 	chmod 0644 $(ADAPTER_DST_DIR)/init.zsh
 
-install: install-files install-init
+install-zcompile:
+	$(ZSH) -fc 'zcompile "$$1"' zsh $(ADAPTER_DST_DIR)/init.zsh
+	$(ZSH) -fc 'zcompile "$$1"' zsh $(ADAPTER_DST_DIR)/zsh/init.zsh
+	$(ZSH) -fc 'zcompile "$$1"' zsh $(ADAPTER_DST_DIR)/zsh/widgets.zsh
+	$(ZSH) -fc 'zcompile "$$1"' zsh $(ADAPTER_DST_DIR)/zsh/completion.zsh
+
+install: install-files install-init install-zcompile

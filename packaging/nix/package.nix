@@ -56,11 +56,12 @@ rustPlatform.buildRustPackage {
 
     # Pre-compile installed zsh scripts into wordcode (.zwc) so zsh can mmap
     # them directly on startup.
-    zsh -c "zcompile '$out/share/zsh-pulse/init.zsh'"
-    zsh -c "zcompile '$out/share/zsh-pulse/zsh/init.zsh'"
-    zsh -c "zcompile '$out/share/zsh-pulse/zsh/widgets.zsh'"
-    zsh -c "zcompile '$out/share/zsh-pulse/zsh/completion.zsh'"
-    
+    make install-zcompile \
+      DESTDIR="$out" \
+      PREFIX=/ \
+      DATADIR=/share \
+      ZSH=zsh
+
     runHook postInstall
   '';
 
