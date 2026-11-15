@@ -1,5 +1,9 @@
 usr/lib/zsh-pulse/zshpulse/core.so
 usr/share/zsh-pulse/init.zsh
+usr/share/zsh-pulse/init.zsh.zwc
 usr/share/zsh-pulse/zsh/init.zsh
+usr/share/zsh-pulse/zsh/init.zsh.zwc
 usr/share/zsh-pulse/zsh/widgets.zsh
+usr/share/zsh-pulse/zsh/widgets.zsh.zwc
 usr/share/zsh-pulse/zsh/completion.zsh
+usr/share/zsh-pulse/zsh/completion.zsh.zwc

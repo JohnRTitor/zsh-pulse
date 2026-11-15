@@ -8,7 +8,7 @@ arch=('x86_64')
 url='https://github.com/JohnRTitor/zsh-pulse'
 license=('MIT')
 depends=('zsh')
-makedepends=('cargo' 'git' 'make')
+makedepends=('cargo' 'git' 'make' 'zsh')
 source=("git+$url.git#tag=v$pkgver")
 b2sums=('SKIP')
 

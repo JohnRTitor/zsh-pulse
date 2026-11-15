@@ -60,9 +60,13 @@ CARGO_HOME=%{_builddir}/cargo-home \
 %license LICENSE
 %{_libdir}/zsh-pulse/zshpulse/core.so
 %{_datadir}/zsh-pulse/init.zsh
+%{_datadir}/zsh-pulse/init.zsh.zwc
 %{_datadir}/zsh-pulse/zsh/init.zsh
+%{_datadir}/zsh-pulse/zsh/init.zsh.zwc
 %{_datadir}/zsh-pulse/zsh/widgets.zsh
+%{_datadir}/zsh-pulse/zsh/widgets.zsh.zwc
 %{_datadir}/zsh-pulse/zsh/completion.zsh
+%{_datadir}/zsh-pulse/zsh/completion.zsh.zwc
 
 %changelog
 * Thu Nov 12 2026 zsh-pulse packagers <zsh-pulse-packaging@example.invalid> - 0.1.0-1
